@@ -30,7 +30,7 @@ df["forecast_type"] = "original"
 recommended_bolus = loop_output.get("recommended_bolus")[0]
 original_bolus_amount = inputs_from_file.get("dose_values")[0]
 dosing_decision_df = pd.DataFrame()
-for dose_amount in np.arange(0, recommended_bolus + 0.05, 0.05):
+for dose_amount in np.arange(0, recommended_bolus + 0.10, 0.05):
     temp_df = pd.DataFrame(t, columns=["time"])
     inputs_from_file["dose_values"] = [original_bolus_amount + dose_amount]
     temp_loop_output = update(inputs_from_file)

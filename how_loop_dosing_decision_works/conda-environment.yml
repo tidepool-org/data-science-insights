@@ -1,0 +1,8 @@
+name: how_loop_dosing_decision_works
+channels:
+  - defaults
+dependencies:
+  - python=3.7
+  - pip==20.0.2
+  - pip:
+      - -r file:requirements.txt
