@@ -6,7 +6,7 @@ as a place to put miscellaneous or one-off insights, single page learnings, lite
 TODO: Change the status to active after the readme is fully filled in.
 
 ## List of Active Projects
-TODO: put a link to the notebook or project subfolder here
+[How Loop Dosing Decision Making Works](how_loop_dosing_decision_works)
 
 ## Contributing Guide
 1. All are welcome to contribute to this repository. See [Getting Started Below](## Getting Started with the Conda Virtual Environment)
