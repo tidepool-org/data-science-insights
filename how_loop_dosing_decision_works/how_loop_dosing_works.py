@@ -70,6 +70,39 @@ def make_animation(scenario_df):
         )
     )
 
+    forecast_with_rec_bolus = dosing_decision_df.loc[
+        dosing_decision_df["Forecast updated with Dose"] == np.round(recommended_bolus, 2),
+        "forecast"
+    ].values
+
+    fig.add_trace(
+        go.Scatter(
+            name="Forecast with Bolus Rec. of {}U".format(recommended_bolus),
+            x=t,
+            y=forecast_with_rec_bolus,
+            mode="lines",
+            line_color="rgb(77,175,74)",
+            line_width=4,
+        )
+    )
+
+    forecast_with_too_much_dose = dosing_decision_df.loc[
+        dosing_decision_df["Forecast updated with Dose"] == np.round(recommended_bolus + 0.05, 2),
+        "forecast"
+    ].values
+
+    fig.add_trace(
+        go.Scatter(
+            name="Forecast with Dose of {}U".format(np.round(recommended_bolus + 0.05, 2)),
+            x=t,
+            y=forecast_with_too_much_dose,
+            mode="lines",
+            line_color="rgb(255,127,0)",
+            line_width=4,
+        )
+    )
+
+
     # add other traces
     inputs = loop_output.get("input_data")
     # convert dict_inputs_to_dataframes
