@@ -35,9 +35,7 @@ def make_animation(scenario_df):
         temp_forecast = temp_loop_output.get("predicted_glucose_values")
         temp_df["forecast"] = temp_forecast
         temp_df["Forecast updated with Dose"] = np.round(dose_amount, 2)
-        dosing_decision_df = pd.concat(
-            [dosing_decision_df, temp_df], ignore_index=True, sort=False
-        )
+        dosing_decision_df = pd.concat([dosing_decision_df, temp_df], ignore_index=True, sort=False)
 
     # make an animation
     fig = px.scatter(
@@ -46,33 +44,21 @@ def make_animation(scenario_df):
         y="forecast",
         animation_frame="Forecast updated with Dose",
         range_y=[40, dosing_decision_df["forecast"].max() + 10],
-        title="How Loop's Dosing Decision Works<br>Recommended Bolus of {}U".format(
-            recommended_bolus
-        ),
+        title="How Loop's Dosing Decision Works<br>Recommended Bolus of {}U".format(recommended_bolus),
     )
 
     fig.update_layout(
-        yaxis_title="Glucose (mg/dL)",
-        xaxis_title="Time",
-        autosize=False,
-        width=1200,
-        height=700,
+        yaxis_title="Glucose (mg/dL)", xaxis_title="Time", autosize=False, width=1200, height=700,
     )
 
     fig.add_trace(
         go.Scatter(
-            name="Original Forecast",
-            x=t,
-            y=original_forecast,
-            mode="lines",
-            line_color="rgb(97,73,246)",
-            line_width=4,
+            name="Original Forecast", x=t, y=original_forecast, mode="lines", line_color="rgb(97,73,246)", line_width=4,
         )
     )
 
     forecast_with_rec_bolus = dosing_decision_df.loc[
-        dosing_decision_df["Forecast updated with Dose"] == np.round(recommended_bolus, 2),
-        "forecast"
+        dosing_decision_df["Forecast updated with Dose"] == np.round(recommended_bolus, 2), "forecast"
     ].values
 
     fig.add_trace(
@@ -87,8 +73,7 @@ def make_animation(scenario_df):
     )
 
     forecast_with_too_much_dose = dosing_decision_df.loc[
-        dosing_decision_df["Forecast updated with Dose"] == np.round(recommended_bolus + 0.05, 2),
-        "forecast"
+        dosing_decision_df["Forecast updated with Dose"] == np.round(recommended_bolus + 0.05, 2), "forecast"
     ].values
 
     fig.add_trace(
@@ -101,7 +86,6 @@ def make_animation(scenario_df):
             line_width=4,
         )
     )
-
 
     # add other traces
     inputs = loop_output.get("input_data")
@@ -127,8 +111,7 @@ def make_animation(scenario_df):
     correction_range_mid = int(np.mean([target_range_min, target_range_max]))
     t_dosing_threshold = np.arange(0, 370, 1)
     dosing_threshold = np.append(
-        np.ones(185) * suspend_threshold,
-        np.linspace(suspend_threshold, correction_range_mid, 185),
+        np.ones(185) * suspend_threshold, np.linspace(suspend_threshold, correction_range_mid, 185),
     )
 
     df["Suspend Threshold"] = suspend_threshold
@@ -150,9 +133,7 @@ def make_animation(scenario_df):
 
     fig.add_trace(
         go.Scatter(
-            name="Correction Range = {}-{} mg/dL".format(
-                target_range_min, target_range_max
-            ),
+            name="Correction Range = {}-{} mg/dL".format(target_range_min, target_range_max),
             x=df["time"],
             y=df["Correction Range Max"],
             fill="tonexty",  # fill area between trace0 and trace1
