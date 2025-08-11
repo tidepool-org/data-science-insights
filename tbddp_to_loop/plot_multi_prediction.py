@@ -10,7 +10,7 @@ from loop_utils import load_json_data, extract_glucose_timeseries, create_loop_i
 
 FILE_PATH = "/Users/mconn/Downloads/loop_input_data_window_30.json"
 USE_RC = True  # Set to True to enable retrospective correction
-REGENERATE_PREDICTIONS = False  # Set to True to regenerate predictions, False to use saved file
+REGENERATE_PREDICTIONS = True  # Set to True to regenerate predictions, False to use saved file
 PREDICTIONS_SAVE_PATH = "multi_predictions_data.pkl"  # Path to save/load prediction data
 
 def generate_single_prediction(data: Dict, glucose_df: pd.DataFrame, prediction_start: datetime) -> List[float]:
