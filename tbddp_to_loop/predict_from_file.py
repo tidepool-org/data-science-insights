@@ -3,6 +3,9 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import pandas as pd
 from typing import List, Dict, Tuple
+import multiprocessing as mp
+import functools
+import os
 
 import time
 from loop_to_python_api.api import generate_prediction
@@ -12,9 +15,53 @@ FILE_PATH = "/Users/mconn/Downloads/loop_input_data_window_30.json"
 
 USE_RC = True  # Set to True to enable retrospective correction
 USE_MID_ABSORPTION_ISF = False  # Set to True to enable changes to ISF mid-absorption of insulin
-SAVE_PATH = f'/Users/mconn/data/tbddp/poc/error_data_use_rc={USE_RC}_mid_abs_isf={USE_MID_ABSORPTION_ISF}.csv' 
+CARB_ABSORPTION_MODEL = "piecewiseLinear"
+SAVE_PATH = f'/Users/mconn/data/tbddp/poc/error_data_use_rc={USE_RC}_mid_abs_isf={USE_MID_ABSORPTION_ISF}_carb_model={CARB_ABSORPTION_MODEL}.csv' 
 
 N_WINDOWS = 1500  # Limit number of evaluation windows for testing
+
+# Parallel processing configuration
+N_PROCESSES = max(1, mp.cpu_count() - 1)  # Use all but one CPU core
+BATCH_SIZE = 50  # Process windows in batches to manage memory
+
+def process_window(window_data: Tuple[datetime, Dict, pd.DataFrame]) -> Tuple[int, List[float], List[float], bool, float]:
+    """
+    Worker function to process a single window in parallel.
+    
+    Args:
+        window_data: Tuple containing (current_time, data, glucose_df)
+        
+    Returns:
+        Tuple of (window_index, residuals, errors, success, processing_time)
+    """
+    start_time = time.time()
+    current_time, data, glucose_df = window_data
+    
+    try:
+        # Define window boundaries
+        window_start = current_time - timedelta(hours=6)
+        window_end = current_time + timedelta(hours=6)
+        
+        # Create loop input for this window
+        loop_input = create_loop_input_for_window(data, window_start, current_time, window_end)
+        
+        loop_input['includePositiveVelocityAndRC'] = USE_RC 
+        loop_input['useMidAbsorptionISF'] = USE_MID_ABSORPTION_ISF
+        loop_input['carbAbsorptionModel'] = CARB_ABSORPTION_MODEL
+        
+        # Calculate errors
+        residuals, errors, success = calculate_prediction_errors(glucose_df, loop_input, current_time)
+        
+        processing_time = time.time() - start_time
+        
+        # Return window index (timestamp as int for sorting), results, and timing
+        return (int(current_time.timestamp()), residuals, errors, success, processing_time)
+        
+    except Exception as e:
+        processing_time = time.time() - start_time
+        print(f"Error processing window at {current_time}: {e}")
+        return (int(current_time.timestamp()), [], [], False, processing_time)
+
 
 def calculate_prediction_errors(glucose_df: pd.DataFrame, loop_input: Dict, 
                               prediction_start: datetime) -> Tuple[List[float], List[float], bool]:
@@ -81,12 +128,13 @@ def format_time(seconds: float) -> str:
         return f"{hours}h {remaining_minutes}m {remaining_seconds:.1f}s"
 
 
-def run_sliding_window_evaluation(filepath: str) -> Tuple[List[List[float]], pd.DataFrame]:
+def run_sliding_window_evaluation(filepath: str) -> Tuple[List[List[float]], List[List[float]], pd.DataFrame]:
     """
-    Run sliding window evaluation on multi-day JSON file.
+    Run sliding window evaluation on multi-day JSON file with parallel processing.
 
     Returns:
-        all_errors: List of error lists for each evaluation window
+        all_residuals: List of residual lists for each evaluation window
+        all_errors: List of error lists for each evaluation window  
         df: The processed dataframe for reference
     """
     # Load and process data
@@ -114,119 +162,147 @@ def run_sliding_window_evaluation(filepath: str) -> Tuple[List[List[float]], pd.
     # Calculate total expected windows
     total_expected_windows = int((evaluation_end - evaluation_start).total_seconds() / 300)  # 5-minute intervals
     total_expected_windows = min(total_expected_windows, N_WINDOWS)
+    
     print(f"Expected to process ~{total_expected_windows} windows (limited to {N_WINDOWS})")
+    print(f"Using {N_PROCESSES} CPU cores for parallel processing")
+    print(f"Batch size: {BATCH_SIZE} windows per batch")
     
-    all_errors = []
-    all_residuals = []
-    successful_evaluations = 0
-    total_windows = 0
-    
-    # Initialize timing variables
-    overall_start_time = time.time()
-    iteration_times = []
-    last_update_time = time.time()
-    
-    # Sliding window evaluation (advance by 5 minutes)
+    # Prepare all windows for parallel processing
+    windows_data = []
     current_time = evaluation_start
     
-    while current_time <= evaluation_end:
-        iteration_start_time = time.time()
-        total_windows += 1
-        
-        # Define 12-hour historical window and 6-hour prediction window
-        window_start = current_time - timedelta(hours=6)
-        window_end = current_time + timedelta(hours=6)
-        
-        # Create loop input for this window
-        try:
-            loop_input = create_loop_input_for_window(data, window_start, current_time, window_end)
-            
-            loop_input['includePositiveVelocityAndRC'] = USE_RC 
-            loop_input['useMidAbsorptionISF'] = USE_MID_ABSORPTION_ISF
-
-            # Calculate errors
-            residuals, errors, success = calculate_prediction_errors(glucose_df, loop_input, current_time)
-
-            if success:
-                all_residuals.append(residuals)
-                all_errors.append(errors)
-                successful_evaluations += 1
-            
-        except Exception as e:
-            print(f"Error processing window at {current_time}: {e}")
-        
-        # Track iteration timing
-        iteration_time = time.time() - iteration_start_time
-        iteration_times.append(iteration_time)
-        
-        # Progress update every 50 iterations or every 5 minutes of real time
-        current_real_time = time.time()
-        should_update = (total_windows % 5 == 0) or (current_real_time - last_update_time >= 300)
-        
-        if should_update and len(iteration_times) > 0:
-            # Calculate timing statistics
-            avg_iteration_time = np.mean(iteration_times)
-            median_iteration_time = np.median(iteration_times)
-            
-            # Calculate remaining time estimates
-            remaining_windows = min(N_WINDOWS - total_windows, total_expected_windows - total_windows)
-            if remaining_windows > 0:
-                estimated_remaining_time = remaining_windows * avg_iteration_time
-            else:
-                estimated_remaining_time = 0
-            
-            # Calculate elapsed time and progress
-            elapsed_time = current_real_time - overall_start_time
-            progress_pct = (total_windows / min(N_WINDOWS, total_expected_windows)) * 100
-            
-            # Format time displays
-            elapsed_formatted = format_time(elapsed_time)
-            remaining_formatted = format_time(estimated_remaining_time)
-            
-            # Calculate estimated completion time
-            if estimated_remaining_time > 0:
-                completion_timestamp = datetime.now() + timedelta(seconds=estimated_remaining_time)
-                completion_str = completion_timestamp.strftime('%Y-%m-%d %H:%M:%S')
-            else:
-                completion_str = "Soon"
-            
-            # Display progress information
-            print(f"\n{'='*60}")
-            print(f"Progress Update - Window {total_windows}")
-            print(f"{'='*60}")
-            print(f"Progress: {progress_pct:.1f}% ({total_windows}/{min(N_WINDOWS, total_expected_windows)} windows)")
-            print(f"Successful evaluations: {successful_evaluations}/{total_windows} ({successful_evaluations/total_windows*100:.1f}%)")
-            print(f"Average time per iteration: {avg_iteration_time:.2f}s")
-            print(f"Median time per iteration: {median_iteration_time:.2f}s")
-            print(f"Elapsed time: {elapsed_formatted}")
-            print(f"Estimated remaining time: {remaining_formatted}")
-            print(f"Estimated completion: {completion_str}")
-            print(f"Current window time: {current_time}")
-            print(f"{'='*60}")
-            
-            last_update_time = current_real_time
-        
-        # Check if we've reached the limit
-        if total_windows >= N_WINDOWS:
-            print(f"\nReached limit of {N_WINDOWS} windows. Stopping evaluation.")
-            break
-            
-        # Advance by 5 minutes
+    print("Preparing windows for parallel processing...")
+    while current_time <= evaluation_end and len(windows_data) < N_WINDOWS:
+        windows_data.append((current_time, data, glucose_df))
         current_time += timedelta(minutes=5)
     
-    # Final summary
-    total_time = time.time() - overall_start_time
-    total_formatted = format_time(total_time)
+    actual_windows = len(windows_data)
+    print(f"Prepared {actual_windows} windows for processing")
     
-    print(f"\n{'='*60}")
-    print(f"EVALUATION COMPLETE")
+    if actual_windows == 0:
+        print("No windows to process!")
+        return [], [], glucose_df
+    
+    overall_start_time = time.time()
+    all_results = []
+    successful_evaluations = 0
+    failed_evaluations = 0
+    
+    # Process windows in batches using multiprocessing
+    print("Starting parallel processing...\n")
+    
+    try:
+        with mp.Pool(processes=N_PROCESSES) as pool:
+            for batch_start in range(0, actual_windows, BATCH_SIZE):
+                batch_end = min(batch_start + BATCH_SIZE, actual_windows)
+                batch_windows = windows_data[batch_start:batch_end]
+                
+                batch_num = batch_start // BATCH_SIZE + 1
+                total_batches = (actual_windows - 1) // BATCH_SIZE + 1
+                
+                print(f"Processing batch {batch_num}/{total_batches} (windows {batch_start+1}-{batch_end})")
+                batch_start_time = time.time()
+                
+                # Process batch in parallel
+                batch_results = pool.map(process_window, batch_windows)
+                
+                batch_time = time.time() - batch_start_time
+                
+                # Process results
+                batch_successful = 0
+                batch_failed = 0
+                
+                for result in batch_results:
+                    timestamp, residuals, errors, success, processing_time = result
+                    
+                    if success and len(residuals) > 0 and len(errors) > 0:
+                        all_results.append({
+                            'timestamp': timestamp,
+                            'residuals': residuals,
+                            'errors': errors,
+                            'processing_time': processing_time
+                        })
+                        batch_successful += 1
+                        successful_evaluations += 1
+                    else:
+                        batch_failed += 1
+                        failed_evaluations += 1
+                
+                # Progress reporting
+                windows_processed = batch_end
+                elapsed_time = time.time() - overall_start_time
+                
+                print(f"  Batch time: {batch_time:.1f}s")
+                print(f"  Batch success: {batch_successful}/{len(batch_windows)} ({batch_successful/len(batch_windows)*100:.1f}%)")
+                
+                if windows_processed < actual_windows:
+                    avg_time_per_window = elapsed_time / windows_processed
+                    remaining_windows = actual_windows - windows_processed
+                    estimated_remaining_time = remaining_windows * avg_time_per_window
+                    estimated_completion = datetime.now() + timedelta(seconds=estimated_remaining_time)
+                    
+                    print(f"  Overall progress: {windows_processed}/{actual_windows} ({windows_processed/actual_windows*100:.1f}%)")
+                    print(f"  Elapsed: {format_time(elapsed_time)}")
+                    print(f"  Estimated remaining: {format_time(estimated_remaining_time)}")
+                    print(f"  Estimated completion: {estimated_completion.strftime('%I:%M:%S %p')}")
+                    print(f"  Overall success rate: {successful_evaluations}/{windows_processed} ({successful_evaluations/windows_processed*100:.1f}%)")
+                print()
+    
+    except Exception as e:
+        print(f"Error in parallel processing: {str(e)}")
+        print("Falling back to sequential processing...")
+        
+        # Fallback to sequential processing
+        all_results = []
+        successful_evaluations = 0
+        failed_evaluations = 0
+        
+        for i, window_data in enumerate(windows_data):
+            if i % 50 == 0:
+                print(f"Processing window {i+1}/{actual_windows} (sequential fallback)")
+            
+            result = process_window(window_data)
+            timestamp, residuals, errors, success, processing_time = result
+            
+            if success and len(residuals) > 0 and len(errors) > 0:
+                all_results.append({
+                    'timestamp': timestamp,
+                    'residuals': residuals,
+                    'errors': errors,
+                    'processing_time': processing_time
+                })
+                successful_evaluations += 1
+            else:
+                failed_evaluations += 1
+    
+    total_time = time.time() - overall_start_time
+    
+    # Sort results by timestamp to maintain order
+    all_results.sort(key=lambda x: x['timestamp'])
+    
+    # Extract residuals and errors in order
+    all_residuals = [result['residuals'] for result in all_results]
+    all_errors = [result['errors'] for result in all_results]
+    
+    # Final summary
     print(f"{'='*60}")
-    print(f"Total processing time: {total_formatted}")
-    print(f"Completed {successful_evaluations} successful evaluations out of {total_windows} windows")
-    print(f"Success rate: {successful_evaluations/total_windows*100:.1f}%")
-    if len(iteration_times) > 0:
-        print(f"Average time per iteration: {np.mean(iteration_times):.2f}s")
-        print(f"Total iterations processed: {len(iteration_times)}")
+    print(f"PARALLEL EVALUATION COMPLETE")
+    print(f"{'='*60}")
+    print(f"Total processing time: {format_time(total_time)}")
+    print(f"Windows processed: {actual_windows}")
+    print(f"Successful evaluations: {successful_evaluations}")
+    print(f"Failed evaluations: {failed_evaluations}")
+    print(f"Success rate: {successful_evaluations/actual_windows*100:.1f}%")
+    
+    if successful_evaluations > 0:
+        avg_processing_time = np.mean([r['processing_time'] for r in all_results])
+        print(f"Avg processing time/window: {avg_processing_time:.2f}s")
+        
+        # Calculate speedup estimate
+        sequential_estimate = actual_windows * avg_processing_time
+        speedup = sequential_estimate / total_time if total_time > 0 else 1
+        print(f"Estimated speedup: {speedup:.1f}x over sequential processing")
+    
     print(f"{'='*60}")
     
     return all_residuals, all_errors, glucose_df
@@ -327,4 +403,10 @@ def main():
         raise
 
 if __name__ == "__main__":
+    # Required for multiprocessing on Windows and some Unix systems
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        # start method already set
+        pass
     main()
