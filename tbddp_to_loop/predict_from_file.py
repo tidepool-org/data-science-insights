@@ -3,14 +3,17 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import pandas as pd
 from typing import List, Dict, Tuple
-import argparse
+
+import time
 from loop_to_python_api.api import generate_prediction
 from loop_utils import load_json_data, extract_glucose_timeseries, create_loop_input_for_window
 
 FILE_PATH = "/Users/mconn/Downloads/loop_input_data_window_30.json"
 
 USE_RC = True  # Set to True to enable retrospective correction
-SAVE_PATH = f'/Users/mconn/data/tbddp/poc/error_data_use_rc={USE_RC}.csv' 
+USE_MID_ABSORPTION_ISF = False  # Set to True to enable changes to ISF mid-absorption of insulin
+SAVE_PATH = f'/Users/mconn/data/tbddp/poc/error_data_use_rc={USE_RC}_mid_abs_isf={USE_MID_ABSORPTION_ISF}.csv' 
+
 N_WINDOWS = 1500  # Limit number of evaluation windows for testing
 
 def calculate_prediction_errors(glucose_df: pd.DataFrame, loop_input: Dict, 
@@ -55,10 +58,33 @@ def calculate_prediction_errors(glucose_df: pd.DataFrame, loop_input: Dict,
         print(f"Error in prediction: {e}")
         return [], False
 
+def format_time(seconds: float) -> str:
+    """
+    Format time in seconds to human-readable format (hours, minutes, seconds).
+    
+    Args:
+        seconds: Time in seconds
+        
+    Returns:
+        Formatted time string
+    """
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        remaining_seconds = seconds % 60
+        return f"{minutes}m {remaining_seconds:.1f}s"
+    else:
+        hours = int(seconds // 3600)
+        remaining_minutes = int((seconds % 3600) // 60)
+        remaining_seconds = seconds % 60
+        return f"{hours}h {remaining_minutes}m {remaining_seconds:.1f}s"
+
+
 def run_sliding_window_evaluation(filepath: str) -> Tuple[List[List[float]], pd.DataFrame]:
     """
     Run sliding window evaluation on multi-day JSON file.
-    
+
     Returns:
         all_errors: List of error lists for each evaluation window
         df: The processed dataframe for reference
@@ -85,15 +111,26 @@ def run_sliding_window_evaluation(filepath: str) -> Tuple[List[List[float]], pd.
     
     print(f"Will evaluate from {evaluation_start} to {evaluation_end}")
     
+    # Calculate total expected windows
+    total_expected_windows = int((evaluation_end - evaluation_start).total_seconds() / 300)  # 5-minute intervals
+    total_expected_windows = min(total_expected_windows, N_WINDOWS)
+    print(f"Expected to process ~{total_expected_windows} windows (limited to {N_WINDOWS})")
+    
     all_errors = []
     all_residuals = []
     successful_evaluations = 0
     total_windows = 0
     
+    # Initialize timing variables
+    overall_start_time = time.time()
+    iteration_times = []
+    last_update_time = time.time()
+    
     # Sliding window evaluation (advance by 5 minutes)
     current_time = evaluation_start
     
     while current_time <= evaluation_end:
+        iteration_start_time = time.time()
         total_windows += 1
         
         # Define 12-hour historical window and 6-hour prediction window
@@ -105,6 +142,7 @@ def run_sliding_window_evaluation(filepath: str) -> Tuple[List[List[float]], pd.
             loop_input = create_loop_input_for_window(data, window_start, current_time, window_end)
             
             loop_input['includePositiveVelocityAndRC'] = USE_RC 
+            loop_input['useMidAbsorptionISF'] = USE_MID_ABSORPTION_ISF
 
             # Calculate errors
             residuals, errors, success = calculate_prediction_errors(glucose_df, loop_input, current_time)
@@ -117,19 +155,79 @@ def run_sliding_window_evaluation(filepath: str) -> Tuple[List[List[float]], pd.
         except Exception as e:
             print(f"Error processing window at {current_time}: {e}")
         
-        # Progress update every hour
-        if total_windows % N_WINDOWS == 0:
-            elapsed_hours = (current_time - evaluation_start).total_seconds() / 3600
-            total_hours = (evaluation_end - evaluation_start).total_seconds() / 3600
-            progress = elapsed_hours / total_hours * 100
-            print(f"Progress: {progress:.1f}% ({successful_evaluations}/{total_windows} successful evaluations)")
+        # Track iteration timing
+        iteration_time = time.time() - iteration_start_time
+        iteration_times.append(iteration_time)
+        
+        # Progress update every 50 iterations or every 5 minutes of real time
+        current_real_time = time.time()
+        should_update = (total_windows % 5 == 0) or (current_real_time - last_update_time >= 300)
+        
+        if should_update and len(iteration_times) > 0:
+            # Calculate timing statistics
+            avg_iteration_time = np.mean(iteration_times)
+            median_iteration_time = np.median(iteration_times)
+            
+            # Calculate remaining time estimates
+            remaining_windows = min(N_WINDOWS - total_windows, total_expected_windows - total_windows)
+            if remaining_windows > 0:
+                estimated_remaining_time = remaining_windows * avg_iteration_time
+            else:
+                estimated_remaining_time = 0
+            
+            # Calculate elapsed time and progress
+            elapsed_time = current_real_time - overall_start_time
+            progress_pct = (total_windows / min(N_WINDOWS, total_expected_windows)) * 100
+            
+            # Format time displays
+            elapsed_formatted = format_time(elapsed_time)
+            remaining_formatted = format_time(estimated_remaining_time)
+            
+            # Calculate estimated completion time
+            if estimated_remaining_time > 0:
+                completion_timestamp = datetime.now() + timedelta(seconds=estimated_remaining_time)
+                completion_str = completion_timestamp.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                completion_str = "Soon"
+            
+            # Display progress information
+            print(f"\n{'='*60}")
+            print(f"Progress Update - Window {total_windows}")
+            print(f"{'='*60}")
+            print(f"Progress: {progress_pct:.1f}% ({total_windows}/{min(N_WINDOWS, total_expected_windows)} windows)")
+            print(f"Successful evaluations: {successful_evaluations}/{total_windows} ({successful_evaluations/total_windows*100:.1f}%)")
+            print(f"Average time per iteration: {avg_iteration_time:.2f}s")
+            print(f"Median time per iteration: {median_iteration_time:.2f}s")
+            print(f"Elapsed time: {elapsed_formatted}")
+            print(f"Estimated remaining time: {remaining_formatted}")
+            print(f"Estimated completion: {completion_str}")
+            print(f"Current window time: {current_time}")
+            print(f"{'='*60}")
+            
+            last_update_time = current_real_time
+        
+        # Check if we've reached the limit
+        if total_windows >= N_WINDOWS:
+            print(f"\nReached limit of {N_WINDOWS} windows. Stopping evaluation.")
             break
             
-        print('Total evaluations:', total_windows, 'Successful:', successful_evaluations)
         # Advance by 5 minutes
         current_time += timedelta(minutes=5)
     
+    # Final summary
+    total_time = time.time() - overall_start_time
+    total_formatted = format_time(total_time)
+    
+    print(f"\n{'='*60}")
+    print(f"EVALUATION COMPLETE")
+    print(f"{'='*60}")
+    print(f"Total processing time: {total_formatted}")
     print(f"Completed {successful_evaluations} successful evaluations out of {total_windows} windows")
+    print(f"Success rate: {successful_evaluations/total_windows*100:.1f}%")
+    if len(iteration_times) > 0:
+        print(f"Average time per iteration: {np.mean(iteration_times):.2f}s")
+        print(f"Total iterations processed: {len(iteration_times)}")
+    print(f"{'='*60}")
     
     return all_residuals, all_errors, glucose_df
 
