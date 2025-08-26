@@ -15,12 +15,13 @@ FILE_PATH = "/Users/mconn/Downloads/loop_input_data_window_30.json"
 
 USE_RC = True  # Set to True to enable retrospective correction
 USE_MID_ABSORPTION_ISF = False  # Set to True to enable changes to ISF mid-absorption of insulin
-CARB_ABSORPTION_MODEL = "piecewiseLinear"
+CARB_ABSORPTION_MODEL = "piecewiseLinear"  # Options: "linear" or "piecewiseLinear"
 SAVE_PATH = f'/Users/mconn/data/tbddp/poc/error_data_use_rc={USE_RC}_mid_abs_isf={USE_MID_ABSORPTION_ISF}_carb_model={CARB_ABSORPTION_MODEL}.csv' 
 
 N_WINDOWS = 1500  # Limit number of evaluation windows for testing
 
 # Parallel processing configuration
+USE_PARALLEL_PROCESSING = True  # Set to True to enable parallel processing, False for serial processing
 N_PROCESSES = max(1, mp.cpu_count() - 1)  # Use all but one CPU core
 BATCH_SIZE = 50  # Process windows in batches to manage memory
 
@@ -48,7 +49,7 @@ def process_window(window_data: Tuple[datetime, Dict, pd.DataFrame]) -> Tuple[in
         loop_input['includePositiveVelocityAndRC'] = USE_RC 
         loop_input['useMidAbsorptionISF'] = USE_MID_ABSORPTION_ISF
         loop_input['carbAbsorptionModel'] = CARB_ABSORPTION_MODEL
-        
+
         # Calculate errors
         residuals, errors, success = calculate_prediction_errors(glucose_df, loop_input, current_time)
         
@@ -128,6 +129,133 @@ def format_time(seconds: float) -> str:
         return f"{hours}h {remaining_minutes}m {remaining_seconds:.1f}s"
 
 
+def process_windows_sequential(windows_data: List[Tuple[datetime, Dict, pd.DataFrame]], 
+                              overall_start_time: float) -> Tuple[List[Dict], int, int]:
+    """
+    Process windows sequentially with progress reporting.
+    
+    Args:
+        windows_data: List of window data tuples
+        overall_start_time: Start time for progress calculation
+        
+    Returns:
+        Tuple of (all_results, successful_evaluations, failed_evaluations)
+    """
+    all_results = []
+    successful_evaluations = 0
+    failed_evaluations = 0
+    actual_windows = len(windows_data)
+    
+    for i, window_data in enumerate(windows_data):
+        if i % 50 == 0:
+            elapsed_time = time.time() - overall_start_time
+            print(f"Processing window {i+1}/{actual_windows}")
+            
+            if i > 0:
+                avg_time_per_window = elapsed_time / i
+                remaining_windows = actual_windows - i
+                estimated_remaining_time = remaining_windows * avg_time_per_window
+                estimated_completion = datetime.now() + timedelta(seconds=estimated_remaining_time)
+                
+                print(f"  Progress: {i}/{actual_windows} ({i/actual_windows*100:.1f}%)")
+                print(f"  Elapsed: {format_time(elapsed_time)}")
+                print(f"  Estimated remaining: {format_time(estimated_remaining_time)}")
+                print(f"  Estimated completion: {estimated_completion.strftime('%I:%M:%S %p')}")
+                print(f"  Success rate: {successful_evaluations}/{i} ({successful_evaluations/i*100:.1f}%)")
+        
+        result = process_window(window_data)
+        timestamp, residuals, errors, success, processing_time = result
+        
+        if success and len(residuals) > 0 and len(errors) > 0:
+            all_results.append({
+                'timestamp': timestamp,
+                'residuals': residuals,
+                'errors': errors,
+                'processing_time': processing_time
+            })
+            successful_evaluations += 1
+        else:
+            failed_evaluations += 1
+    
+    return all_results, successful_evaluations, failed_evaluations
+
+
+def process_windows_parallel(windows_data: List[Tuple[datetime, Dict, pd.DataFrame]], 
+                           overall_start_time: float) -> Tuple[List[Dict], int, int]:
+    """
+    Process windows in parallel using multiprocessing.
+    
+    Args:
+        windows_data: List of window data tuples
+        overall_start_time: Start time for progress calculation
+        
+    Returns:
+        Tuple of (all_results, successful_evaluations, failed_evaluations)
+    """
+    all_results = []
+    successful_evaluations = 0
+    failed_evaluations = 0
+    actual_windows = len(windows_data)
+    
+    with mp.Pool(processes=N_PROCESSES) as pool:
+        for batch_start in range(0, actual_windows, BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE, actual_windows)
+            batch_windows = windows_data[batch_start:batch_end]
+            
+            batch_num = batch_start // BATCH_SIZE + 1
+            total_batches = (actual_windows - 1) // BATCH_SIZE + 1
+            
+            print(f"Processing batch {batch_num}/{total_batches} (windows {batch_start+1}-{batch_end})")
+            batch_start_time = time.time()
+            
+            # Process batch in parallel
+            batch_results = pool.map(process_window, batch_windows)
+            
+            batch_time = time.time() - batch_start_time
+            
+            # Process results
+            batch_successful = 0
+            batch_failed = 0
+            
+            for result in batch_results:
+                timestamp, residuals, errors, success, processing_time = result
+                
+                if success and len(residuals) > 0 and len(errors) > 0:
+                    all_results.append({
+                        'timestamp': timestamp,
+                        'residuals': residuals,
+                        'errors': errors,
+                        'processing_time': processing_time
+                    })
+                    batch_successful += 1
+                    successful_evaluations += 1
+                else:
+                    batch_failed += 1
+                    failed_evaluations += 1
+            
+            # Progress reporting
+            windows_processed = batch_end
+            elapsed_time = time.time() - overall_start_time
+            
+            print(f"  Batch time: {batch_time:.1f}s")
+            print(f"  Batch success: {batch_successful}/{len(batch_windows)} ({batch_successful/len(batch_windows)*100:.1f}%)")
+            
+            if windows_processed < actual_windows:
+                avg_time_per_window = elapsed_time / windows_processed
+                remaining_windows = actual_windows - windows_processed
+                estimated_remaining_time = remaining_windows * avg_time_per_window
+                estimated_completion = datetime.now() + timedelta(seconds=estimated_remaining_time)
+                
+                print(f"  Overall progress: {windows_processed}/{actual_windows} ({windows_processed/actual_windows*100:.1f}%)")
+                print(f"  Elapsed: {format_time(elapsed_time)}")
+                print(f"  Estimated remaining: {format_time(estimated_remaining_time)}")
+                print(f"  Estimated completion: {estimated_completion.strftime('%I:%M:%S %p')}")
+                print(f"  Overall success rate: {successful_evaluations}/{windows_processed} ({successful_evaluations/windows_processed*100:.1f}%)")
+            print()
+    
+    return all_results, successful_evaluations, failed_evaluations
+
+
 def run_sliding_window_evaluation(filepath: str) -> Tuple[List[List[float]], List[List[float]], pd.DataFrame]:
     """
     Run sliding window evaluation on multi-day JSON file with parallel processing.
@@ -164,14 +292,19 @@ def run_sliding_window_evaluation(filepath: str) -> Tuple[List[List[float]], Lis
     total_expected_windows = min(total_expected_windows, N_WINDOWS)
     
     print(f"Expected to process ~{total_expected_windows} windows (limited to {N_WINDOWS})")
-    print(f"Using {N_PROCESSES} CPU cores for parallel processing")
-    print(f"Batch size: {BATCH_SIZE} windows per batch")
     
-    # Prepare all windows for parallel processing
+    if USE_PARALLEL_PROCESSING:
+        print(f"Using parallel processing with {N_PROCESSES} CPU cores")
+        print(f"Batch size: {BATCH_SIZE} windows per batch")
+    else:
+        print("Using sequential processing")
+    
+    # Prepare all windows for processing
     windows_data = []
     current_time = evaluation_start
     
-    print("Preparing windows for parallel processing...")
+    processing_mode = "parallel" if USE_PARALLEL_PROCESSING else "sequential"
+    print(f"Preparing windows for {processing_mode} processing...")
     while current_time <= evaluation_end and len(windows_data) < N_WINDOWS:
         windows_data.append((current_time, data, glucose_df))
         current_time += timedelta(minutes=5)
@@ -184,96 +317,29 @@ def run_sliding_window_evaluation(filepath: str) -> Tuple[List[List[float]], Lis
         return [], [], glucose_df
     
     overall_start_time = time.time()
-    all_results = []
-    successful_evaluations = 0
-    failed_evaluations = 0
     
-    # Process windows in batches using multiprocessing
-    print("Starting parallel processing...\n")
+    print(f"Starting {processing_mode} processing...\n")
     
-    try:
-        with mp.Pool(processes=N_PROCESSES) as pool:
-            for batch_start in range(0, actual_windows, BATCH_SIZE):
-                batch_end = min(batch_start + BATCH_SIZE, actual_windows)
-                batch_windows = windows_data[batch_start:batch_end]
-                
-                batch_num = batch_start // BATCH_SIZE + 1
-                total_batches = (actual_windows - 1) // BATCH_SIZE + 1
-                
-                print(f"Processing batch {batch_num}/{total_batches} (windows {batch_start+1}-{batch_end})")
-                batch_start_time = time.time()
-                
-                # Process batch in parallel
-                batch_results = pool.map(process_window, batch_windows)
-                
-                batch_time = time.time() - batch_start_time
-                
-                # Process results
-                batch_successful = 0
-                batch_failed = 0
-                
-                for result in batch_results:
-                    timestamp, residuals, errors, success, processing_time = result
-                    
-                    if success and len(residuals) > 0 and len(errors) > 0:
-                        all_results.append({
-                            'timestamp': timestamp,
-                            'residuals': residuals,
-                            'errors': errors,
-                            'processing_time': processing_time
-                        })
-                        batch_successful += 1
-                        successful_evaluations += 1
-                    else:
-                        batch_failed += 1
-                        failed_evaluations += 1
-                
-                # Progress reporting
-                windows_processed = batch_end
-                elapsed_time = time.time() - overall_start_time
-                
-                print(f"  Batch time: {batch_time:.1f}s")
-                print(f"  Batch success: {batch_successful}/{len(batch_windows)} ({batch_successful/len(batch_windows)*100:.1f}%)")
-                
-                if windows_processed < actual_windows:
-                    avg_time_per_window = elapsed_time / windows_processed
-                    remaining_windows = actual_windows - windows_processed
-                    estimated_remaining_time = remaining_windows * avg_time_per_window
-                    estimated_completion = datetime.now() + timedelta(seconds=estimated_remaining_time)
-                    
-                    print(f"  Overall progress: {windows_processed}/{actual_windows} ({windows_processed/actual_windows*100:.1f}%)")
-                    print(f"  Elapsed: {format_time(elapsed_time)}")
-                    print(f"  Estimated remaining: {format_time(estimated_remaining_time)}")
-                    print(f"  Estimated completion: {estimated_completion.strftime('%I:%M:%S %p')}")
-                    print(f"  Overall success rate: {successful_evaluations}/{windows_processed} ({successful_evaluations/windows_processed*100:.1f}%)")
-                print()
-    
-    except Exception as e:
-        print(f"Error in parallel processing: {str(e)}")
-        print("Falling back to sequential processing...")
-        
-        # Fallback to sequential processing
-        all_results = []
-        successful_evaluations = 0
-        failed_evaluations = 0
-        
-        for i, window_data in enumerate(windows_data):
-            if i % 50 == 0:
-                print(f"Processing window {i+1}/{actual_windows} (sequential fallback)")
+    if USE_PARALLEL_PROCESSING:
+        # Parallel processing with fallback to sequential
+        try:
+            all_results, successful_evaluations, failed_evaluations = process_windows_parallel(
+                windows_data, overall_start_time
+            )
+        except Exception as e:
+            print(f"Error in parallel processing: {str(e)}")
+            print("Falling back to sequential processing...")
             
-            result = process_window(window_data)
-            timestamp, residuals, errors, success, processing_time = result
-            
-            if success and len(residuals) > 0 and len(errors) > 0:
-                all_results.append({
-                    'timestamp': timestamp,
-                    'residuals': residuals,
-                    'errors': errors,
-                    'processing_time': processing_time
-                })
-                successful_evaluations += 1
-            else:
-                failed_evaluations += 1
+            # Reset start time for fallback processing
+            overall_start_time = time.time()
+            all_results, successful_evaluations, failed_evaluations = process_windows_sequential(
+                windows_data, overall_start_time
+            )
+    else:
+        # Sequential processing
+        all_results, successful_evaluations, failed_evaluations = process_windows_sequential(
+            windows_data, overall_start_time
+        )
     
     total_time = time.time() - overall_start_time
     
@@ -286,7 +352,8 @@ def run_sliding_window_evaluation(filepath: str) -> Tuple[List[List[float]], Lis
     
     # Final summary
     print(f"{'='*60}")
-    print(f"PARALLEL EVALUATION COMPLETE")
+    evaluation_mode = "PARALLEL" if USE_PARALLEL_PROCESSING else "SEQUENTIAL"
+    print(f"{evaluation_mode} EVALUATION COMPLETE")
     print(f"{'='*60}")
     print(f"Total processing time: {format_time(total_time)}")
     print(f"Windows processed: {actual_windows}")
@@ -298,10 +365,11 @@ def run_sliding_window_evaluation(filepath: str) -> Tuple[List[List[float]], Lis
         avg_processing_time = np.mean([r['processing_time'] for r in all_results])
         print(f"Avg processing time/window: {avg_processing_time:.2f}s")
         
-        # Calculate speedup estimate
-        sequential_estimate = actual_windows * avg_processing_time
-        speedup = sequential_estimate / total_time if total_time > 0 else 1
-        print(f"Estimated speedup: {speedup:.1f}x over sequential processing")
+        if USE_PARALLEL_PROCESSING:
+            # Calculate speedup estimate for parallel processing
+            sequential_estimate = actual_windows * avg_processing_time
+            speedup = sequential_estimate / total_time if total_time > 0 else 1
+            print(f"Estimated speedup: {speedup:.1f}x over sequential processing")
     
     print(f"{'='*60}")
     
@@ -384,9 +452,6 @@ def main():
             print("No successful evaluations completed.")
             return
         
-        # Plot results
-        plot_error_statistics(all_errors)
-        
         # Save error data if requested
         if SAVE_PATH:
             errors_df = pd.DataFrame(all_errors)
@@ -397,6 +462,9 @@ def main():
             residuals_df.columns = [f'horizon_{i*5}min' for i in range(72)]
             residuals_df.to_csv(SAVE_PATH.replace('error_data', 'residual_data'), index=False)
             print(f"Error data saved to {SAVE_PATH}")
+
+        # Plot results
+        plot_error_statistics(all_errors)
             
     except Exception as e:
         print(f"Error: {e}")
