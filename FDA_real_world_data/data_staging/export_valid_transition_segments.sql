@@ -9,9 +9,9 @@ Purpose
 Identify users who transition between temp basal and autobolus dosing 
 strategies by analyzing sliding windows of Loop recommendation data.
 
-Data Source: bddp_sample_all (Tidepool Big Data Donation Project)
+Data Source: bddp_sample_all (Tidepool Big Data Donation Project) a
 Author: Mark
-Version: 1.3
+Version: 0
 Last Modified: 2025-01-08
 
 Parameters
@@ -29,7 +29,6 @@ Threshold Justification
 MIN_COVERAGE (0.70):
   - 70% of 288 samples/day × 14 days = 2822 samples minimum
   - Allows for ~4 hours/day of CGM gaps (sensor warmup, compression lows)
-  - Sensitivity analysis: 0.60-0.80 range tested, <5% result variance
   
 AUTOBOLUS_LOW/HIGH (0.30/0.70):
   - Users rarely operate exactly at 0% or 100% due to occasional manual 
@@ -37,10 +36,10 @@ AUTOBOLUS_LOW/HIGH (0.30/0.70):
   - 30/70 thresholds identify users "predominantly" in one mode
   - Based on histogram analysis of user-days (see RWE Analysis Plan Fig 3)
   
-L2_SCORE:
-  - Euclidean distance from ideal transition point (0,1) or (1,0)
-  - Preferred over simple difference: penalizes "partial" transitions
-  - Range: [0, sqrt(2)] where sqrt(2) ≈ 1.414 is perfect transition
+SEGMENT_SCORE:
+  - Minimum of scores for each segment (temp basal, autobolus)
+  - E.g., Segments with 0.95 and 0.95 (min = 0.95) are scored higher than 
+  - segments with 0.90 and 0.99 (min = 0.90).
 
 =============================================================================
 */
@@ -63,7 +62,41 @@ params AS (
 ),
 
 /*
-CTE 1/8: BASE
+CTE 1/9: Merge
+-------------
+Merges data from TBDDP and TDP
+
+*/
+merged AS (
+  -- Dev table
+  SELECT 
+    _userId,
+    TRY_CAST(time:`$date` AS TIMESTAMP) AS settings_time,
+    origin,
+    recommendedBasal,
+    recommendedBolus
+  FROM dev.default.bddp_sample_all
+  WHERE reason = 'loop'
+    AND TRY_CAST(time:`$date` AS TIMESTAMP) IS NOT NULL
+
+  -- UNION ALL
+
+  -- -- Prod table
+  -- SELECT 
+  --   _userId,
+  --   from_unixtime(
+  --     CAST(get_json_object(`time`, '$.$date.$numberLong') AS BIGINT) / 1000
+  --   ) AS settings_time,
+  --   origin,
+  --   recommendedBasal,
+  --   recommendedBolus
+  -- FROM prod.default.device_data
+  -- WHERE reason = 'loop'
+  --   AND get_json_object(`time`, '$.$date.$numberLong') IS NOT NULL
+),
+
+/*
+CTE 2/9: BASE
 -------------
 Extract Loop recommendation events and classify dosing strategy.
 
@@ -80,18 +113,21 @@ Output: _userId, time, is_autobolus (0/1/NULL)
 base AS (
   SELECT 
     _userId,
-    TRY_CAST(time:`$date` AS TIMESTAMP) AS time,
+    settings_time,
+    CAST(settings_time AS DATE) AS day,
     CASE 
       WHEN recommendedBasal IS NULL AND recommendedBolus IS NULL THEN NULL
       WHEN recommendedBolus IS NOT NULL THEN 1 
       ELSE 0 
     END AS is_autobolus
-  FROM bddp_sample_all
-  WHERE reason = 'loop'
+  FROM merged
+  WHERE CAST(SUBSTRING_INDEX(get_json_object(origin, '$.version'), '.', 1) AS INT) * 10 
+      + CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(get_json_object(origin, '$.version'), '.', 2), '.', -1) AS INT) 
+      < 34
 ),
 
 /*
-CTE 2/8: DAILY_AGG
+CTE 3/9: DAILY_AGG
 ------------------
 Aggregate recommendations to daily level per user.
 
@@ -106,16 +142,16 @@ percentage calculation but included in coverage calculation.
 daily_agg AS (
   SELECT
     _userId,
-    CAST(time AS DATE) AS day,
+    CAST(settings_time AS DATE) AS day,
     SUM(is_autobolus) AS autobolus_rows,
     COUNT(is_autobolus) AS recommendation_rows,
     COUNT(*) AS total_rows
   FROM base
-  GROUP BY _userId, CAST(time AS DATE)
+  GROUP BY _userId, CAST(settings_time AS DATE)
 ),
 
 /*
-CTE 3/8: USER_BOUNDS
+CTE 4/9: USER_BOUNDS
 --------------------
 Compute first and last day of data per user.
 
@@ -132,7 +168,7 @@ user_bounds AS (
 ),
 
 /*
-CTE 4/8: DAILY_WITH_BOUNDS
+CTE 5/9: DAILY_WITH_BOUNDS
 --------------------------
 Join daily aggregates with user bounds for downstream filtering.
 */
@@ -143,7 +179,7 @@ daily_with_bounds AS (
 ),
 
 /*
-CTE 5/8: SLIDING_WINDOW
+CTE 6/9: SLIDING_WINDOW
 -----------------------
 Compute rolling aggregates over two adjacent time segments.
 
@@ -191,9 +227,9 @@ sliding_window AS (
 ),
 
 /*
-CTE 6/8: SCORED
+CTE 7/9: SCORED
 ---------------
-Compute coverage, autobolus percentages, and L2 transition scores.
+Compute coverage, autobolus percentages, and transition scores.
 
 Filters applied (exclusion criteria):
   1. rec_rows_seg1 > 0 AND rec_rows_seg2 > 0
@@ -205,7 +241,7 @@ Filters applied (exclusion criteria):
   3. coverage_seg1 >= 0.70 AND coverage_seg2 >= 0.70
      Reason: Insufficient data makes transition detection unreliable
 
-L2 score interpretation:
+Transition score interpretation:
   - Measures distance from ideal TB→AB transition (seg1=0%, seg2=100%)
   - Higher score = cleaner transition
   - Used for ranking when user has multiple valid transition windows
@@ -231,12 +267,11 @@ scored AS (
     s.autobolus_seg1 * 1.0 / s.rec_rows_seg1 AS autobolus_pct_seg1,
     s.autobolus_seg2 * 1.0 / s.rec_rows_seg2 AS autobolus_pct_seg2,
     
-    -- L2 distance from ideal TB→AB transition point (0, sqrt(2))
-    SQRT(
-      POW(1.0 - (s.autobolus_seg1 * 1.0 / s.rec_rows_seg1), 2) +
-      POW(s.autobolus_seg2 * 1.0 / s.rec_rows_seg2, 2)
-    ) AS l2_score,
-    
+    LEAST(
+      1 - s.autobolus_seg1 * 1.0 / s.rec_rows_seg1,
+      s.autobolus_seg2 * 1.0 / s.rec_rows_seg2
+    ) AS segment_score,
+
     s.first_day,
     
     -- Carry params for filtering
@@ -254,17 +289,15 @@ scored AS (
 ),
 
 /*
-CTE 7/8: RANKED
+CTE 8/9: RANKED
 ---------------
 Filter to valid transitions and rank by L2 score.
 
 Transition classification:
   - TB→AB: autobolus_pct_seg1 < 0.30 AND autobolus_pct_seg2 > 0.70
-  - AB→TB: autobolus_pct_seg1 > 0.70 AND autobolus_pct_seg2 < 0.30
 
 Ranking:
-  - rn_tb_to_ab: ORDER BY l2_score DESC (highest = best TB→AB)
-  - rn_ab_to_tb: ORDER BY l2_score ASC  (lowest = best AB→TB)
+  - rn_tb_to_ab: ORDER BY segment_score DESC (highest = best TB→AB)
   
 Note: A window qualifies for both rankings if it meets either threshold.
 The final CTE picks rn=1 for each direction independently.
@@ -274,29 +307,25 @@ ranked AS (
     r.*,
     p.autobolus_low,
     p.autobolus_high,
-    ROW_NUMBER() OVER (PARTITION BY r._userId ORDER BY r.l2_score DESC) AS rn_tb_to_ab,
-    ROW_NUMBER() OVER (PARTITION BY r._userId ORDER BY r.l2_score ASC) AS rn_ab_to_tb
+    ROW_NUMBER() OVER (PARTITION BY r._userId ORDER BY r.segment_score DESC) AS rn_tb_to_ab
   FROM scored r
   CROSS JOIN params p
   WHERE 
     (r.autobolus_pct_seg1 < p.autobolus_low AND r.autobolus_pct_seg2 > p.autobolus_high)
-    OR (r.autobolus_pct_seg1 > p.autobolus_high AND r.autobolus_pct_seg2 < p.autobolus_low)
 ),
 
 /*
-CTE 8/8: VALID_USER_TABLE
+CTE 9/9: VALID_USER_TABLE
 -------------------------
 Pivot to one row per user with best transition in each direction.
 
 Output columns (per direction):
   - seg1_start/seg2_end: Date range of the transition window
   - pct_seg1/pct_seg2: Autobolus percentages before/after
-  - l2_score: Quality score for this transition
+  - segment_score: Quality score for this transition
 
 A user may have:
   - Only TB→AB (started on temp basal, switched to autobolus)
-  - Only AB→TB (started on autobolus, switched to temp basal)
-  - Both (switched back and forth - rare but possible)
   - Neither (NULL in all columns - excluded from this table)
 */
 valid_user_table AS (
@@ -314,20 +343,7 @@ valid_user_table AS (
     MAX(CASE WHEN rn_tb_to_ab = 1 THEN coverage_seg2 END) AS tb_to_ab_coverage_seg2,
     MAX(CASE WHEN rn_tb_to_ab = 1 THEN days_seg1 END) AS tb_to_ab_days_seg1,
     MAX(CASE WHEN rn_tb_to_ab = 1 THEN days_seg2 END) AS tb_to_ab_days_seg2,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN l2_score END) AS tb_to_ab_l2_score,
-    
-    -- Best autobolus → temp basal transition
-    MAX(CASE WHEN rn_ab_to_tb = 1 THEN seg1_start END) AS ab_to_tb_seg1_start,
-    MAX(CASE WHEN rn_ab_to_tb = 1 THEN seg1_end END) AS ab_to_tb_seg1_end,
-    MAX(CASE WHEN rn_ab_to_tb = 1 THEN seg2_start END) AS ab_to_tb_seg2_start,
-    MAX(CASE WHEN rn_ab_to_tb = 1 THEN seg2_end END) AS ab_to_tb_seg2_end,
-    MAX(CASE WHEN rn_ab_to_tb = 1 THEN autobolus_pct_seg1 END) AS ab_to_tb_pct_seg1,
-    MAX(CASE WHEN rn_ab_to_tb = 1 THEN autobolus_pct_seg2 END) AS ab_to_tb_pct_seg2,
-    MAX(CASE WHEN rn_ab_to_tb = 1 THEN coverage_seg1 END) AS ab_to_tb_coverage_seg1,
-    MAX(CASE WHEN rn_ab_to_tb = 1 THEN coverage_seg2 END) AS ab_to_tb_coverage_seg2,
-    MAX(CASE WHEN rn_ab_to_tb = 1 THEN days_seg1 END) AS ab_to_tb_days_seg1,
-    MAX(CASE WHEN rn_ab_to_tb = 1 THEN days_seg2 END) AS ab_to_tb_days_seg2,
-    MAX(CASE WHEN rn_ab_to_tb = 1 THEN l2_score END) AS ab_to_tb_l2_score
+    MAX(CASE WHEN rn_tb_to_ab = 1 THEN segment_score END) AS tb_to_ab_segment_score
 
   FROM ranked
   GROUP BY _userId
@@ -365,28 +381,6 @@ exclusion_summary AS (
     END) AS windows_passing_all_filters
     
   FROM sliding_window
-),
-
-/*
-OUTPUT_CHECKSUM
----------------
-Summary statistics for reproducibility verification.
-Query with: SELECT * FROM transition_results WHERE _row_type = 'CHECKSUM'
-*/
-output_checksum AS (
-  SELECT
-    COUNT(*) AS total_users,
-    COUNT(tb_to_ab_l2_score) AS users_with_tb_to_ab,
-    COUNT(ab_to_tb_l2_score) AS users_with_ab_to_tb,
-    SUM(CASE WHEN tb_to_ab_l2_score IS NOT NULL AND ab_to_tb_l2_score IS NOT NULL 
-        THEN 1 ELSE 0 END) AS users_with_both,
-    ROUND(AVG(tb_to_ab_l2_score), 6) AS mean_tb_to_ab_l2,
-    ROUND(AVG(ab_to_tb_l2_score), 6) AS mean_ab_to_tb_l2,
-    ROUND(STDDEV(tb_to_ab_l2_score), 6) AS stddev_tb_to_ab_l2,
-    ROUND(STDDEV(ab_to_tb_l2_score), 6) AS stddev_ab_to_tb_l2,
-    MIN(tb_to_ab_seg1_start) AS earliest_transition,
-    MAX(tb_to_ab_seg2_end) AS latest_transition
-  FROM valid_user_table
 )
 
 -- Main output: one row per user with valid transition(s)
@@ -398,14 +392,13 @@ SELECT
   -- Age at TB→AB transition (years)
   ROUND(DATEDIFF(t.tb_to_ab_seg1_start, d.dob) / 365.25, 1) AS tb_to_ab_age_years,
   -- Years with diabetes at TB→AB transition
-  ROUND(DATEDIFF(t.tb_to_ab_seg1_start, d.diagnosis_date) / 365.25, 1) AS tb_to_ab_years_lwd,
-  -- Age at AB→TB transition (years)
-  ROUND(DATEDIFF(t.ab_to_tb_seg1_start, d.dob) / 365.25, 1) AS ab_to_tb_age_years,
-  -- Years with diabetes at AB→TB transition
-  ROUND(DATEDIFF(t.ab_to_tb_seg1_start, d.diagnosis_date) / 365.25, 1) AS ab_to_tb_years_lwd
+  ROUND(DATEDIFF(t.tb_to_ab_seg1_start, d.diagnosis_date) / 365.25, 1) AS tb_to_ab_years_lwd
 
 FROM valid_user_table t
 LEFT JOIN dev.default.bddp_user_dates d ON t._userId = d.userid
 LEFT JOIN dev.default.user_gender g ON t._userId = g.userid
+WHERE ROUND(DATEDIFF(t.tb_to_ab_seg1_start, d.dob) / 365.25, 1) > 6 OR d.dob IS NULL
 ORDER BY t._userId;
 
+
+SELECT * FROM dev.fda_510k_rwd.valid_transition_segments;
