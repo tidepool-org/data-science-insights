@@ -160,3 +160,21 @@ elif MODE == "override":
     override_endpoints.write.mode("overwrite").saveAsTable(
         "dev.fda_510k_rwd.glycemic_endpoints_override"
     )
+
+elif MODE == "stable":
+
+    stable_cbg = spark.sql("""
+        SELECT
+            c._userId,
+            c.cbg_mg_dl,
+            c.cbg_timestamp,
+            'stable_ab' AS segment
+        FROM dev.fda_510k_rwd.stable_autobolus_cbg c
+        INNER JOIN dev.fda_510k_rwd.stable_autobolus_segments s ON c._userId = s._userId
+        WHERE CAST(c.cbg_timestamp AS DATE) BETWEEN s.segment_start AND s.segment_end
+    """)
+
+    stable_endpoints = compute_glycemic_endpoints(spark, stable_cbg)
+    stable_endpoints.write.mode("overwrite").saveAsTable(
+        "dev.fda_510k_rwd.glycemic_endpoints_stable_autobolus"
+    )
