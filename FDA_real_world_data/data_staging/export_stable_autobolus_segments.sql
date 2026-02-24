@@ -11,6 +11,10 @@ starting at least 30 days after their first autobolus recommendation.
 
 This captures stable autobolus adopters who don't have transition data.
 
+Dependency
+----------
+Requires: dev.fda_510k_rwd.loop_recommendations (export_loop_recommendations.sql)
+
 =============================================================================
 */
 
@@ -26,71 +30,12 @@ WITH params AS (
     288 * 14 AS samples_per_segment  -- 4032
 ),
 
--- base AS (
---   SELECT 
---     _userId,
---     TRY_CAST(time:`$date` AS TIMESTAMP) AS time,
---     CAST(TRY_CAST(time:`$date` AS TIMESTAMP) AS DATE) AS day,
---     CASE 
---       WHEN recommendedBasal IS NULL AND recommendedBolus IS NULL THEN NULL
---       WHEN recommendedBolus IS NOT NULL THEN 1 
---       ELSE 0 
---     END AS is_autobolus
---   FROM bddp_sample_all
---   WHERE reason = 'loop'
---     AND TRY_CAST(time:`$date` AS TIMESTAMP) IS NOT NULL
--- ),
-
-merged AS (
-  -- Dev table
-  SELECT 
-    _userId,
-    TRY_CAST(time:`$date` AS TIMESTAMP) AS settings_time,
-    origin,
-    recommendedBasal,
-    recommendedBolus
-  FROM dev.default.bddp_sample_all
-  WHERE reason = 'loop'
-    AND TRY_CAST(time:`$date` AS TIMESTAMP) IS NOT NULL
-
-  UNION ALL
-
-  -- Prod table
-  SELECT 
-    _userId,
-    from_unixtime(
-      CAST(get_json_object(`time`, '$.$date.$numberLong') AS BIGINT) / 1000
-    ) AS settings_time,
-    origin,
-    recommendedBasal,
-    recommendedBolus
-  FROM prod.default.device_data
-  WHERE reason = 'loop'
-    AND get_json_object(`time`, '$.$date.$numberLong') IS NOT NULL
-),
-
--- CTE 2: Extract fields, filter version, classify
-base AS (
-  SELECT 
-    _userId,
-    settings_time,
-    CAST(settings_time AS DATE) AS day,
-    CASE 
-      WHEN recommendedBasal IS NULL AND recommendedBolus IS NULL THEN NULL
-      WHEN recommendedBolus IS NOT NULL THEN 1 
-      ELSE 0 
-    END AS is_autobolus
-  FROM merged
-  WHERE CAST(SUBSTRING_INDEX(get_json_object(origin, '$.version'), '.', 1) AS INT) * 10 
-      + CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(get_json_object(origin, '$.version'), '.', 2), '.', -1) AS INT) 
-      < 34
-),
 -- Find first autobolus date per user
 first_autobolus AS (
-  SELECT 
+  SELECT
     _userId,
     MIN(day) AS first_ab_day
-  FROM base
+  FROM dev.fda_510k_rwd.loop_recommendations
   WHERE is_autobolus = 1
   GROUP BY _userId
 ),
@@ -104,7 +49,7 @@ daily_agg AS (
     SUM(b.is_autobolus) AS autobolus_rows,
     COUNT(b.is_autobolus) AS recommendation_rows,
     COUNT(*) AS total_rows
-  FROM base b
+  FROM dev.fda_510k_rwd.loop_recommendations b
   INNER JOIN first_autobolus f ON b._userId = f._userId
   WHERE b.day >= DATE_ADD(f.first_ab_day, 30)  -- At least 30 days after first AB
   GROUP BY b._userId, b.day, f.first_ab_day

@@ -9,7 +9,7 @@ Purpose
 Identify users who transition between temp basal and autobolus dosing 
 strategies by analyzing sliding windows of Loop recommendation data.
 
-Data Source: bddp_sample_all (Tidepool Big Data Donation Project) a
+Data Source: dev.fda_510k_rwd.loop_recommendations (export_loop_recommendations.sql)
 Author: Mark
 Version: 0
 Last Modified: 2025-01-08
@@ -62,72 +62,7 @@ params AS (
 ),
 
 /*
-CTE 1/9: Merge
--------------
-Merges data from TBDDP and TDP
-
-*/
-merged AS (
-  -- Dev table
-  SELECT 
-    _userId,
-    TRY_CAST(time:`$date` AS TIMESTAMP) AS settings_time,
-    origin,
-    recommendedBasal,
-    recommendedBolus
-  FROM dev.default.bddp_sample_all
-  WHERE reason = 'loop'
-    AND TRY_CAST(time:`$date` AS TIMESTAMP) IS NOT NULL
-
-  -- UNION ALL
-
-  -- -- Prod table
-  -- SELECT 
-  --   _userId,
-  --   from_unixtime(
-  --     CAST(get_json_object(`time`, '$.$date.$numberLong') AS BIGINT) / 1000
-  --   ) AS settings_time,
-  --   origin,
-  --   recommendedBasal,
-  --   recommendedBolus
-  -- FROM prod.default.device_data
-  -- WHERE reason = 'loop'
-  --   AND get_json_object(`time`, '$.$date.$numberLong') IS NOT NULL
-),
-
-/*
-CTE 2/9: BASE
--------------
-Extract Loop recommendation events and classify dosing strategy.
-
-Classification logic:
-  - NULL/NULL (no basal or bolus recommendation): excluded (NULL)
-  - recommendedBolus present: autobolus mode (1)
-    * Includes amount=0.0, which is an explicit "no bolus needed" decision
-    * The presence of a bolus recommendation means autobolus feature is active
-  - recommendedBasal only: temp basal mode (0)
-
-Input: bddp_sample_all (raw Loop recommendation events)
-Output: _userId, time, is_autobolus (0/1/NULL)
-*/
-base AS (
-  SELECT 
-    _userId,
-    settings_time,
-    CAST(settings_time AS DATE) AS day,
-    CASE 
-      WHEN recommendedBasal IS NULL AND recommendedBolus IS NULL THEN NULL
-      WHEN recommendedBolus IS NOT NULL THEN 1 
-      ELSE 0 
-    END AS is_autobolus
-  FROM merged
-  WHERE CAST(SUBSTRING_INDEX(get_json_object(origin, '$.version'), '.', 1) AS INT) * 10 
-      + CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(get_json_object(origin, '$.version'), '.', 2), '.', -1) AS INT) 
-      < 34
-),
-
-/*
-CTE 3/9: DAILY_AGG
+CTE 1/7: DAILY_AGG
 ------------------
 Aggregate recommendations to daily level per user.
 
@@ -142,16 +77,16 @@ percentage calculation but included in coverage calculation.
 daily_agg AS (
   SELECT
     _userId,
-    CAST(settings_time AS DATE) AS day,
+    day,
     SUM(is_autobolus) AS autobolus_rows,
     COUNT(is_autobolus) AS recommendation_rows,
     COUNT(*) AS total_rows
-  FROM base
-  GROUP BY _userId, CAST(settings_time AS DATE)
+  FROM dev.fda_510k_rwd.loop_recommendations
+  GROUP BY _userId, day
 ),
 
 /*
-CTE 4/9: USER_BOUNDS
+CTE 2/7: USER_BOUNDS
 --------------------
 Compute first and last day of data per user.
 
@@ -168,7 +103,7 @@ user_bounds AS (
 ),
 
 /*
-CTE 5/9: DAILY_WITH_BOUNDS
+CTE 3/7: DAILY_WITH_BOUNDS
 --------------------------
 Join daily aggregates with user bounds for downstream filtering.
 */
@@ -179,7 +114,7 @@ daily_with_bounds AS (
 ),
 
 /*
-CTE 6/9: SLIDING_WINDOW
+CTE 4/7: SLIDING_WINDOW
 -----------------------
 Compute rolling aggregates over two adjacent time segments.
 
@@ -227,7 +162,7 @@ sliding_window AS (
 ),
 
 /*
-CTE 7/9: SCORED
+CTE 5/7: SCORED
 ---------------
 Compute coverage, autobolus percentages, and transition scores.
 
@@ -289,7 +224,7 @@ scored AS (
 ),
 
 /*
-CTE 8/9: RANKED
+CTE 6/7: RANKED
 ---------------
 Filter to valid transitions and rank by L2 score.
 
@@ -315,7 +250,7 @@ ranked AS (
 ),
 
 /*
-CTE 9/9: VALID_USER_TABLE
+CTE 7/7: VALID_USER_TABLE
 -------------------------
 Pivot to one row per user with best transition in each direction.
 

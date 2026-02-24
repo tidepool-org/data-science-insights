@@ -100,4 +100,4 @@ def run_in_databricks(spark):
     return run_analysis(spark)
 
 
-run_in_databricks(spark)
+run_in_databricks(spark) # type: ignore[name-defined]

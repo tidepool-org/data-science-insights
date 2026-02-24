@@ -2,6 +2,11 @@ import pandas as pd
 import json
 import traceback
 
+# Databricks runtime globals (available in notebook execution context)
+# pyright: reportMissingImports=false
+spark = spark  # type: ignore[name-defined]  # noqa: F841
+dbutils = dbutils  # type: ignore[name-defined]  # noqa: F841
+
 # =============================================================================
 # GUARDRAILS (arbitrary values for now - update as needed)
 # =============================================================================
@@ -504,3 +509,57 @@ def validate_pump_settings(df):
     errors_df = pd.DataFrame(errors) if errors else pd.DataFrame()
 
     return results_df, errors_df
+
+# =============================================================================
+# MODE CONFIGURATION
+# =============================================================================
+
+CATALOG = "dev.fda_510k_rwd"
+
+MODE_CONFIG = {
+    "transition": {
+        "sql": f"""
+            SELECT s.*
+            FROM dev.default.bddp_sample_all s
+            INNER JOIN {CATALOG}.valid_transition_segments vs
+                ON s._userId = vs._userId
+                AND TRY_CAST(s.time:`$date` AS DATE)
+                    BETWEEN vs.tb_to_ab_seg1_start AND vs.tb_to_ab_seg2_end
+            WHERE s.type = 'pumpSettings'
+        """,
+        "output_table": f"{CATALOG}.valid_transition_guardrails",
+    },
+    "stable": {
+        "sql": f"""
+            SELECT s.*
+            FROM dev.default.bddp_sample_all s
+            INNER JOIN {CATALOG}.stable_autobolus_segments sa
+                ON s._userId = sa._userId
+                AND TRY_CAST(s.time:`$date` AS DATE)
+                    BETWEEN sa.segment_start AND sa.segment_end
+            WHERE s.type = 'pumpSettings'
+        """,
+        "output_table": f"{CATALOG}.valid_stable_guardrails",
+    },
+}
+
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
+
+MODE = dbutils.widgets.get("mode")
+
+if MODE not in MODE_CONFIG:
+    raise ValueError(f"Unknown mode '{MODE}'. Valid modes: {sorted(MODE_CONFIG)}")
+
+cfg = MODE_CONFIG[MODE]
+
+settings_df = spark.sql(cfg["sql"]).toPandas()
+results_df, _ = validate_pump_settings(settings_df)
+
+print(f"Total settings records: {len(results_df)}")
+print(f"Records with violations: {(results_df['violation_count'] > 0).sum()}")
+print(f"Users with any violation: "
+      f"{results_df[results_df['violation_count'] > 0]['_userId'].nunique()}")
+
+spark.createDataFrame(results_df).write.mode("overwrite").saveAsTable(cfg["output_table"])
