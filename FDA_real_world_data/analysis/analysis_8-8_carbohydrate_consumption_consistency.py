@@ -262,14 +262,13 @@ def load_data(spark) -> pd.DataFrame:
         "Inconsistent (>25%)",
     )
     # Direction of change for inconsistent users
-    carb_wide["cho_direction"] = np.where(
-        carb_wide["cho_pct_change"] > CHO_CHANGE_THRESHOLD * 100,
-        "Increased (>25%)",
-        np.where(
+    carb_wide["cho_direction"] = np.select(
+        [
+            carb_wide["cho_pct_change"] > CHO_CHANGE_THRESHOLD * 100,
             carb_wide["cho_pct_change"] < -CHO_CHANGE_THRESHOLD * 100,
-            "Decreased (>25%)",
-            "Stable",
-        ),
+        ],
+        ["Increased (>25%)", "Decreased (>25%)"],
+        default="Stable",
     )
 
     # --- Merge with glycemic endpoints ---
@@ -384,7 +383,7 @@ def create_table_8_8a(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
 
 
 # =============================================================================
-# Table 8.8b — Glycemic Outcomes: Consistent Carbohydrate Consumers
+# Tables 8.8b/c — Glycemic Outcomes: In/Consistent Carbohydrate Consumers
 # =============================================================================
 
 def _create_glycemic_outcome_table(
@@ -573,14 +572,12 @@ def create_figure_8_8a(df: pd.DataFrame, output_path: str):
 
     fig, ax = plt.subplots(figsize=(12, 7))
 
-    # Histogram
-    bins = np.linspace(
-        max(pct_change.min(), -150),
-        min(pct_change.max(), 150),
-        40,
-    )
+    # Histogram — step=5 ensures bin edges align with ±25% thresholds
+    bin_min = np.floor(pct_change.min() / 5) * 5
+    bin_max = np.ceil(pct_change.max() / 5) * 5
+    bins = np.arange(bin_min, bin_max + 5, 5)
     n_vals, bin_edges, patches = ax.hist(
-        pct_change.clip(bins[0], bins[-1]),
+        pct_change,
         bins=bins,
         edgecolor="black",
         alpha=0.8,
