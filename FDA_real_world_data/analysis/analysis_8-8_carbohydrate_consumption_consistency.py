@@ -69,6 +69,7 @@ GLYCEMIC_OUTCOMES = [
 ]
 
 from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT
+from utils.data_loading import load_transition_endpoints
 from utils.statistics import test_normality, compute_paired_statistics, format_p
 COLOR_CONSISTENT   = "#76D3A6"  # green — stable diet
 COLOR_INCONSISTENT = "#FF8B7C"  # orange-red — changed diet
@@ -87,47 +88,7 @@ def load_data(spark) -> pd.DataFrame:
     carbohydrate summary metrics per user per segment, classify users as
     consistent or inconsistent, and return a wide DataFrame.
     """
-    # --- Glycemic endpoints ---
-    endpoints = spark.table(
-        "dev.fda_510k_rwd.glycemic_endpoints_transition"
-    ).toPandas()
-
-    for col in endpoints.select_dtypes(include=["object"]).columns:
-        if col not in ("_userId", "segment"):
-            endpoints[col] = pd.to_numeric(endpoints[col], errors="coerce")
-
-    # CBG coverage filter (70% of 14-day period)
-    endpoints = endpoints.loc[endpoints["cbg_count"] >= 14 * 288 * 0.7].copy()
-
-    # --- Guardrails exclusion ---
-    guardrails = (
-        spark.table("dev.fda_510k_rwd.valid_transition_guardrails")
-        .select("_userId", "violation_count")
-        .toPandas()
-    )
-    guardrails["violation_count"] = pd.to_numeric(
-        guardrails["violation_count"], errors="coerce"
-    ).fillna(0)
-    excluded_users = guardrails.loc[
-        guardrails["violation_count"] > 0, "_userId"
-    ].unique()
-    endpoints = endpoints[~endpoints["_userId"].isin(excluded_users)]
-    print(f"  Excluded {len(excluded_users)} users with guardrail violations")
-
-    # --- Pivot glycemic endpoints to wide ---
-    seg1 = (
-        endpoints[endpoints["segment"] == SEG1]
-        .set_index("_userId")
-        .add_suffix("_seg1")
-    )
-    seg2 = (
-        endpoints[endpoints["segment"] == SEG2]
-        .set_index("_userId")
-        .add_suffix("_seg2")
-    )
-    wide = seg1.join(seg2, how="inner")
-    wide = wide.drop(columns=["segment_seg1", "segment_seg2"], errors="ignore")
-    wide = wide.reset_index()
+    wide = load_transition_endpoints(spark)
 
     # --- Carbohydrate data ---
     carbs = spark.table("dev.fda_510k_rwd.valid_transition_carbs").toPandas()
@@ -863,4 +824,5 @@ def run_in_databricks(spark):
     return run_analysis(spark)
 
 
-run_in_databricks(spark) # type: ignore
+if __name__ == "__main__":
+    run_in_databricks(spark)  # type: ignore[name-defined]

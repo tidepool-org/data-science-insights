@@ -22,9 +22,10 @@ COLORS_SECONDARY = "#4f59be"
 COLORS_ACCENT    = "#241144"
 
 COLORS_STACKED_BAR = {
-    "<54":     ["#8C65D6", "#8C65D6"],
-    "54-70":   ["#BB9AE7", "#BB9AE7"],
-    "70-180":  ["#76D3A6", "#76D3A6"],
-    "180-250": ["#FF8B7C", "#FF8B7C"],
-    ">250":    ["#FB5951", "#FB5951"],
+    # [temp_basal, autobolus] — lighter shade for TB, darker for AB
+    "<54":     ["#FC7A74", "#E03830"],
+    "54-70":   ["#FFA99D", "#FF6D5C"],
+    "70-180":  ["#92E0BA", "#5AC692"],
+    "180-250": ["#CCAFF0", "#AA85DE"],
+    ">250":    ["#A384E0", "#7046CC"],
 }

@@ -318,4 +318,5 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
 def run_in_databricks(spark):
     return run_analysis(spark)
 
-run_in_databricks(spark) # type: ignore[name-defined]
+if __name__ == "__main__":
+    run_in_databricks(spark)  # type: ignore[name-defined]

@@ -26,6 +26,8 @@ Outputs:
 import pandas as pd
 import os
 
+from utils import MIN_CBG_COUNT
+
 OUTPUT_DIR = "outputs/analysis_8_6"
 
 ENDPOINT_COLS = [
@@ -46,7 +48,7 @@ def load_data(spark) -> pd.DataFrame:
             endpoints[col] = pd.to_numeric(endpoints[col], errors="coerce")
 
     # CBG coverage filter (70% of 14-day period)
-    endpoints = endpoints.loc[endpoints["cbg_count"] >= 14 * 288 * 0.7].copy()
+    endpoints = endpoints.loc[endpoints["cbg_count"] >= MIN_CBG_COUNT].copy()
     print(f"  Users after CBG coverage filter: {len(endpoints)}")
 
     # --- JAEB PtID linkage ---
@@ -100,4 +102,5 @@ def run_in_databricks(spark):
     return run_analysis(spark)
 
 
-run_in_databricks(spark) # type: ignore[name-defined]
+if __name__ == "__main__":
+    run_in_databricks(spark)  # type: ignore[name-defined]

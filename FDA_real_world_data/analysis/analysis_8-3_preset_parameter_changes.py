@@ -336,7 +336,8 @@ def create_figure_8_3c(df: pd.DataFrame, output_path: str):
     (Δ = autobolus − temp_basal). Each panel includes an OLS regression
     line and Pearson r with p-value annotation.
     """
-    # Compute deltas
+    # Compute deltas on a copy to avoid mutating the caller's DataFrame
+    df = df.copy()
     delta_cols   = []
     delta_labels = []
     for name, c1, c2, _ in PARAMETERS:
@@ -437,4 +438,5 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
 def run_in_databricks(spark):
     return run_analysis(spark)
 
-run_in_databricks(spark) # type: ignore[name-defined]
+if __name__ == "__main__":
+    run_in_databricks(spark)  # type: ignore[name-defined]

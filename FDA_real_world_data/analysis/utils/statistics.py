@@ -29,11 +29,11 @@ def test_normality(data: pd.Series, alpha: float = 0.05) -> Tuple[bool, float]:
     return p > alpha, p
 
 
-def compute_paired_statistics(
-    seg1: pd.Series, seg2: pd.Series, use_parametric: Optional[bool] = None
-) -> Dict:
+def compute_paired_statistics(seg1: pd.Series, seg2: pd.Series) -> Dict:
     """
     Compute summary statistics and paired tests for two segments.
+
+    Always reports both parametric and nonparametric results.
 
     Returns a dict with raw values (not pre-formatted strings):
     - seg1_mean, seg1_sd, seg1_median, seg1_q1, seg1_q3
@@ -46,11 +46,9 @@ def compute_paired_statistics(
     diff = s2 - s1
 
     is_normal, norm_p = test_normality(diff)
-    if use_parametric is None:
-        use_parametric = is_normal
 
     def _summary(x):
-        return x.mean(), x.std(), x.median(), x.quantile(0.25), x.quantile(0.75)
+        return x.mean(), x.std(ddof=1), x.median(), x.quantile(0.25), x.quantile(0.75)
 
     s1_mean, s1_sd, s1_med, s1_q1, s1_q3 = _summary(s1)
     s2_mean, s2_sd, s2_med, s2_q1, s2_q3 = _summary(s2)

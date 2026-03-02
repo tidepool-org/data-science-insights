@@ -14,7 +14,7 @@ worst_user = worst_tbr["_userId"]
 worst_segment = worst_tbr["segment"]
 
 ab_tbr = (
-    glycemic[glycemic["segment"] == "autobolus"]
+    glycemic[glycemic["segment"] == "tb_to_ab_seg2"]
     .sort_values("tbr", ascending=False)
     .reset_index(drop=True)
 )
@@ -97,12 +97,12 @@ import numpy as np
 
 # Pivot glycemic to wide: one row per user with tir in each segment
 seg1_tir = (
-    glycemic[glycemic["segment"] == "temp_basal"]
+    glycemic[glycemic["segment"] == "tb_to_ab_seg1"]
     .groupby("_userId")["tir"].mean()
     .rename("tir_seg1")
 )
 seg2_tir = (
-    glycemic[glycemic["segment"] == "autobolus"]
+    glycemic[glycemic["segment"] == "tb_to_ab_seg2"]
     .groupby("_userId")["tir"].mean()
     .rename("tir_seg2")
 )
