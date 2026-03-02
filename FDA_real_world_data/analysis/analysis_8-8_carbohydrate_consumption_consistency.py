@@ -68,95 +68,13 @@ GLYCEMIC_OUTCOMES = [
     ("CV (%)",                          "cv",            "%"),
 ]
 
-# =============================================================================
-# Font sizes — centralized so every figure stays consistent
-# =============================================================================
-FONT = {
-    "suptitle":   18,
-    "title":      15,
-    "axis_label": 14,
-    "tick":       12,
-    "legend":     11,
-    "annotation": 13,
-}
-
-# Color scheme
-COLORS_PRIMARY   = "#607cff"
-COLORS_SECONDARY = "#4f59be"
-COLORS_ACCENT    = "#241144"
+from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT
+from utils.statistics import test_normality, compute_paired_statistics, format_p
 COLOR_CONSISTENT   = "#76D3A6"  # green — stable diet
 COLOR_INCONSISTENT = "#FF8B7C"  # orange-red — changed diet
 COLOR_IMPROVED   = "#76D3A6"
 COLOR_WORSENED   = "#FF8B7C"
 
-
-# =============================================================================
-# Statistics helpers
-# =============================================================================
-
-def test_normality(data: pd.Series, alpha: float = 0.05) -> Tuple[bool, float]:
-    if len(data.dropna()) < 3:
-        return False, np.nan
-    _, p = stats.shapiro(data.dropna())
-    return p > alpha, p
-
-
-def compute_paired_statistics(
-    seg1: pd.Series, seg2: pd.Series, use_parametric: Optional[bool] = None
-) -> Dict:
-    valid = seg1.notna() & seg2.notna()
-    s1, s2 = seg1[valid], seg2[valid]
-    diff = s2 - s1
-
-    is_normal, norm_p = test_normality(diff)
-    if use_parametric is None:
-        use_parametric = is_normal
-
-    def _summary(x):
-        return x.mean(), x.std(), x.median(), x.quantile(0.25), x.quantile(0.75)
-
-    s1_mean, s1_sd, s1_med, s1_q1, s1_q3 = _summary(s1)
-    s2_mean, s2_sd, s2_med, s2_q1, s2_q3 = _summary(s2)
-    d_mean,  d_sd,  d_med,  d_q1,  d_q3  = _summary(diff)
-
-    p_ttest = np.nan
-    if len(diff) >= 3:
-        _, p_ttest = stats.ttest_rel(s1, s2)
-
-    p_wsrt = np.nan
-    if len(diff) >= 3:
-        try:
-            _, p_wsrt = stats.wilcoxon(s1, s2)
-        except ValueError:
-            pass
-
-    d_ci_low = d_ci_hi = np.nan
-    if len(diff) >= 2:
-        se = diff.std(ddof=1) / np.sqrt(len(diff))
-        t_crit = stats.t.ppf(0.975, df=len(diff) - 1)
-        d_ci_low = d_mean - t_crit * se
-        d_ci_hi  = d_mean + t_crit * se
-
-    return {
-        "seg1_mean": s1_mean, "seg1_sd": s1_sd,
-        "seg1_median": s1_med, "seg1_q1": s1_q1, "seg1_q3": s1_q3,
-        "seg2_mean": s2_mean, "seg2_sd": s2_sd,
-        "seg2_median": s2_med, "seg2_q1": s2_q1, "seg2_q3": s2_q3,
-        "diff_mean": d_mean, "diff_sd": d_sd,
-        "diff_ci_low": d_ci_low, "diff_ci_hi": d_ci_hi,
-        "diff_median": d_med, "diff_q1": d_q1, "diff_q3": d_q3,
-        "p_ttest": p_ttest, "p_wsrt": p_wsrt,
-        "normality_p": norm_p, "is_normal": is_normal,
-        "n_pairs": len(diff),
-    }
-
-
-def _format_p(p: float) -> str:
-    if np.isnan(p):
-        return "N/A"
-    if p < 0.001:
-        return f"p={p:.2e}"
-    return f"p={p:.3f}"
 
 
 # =============================================================================
@@ -418,7 +336,7 @@ def _create_glycemic_outcome_table(
             "Autobolus (Mean ± SD)": f"{s['seg2_mean']:.2f} ± {s['seg2_sd']:.2f}",
             "Δ (AB − TB)": f"{s['diff_mean']:.2f} ± {s['diff_sd']:.2f}",
             "95% CI": ci_str,
-            "p-value": _format_p(s["p_ttest"]),
+            "p-value": format_p(s["p_ttest"]),
             "n": s["n_pairs"],
         })
 
@@ -433,7 +351,7 @@ def _create_glycemic_outcome_table(
             "Δ (AB − TB) Median [IQR]": (
                 f"{s['diff_median']:.2f} [{s['diff_q1']:.2f}, {s['diff_q3']:.2f}]"
             ),
-            "p-value (Wilcoxon)": _format_p(s["p_wsrt"]),
+            "p-value (Wilcoxon)": format_p(s["p_wsrt"]),
             "n": s["n_pairs"],
         })
 
@@ -547,8 +465,8 @@ def create_table_8_8d(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
             f"Consistent CHO (n={n_con}) Δ (95% CI)": con_str,
             f"Inconsistent CHO (n={n_inc}) Δ (95% CI)": inc_str,
             "Difference in Effect": diff_str,
-            "p (interaction, t-test)": _format_p(p_interaction),
-            "p (interaction, MWU)": _format_p(p_mwu),
+            "p (interaction, t-test)": format_p(p_interaction),
+            "p (interaction, MWU)": format_p(p_mwu),
         })
 
     table = pd.DataFrame(rows)
@@ -738,7 +656,7 @@ def create_figure_8_8b(df: pd.DataFrame, output_path: str):
     ).dropna()
     if len(delta_con) >= 3 and len(delta_inc) >= 3:
         _, p_int = stats.ttest_ind(delta_con, delta_inc, equal_var=False)
-        p_str = _format_p(p_int)
+        p_str = format_p(p_int)
     else:
         p_str = "N/A"
 
@@ -829,8 +747,8 @@ def create_figure_8_8c(df: pd.DataFrame, output_path: str):
             sub.loc[valid, c1], sub.loc[valid, c2]
         )
         p_str = (
-            f"t: {_format_p(s['p_ttest'])}  "
-            f"WSRT: {_format_p(s['p_wsrt'])}"
+            f"t: {format_p(s['p_ttest'])}  "
+            f"WSRT: {format_p(s['p_wsrt'])}"
         )
 
         ax.set_xticks([0, 1])
@@ -945,4 +863,4 @@ def run_in_databricks(spark):
     return run_analysis(spark)
 
 
-run_in_databricks(spark)
+run_in_databricks(spark) # type: ignore

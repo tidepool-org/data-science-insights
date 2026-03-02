@@ -46,22 +46,8 @@ STARTING_GLUCOSE_LOW  = 70    # mg/dL — inclusion criterion
 STARTING_GLUCOSE_HIGH = 180   # mg/dL — inclusion criterion
 CBG_LOOKBACK_MINUTES  = 30    # minutes before override_time to search for CBG
 
-# =============================================================================
-# Font sizes — centralized so every figure stays consistent
-# =============================================================================
-FONT = {
-    "suptitle":   18,
-    "title":      15,
-    "axis_label": 14,
-    "tick":       12,
-    "legend":     11,
-    "annotation": 13,
-}
-
-# Color scheme
-COLORS_PRIMARY   = "#607cff"
-COLORS_SECONDARY = "#4f59be"
-COLORS_ACCENT    = "#241144"
+from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT
+from utils.statistics import test_normality, compute_paired_statistics, format_p
 
 # =============================================================================
 # Parameter definitions: (display_name, seg1_col, seg2_col, unit)
@@ -73,79 +59,6 @@ PARAMETERS = [
     ("Glucose Target Midpoint (mg/dL)", "gtm_seg1",   "gtm_seg2",   "mg/dL"),
 ]
 
-
-# =============================================================================
-# Statistics (identical to analysis_8-1)
-# =============================================================================
-
-def test_normality(data: pd.Series, alpha: float = 0.05) -> Tuple[bool, float]:
-    if len(data.dropna()) < 3:
-        return False, np.nan
-    _, p = stats.shapiro(data.dropna())
-    return p > alpha, p
-
-
-def compute_paired_statistics(
-    seg1: pd.Series, seg2: pd.Series, use_parametric: Optional[bool] = None
-) -> Dict:
-    valid = seg1.notna() & seg2.notna()
-    s1, s2 = seg1[valid], seg2[valid]
-    diff = s2 - s1
-
-    is_normal, norm_p = test_normality(diff)
-    if use_parametric is None:
-        use_parametric = is_normal
-
-    def _summary(x):
-        return x.mean(), x.std(), x.median(), x.quantile(0.25), x.quantile(0.75)
-
-    s1_mean, s1_sd, s1_med, s1_q1, s1_q3 = _summary(s1)
-    s2_mean, s2_sd, s2_med, s2_q1, s2_q3 = _summary(s2)
-    d_mean, d_sd, d_med, d_q1, d_q3 = _summary(diff)
-
-    if len(diff) >= 3:
-        _, p_ttest = stats.ttest_rel(s1, s2)
-    else:
-        p_ttest = np.nan
-
-    if len(diff) >= 3:
-        try:
-            _, p_wsrt = stats.wilcoxon(s1, s2)
-        except ValueError:
-            p_wsrt = np.nan
-    else:
-        p_wsrt = np.nan
-
-    # 95% CI for mean paired difference
-    if len(diff) >= 2:
-        se = diff.std(ddof=1) / np.sqrt(len(diff))
-        t_crit = stats.t.ppf(0.975, df=len(diff) - 1)
-        d_ci_low = d_mean - t_crit * se
-        d_ci_hi  = d_mean + t_crit * se
-    else:
-        d_ci_low = d_ci_hi = np.nan
-
-    return {
-        "seg1_mean": s1_mean, "seg1_sd": s1_sd,
-        "seg1_median": s1_med, "seg1_iqr": f"[{s1_q1:.3f}, {s1_q3:.3f}]",
-        "seg2_mean": s2_mean, "seg2_sd": s2_sd,
-        "seg2_median": s2_med, "seg2_iqr": f"[{s2_q1:.3f}, {s2_q3:.3f}]",
-        "diff_mean": d_mean, "diff_sd": d_sd,
-        "diff_ci_low": d_ci_low, "diff_ci_hi": d_ci_hi,
-        "diff_median": d_med, "diff_iqr": f"[{d_q1:.3f}, {d_q3:.3f}]",
-        "p_ttest": p_ttest, "p_wsrt": p_wsrt,
-        "normality_p": norm_p, "is_normal": is_normal,
-        "n_pairs": len(diff),
-    }
-
-
-def _format_p(p: float) -> str:
-    """Format p-value for display."""
-    if np.isnan(p):
-        return "N/A"
-    if p < 0.001:
-        return f"p={p:.2e}"
-    return f"p={p:.3f}"
 
 
 # =============================================================================
@@ -281,8 +194,8 @@ def create_table_8_3a(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             continue
         s = compute_paired_statistics(df[c1], df[c2])
 
-        p_t = _format_p(s["p_ttest"])
-        p_w = _format_p(s["p_wsrt"])
+        p_t = format_p(s["p_ttest"])
+        p_w = format_p(s["p_wsrt"])
 
         ci_str = (
             f"({s['diff_ci_low']:.3f}, {s['diff_ci_hi']:.3f})"
@@ -300,9 +213,9 @@ def create_table_8_3a(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         nonparametric_rows.append({
             "Parameter": name,
-            "Temp Basal Median [IQR]":  f"{s['seg1_median']:.3f} {s['seg1_iqr']}",
-            "Autobolus Median [IQR]":   f"{s['seg2_median']:.3f} {s['seg2_iqr']}",
-            "Paired Diff Median [IQR]": f"{s['diff_median']:.3f} {s['diff_iqr']}",
+            "Temp Basal Median [IQR]":  f"{s['seg1_median']:.3f} [{s['seg1_q1']:.3f}, {s['seg1_q3']:.3f}]",
+            "Autobolus Median [IQR]":   f"{s['seg2_median']:.3f} [{s['seg2_q1']:.3f}, {s['seg2_q3']:.3f}]",
+            "Paired Diff Median [IQR]": f"{s['diff_median']:.3f} [{s['diff_q1']:.3f}, {s['diff_q3']:.3f}]",
             "p (Wilcoxon signed-rank)": p_w,
             "Normality (Shapiro p)": f"{s['normality_p']:.2e}" if not np.isnan(s["normality_p"]) else "N/A",
             "N": s["n_pairs"],
@@ -331,7 +244,7 @@ def create_figure_8_3a(df: pd.DataFrame, output_path: str):
             continue
 
         s = compute_paired_statistics(df[c1], df[c2])
-        p_str = f"t: {_format_p(s['p_ttest'])}  WSRT: {_format_p(s['p_wsrt'])}"
+        p_str = f"t: {format_p(s['p_ttest'])}  WSRT: {format_p(s['p_wsrt'])}"
 
         for s1_val, s2_val in zip(v1, v2):
             ax.plot([0, 1], [s1_val, s2_val], "o-", color="gray", alpha=0.3, lw=0.5, ms=3)
@@ -388,7 +301,7 @@ def create_figure_8_3b(df: pd.DataFrame, output_path: str):
             continue
 
         s = compute_paired_statistics(df[c1], df[c2])
-        p_str = f"t: {_format_p(s['p_ttest'])}  WSRT: {_format_p(s['p_wsrt'])}"
+        p_str = f"t: {format_p(s['p_ttest'])}  WSRT: {format_p(s['p_wsrt'])}"
 
         ax.hist(diff, bins=20, edgecolor="black", alpha=0.7, color=COLORS_PRIMARY)
         ax.axvline(0, color=COLORS_ACCENT, ls="--", lw=2, label="Zero")
@@ -456,7 +369,7 @@ def create_figure_8_3c(df: pd.DataFrame, output_path: str):
             x_line = np.linspace(x.min(), x.max(), 100)
             ax.plot(x_line, m * x_line + b, color=COLORS_ACCENT, lw=1.5)
             r, p_r = pearsonr(x, y)
-            annot = f"r={r:.2f}, {_format_p(p_r)}\nn={len(x)}"
+            annot = f"r={r:.2f}, {format_p(p_r)}\nn={len(x)}"
         else:
             annot = f"n={len(x)} (insufficient)"
 
@@ -524,4 +437,4 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
 def run_in_databricks(spark):
     return run_analysis(spark)
 
-run_in_databricks(spark)
+run_in_databricks(spark) # type: ignore[name-defined]

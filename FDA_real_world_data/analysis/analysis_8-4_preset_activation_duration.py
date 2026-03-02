@@ -37,90 +37,8 @@ SEG1 = "temp_basal"
 SEG2 = "autobolus"
 S_PER_HOUR = 3_600   # override duration is stored in seconds
 
-# =============================================================================
-# Font sizes — centralized so every figure stays consistent
-# =============================================================================
-FONT = {
-    "suptitle":   18,
-    "title":      15,
-    "axis_label": 14,
-    "tick":       12,
-    "legend":     11,
-    "annotation": 13,
-}
-
-# Color scheme
-COLORS_TB     = "#607cff"   # temp basal
-COLORS_AB     = "#4f59be"   # autobolus
-COLORS_ACCENT = "#241144"
-
-# =============================================================================
-# Statistics (identical to analysis_8-1 / analysis_8-3)
-# =============================================================================
-
-def test_normality(data: pd.Series, alpha: float = 0.05) -> Tuple[bool, float]:
-    if len(data.dropna()) < 3:
-        return False, np.nan
-    _, p = stats.shapiro(data.dropna())
-    return p > alpha, p
-
-
-def compute_paired_statistics(
-    seg1: pd.Series, seg2: pd.Series, use_parametric: Optional[bool] = None
-) -> Dict:
-    valid = seg1.notna() & seg2.notna()
-    s1, s2 = seg1[valid], seg2[valid]
-    diff = s2 - s1
-
-    is_normal, norm_p = test_normality(diff)
-    if use_parametric is None:
-        use_parametric = is_normal
-
-    def _summary(x):
-        return x.mean(), x.std(), x.median(), x.quantile(0.25), x.quantile(0.75)
-
-    s1_mean, s1_sd, s1_med, s1_q1, s1_q3 = _summary(s1)
-    s2_mean, s2_sd, s2_med, s2_q1, s2_q3 = _summary(s2)
-    d_mean,  d_sd,  d_med,  d_q1,  d_q3  = _summary(diff)
-
-    p_ttest = np.nan
-    if len(diff) >= 3:
-        _, p_ttest = stats.ttest_rel(s1, s2)
-
-    p_wsrt = np.nan
-    if len(diff) >= 3:
-        try:
-            _, p_wsrt = stats.wilcoxon(s1, s2)
-        except ValueError:
-            pass
-
-    d_ci_low = d_ci_hi = np.nan
-    if len(diff) >= 2:
-        se = diff.std(ddof=1) / np.sqrt(len(diff))
-        t_crit = stats.t.ppf(0.975, df=len(diff) - 1)
-        d_ci_low = d_mean - t_crit * se
-        d_ci_hi  = d_mean + t_crit * se
-
-    return {
-        "seg1_mean": s1_mean, "seg1_sd": s1_sd,
-        "seg1_median": s1_med, "seg1_q1": s1_q1, "seg1_q3": s1_q3,
-        "seg2_mean": s2_mean, "seg2_sd": s2_sd,
-        "seg2_median": s2_med, "seg2_q1": s2_q1, "seg2_q3": s2_q3,
-        "diff_mean": d_mean, "diff_sd": d_sd,
-        "diff_ci_low": d_ci_low, "diff_ci_hi": d_ci_hi,
-        "diff_median": d_med, "diff_q1": d_q1, "diff_q3": d_q3,
-        "p_ttest": p_ttest, "p_wsrt": p_wsrt,
-        "normality_p": norm_p, "is_normal": is_normal,
-        "n_pairs": len(diff),
-    }
-
-
-def _format_p(p: float) -> str:
-    if np.isnan(p):
-        return "N/A"
-    if p < 0.001:
-        return f"p={p:.2e}"
-    return f"p={p:.3f}"
+from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT
+from utils.statistics import test_normality, compute_paired_statistics, format_p
 
 
 # =============================================================================
@@ -217,8 +135,8 @@ def create_table_8_4a(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             continue
         s = compute_paired_statistics(df[c1], df[c2])
 
-        p_t = _format_p(s["p_ttest"])
-        p_w = _format_p(s["p_wsrt"])
+        p_t = format_p(s["p_ttest"])
+        p_w = format_p(s["p_wsrt"])
         ci_str = (
             f"({s['diff_ci_low']:.{dp}f}, {s['diff_ci_hi']:.{dp}f})"
             if not np.isnan(s["diff_ci_low"]) else "N/A"
@@ -279,21 +197,21 @@ def create_figure_8_4a(df: pd.DataFrame, output_path: str):
             continue
 
         s     = compute_paired_statistics(df[c1], df[c2])
-        p_str = f"t: {_format_p(s['p_ttest'])}  WSRT: {_format_p(s['p_wsrt'])}"
+        p_str = f"t: {format_p(s['p_ttest'])}  WSRT: {format_p(s['p_wsrt'])}"
 
         for s1_val, s2_val in zip(v1, v2):
             ax.plot([0, 1], [s1_val, s2_val], "o-", color="gray", alpha=0.3, lw=0.5, ms=3)
 
         bp = ax.boxplot([v1, v2], positions=[0, 1], widths=0.3,
                         patch_artist=True, showfliers=False)
-        bp["boxes"][0].set(facecolor=COLORS_TB, alpha=0.7)
-        bp["boxes"][1].set(facecolor=COLORS_AB, alpha=0.7)
+        bp["boxes"][0].set(facecolor=COLORS_PRIMARY, alpha=0.7)
+        bp["boxes"][1].set(facecolor=COLORS_SECONDARY, alpha=0.7)
 
         if len(v1) > 1 and len(v2) > 1:
             parts = ax.violinplot([v1, v2], positions=[0, 1],
                                   showmeans=False, showmedians=False, widths=0.5)
             for i, pc in enumerate(parts["bodies"]):
-                pc.set_facecolor(COLORS_TB if i == 0 else COLORS_AB)
+                pc.set_facecolor(COLORS_PRIMARY if i == 0 else COLORS_SECONDARY)
                 pc.set_alpha(0.3)
 
         ax.set_xticks([0, 1])
@@ -336,9 +254,9 @@ def create_figure_8_4b(df: pd.DataFrame, output_path: str):
             continue
 
         s     = compute_paired_statistics(df[c1], df[c2])
-        p_str = f"t: {_format_p(s['p_ttest'])}  WSRT: {_format_p(s['p_wsrt'])}"
+        p_str = f"t: {format_p(s['p_ttest'])}  WSRT: {format_p(s['p_wsrt'])}"
 
-        ax.hist(diff, bins=20, edgecolor="black", alpha=0.7, color=COLORS_TB)
+        ax.hist(diff, bins=20, edgecolor="black", alpha=0.7, color=COLORS_PRIMARY)
         ax.axvline(0, color=COLORS_ACCENT, ls="--", lw=2, label="Zero")
         ax.axvline(diff.mean(), color="#8B0000", ls="-", lw=2,
                    label=f"Mean: {diff.mean():.1f}")
@@ -400,4 +318,4 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
 def run_in_databricks(spark):
     return run_analysis(spark)
 
-run_in_databricks(spark)
+run_in_databricks(spark) # type: ignore[name-defined]

@@ -33,29 +33,8 @@ OUTPUT_DIR = "outputs/analysis_8_1"
 SEG1 = "tb_to_ab_seg1"  # temp basal period
 SEG2 = "tb_to_ab_seg2"  # autobolus period
 
-# =============================================================================
-# Font sizes — centralized so every figure stays consistent
-# =============================================================================
-FONT = {
-    "suptitle":   18,   # figure-level title
-    "title":      15,   # subplot / axis title
-    "axis_label": 14,   # xlabel / ylabel
-    "tick":       12,   # tick labels
-    "legend":     11,   # legend entries
-    "annotation": 13,   # in-bar percentages, mean labels, etc.
-}
-
-# Color scheme
-COLORS_STACKED_BAR = {
-    "<54":     ["#8C65D6", "#8C65D6"],
-    "54-70":   ["#BB9AE7", "#BB9AE7"],
-    "70-180":  ["#76D3A6", "#76D3A6"],
-    "180-250": ["#FF8B7C", "#FF8B7C"],
-    ">250":    ["#FB5951", "#FB5951"],
-}
-COLORS_PRIMARY = "#607cff"
-COLORS_SECONDARY = "#4f59be"
-COLORS_ACCENT = "#241144"
+from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT, COLORS_STACKED_BAR
+from utils.statistics import test_normality, compute_paired_statistics, format_p
 
 
 # =============================================================================
@@ -115,68 +94,6 @@ def load_data(spark) -> pd.DataFrame:
     return wide.reset_index()
 
 
-# =============================================================================
-# Statistics
-# =============================================================================
-
-def test_normality(data: pd.Series, alpha: float = NORMALITY_ALPHA) -> Tuple[bool, float]:
-    if len(data.dropna()) < 3:
-        return False, np.nan
-    _, p = stats.shapiro(data.dropna())
-    return p > alpha, p
-
-
-def compute_paired_statistics(
-    seg1: pd.Series, seg2: pd.Series, use_parametric: Optional[bool] = None
-) -> Dict:
-    valid = seg1.notna() & seg2.notna()
-    s1, s2 = seg1[valid], seg2[valid]
-    diff = s2 - s1
-
-    is_normal, norm_p = test_normality(diff)
-    if use_parametric is None:
-        use_parametric = is_normal
-
-    def _summary(x):
-        return x.mean(), x.std(), x.median(), x.quantile(0.25), x.quantile(0.75)
-
-    s1_mean, s1_sd, s1_med, s1_q1, s1_q3 = _summary(s1)
-    s2_mean, s2_sd, s2_med, s2_q1, s2_q3 = _summary(s2)
-    d_mean, d_sd, d_med, d_q1, d_q3 = _summary(diff)
-
-    # Paired t-test
-    if len(diff) >= 3:
-        _, p_ttest = stats.ttest_rel(s1, s2)
-    else:
-        p_ttest = np.nan
-
-    # Wilcoxon signed-rank (paired, non-parametric)
-    if len(diff) >= 3:
-        _, p_wsrt = stats.wilcoxon(s1, s2)
-    else:
-        p_wsrt = np.nan
-
-    return {
-        "seg1_mean": s1_mean, "seg1_sd": s1_sd,
-        "seg1_median": s1_med, "seg1_iqr": f"[{s1_q1:.1f}, {s1_q3:.1f}]",
-        "seg2_mean": s2_mean, "seg2_sd": s2_sd,
-        "seg2_median": s2_med, "seg2_iqr": f"[{s2_q1:.1f}, {s2_q3:.1f}]",
-        "diff_mean": d_mean, "diff_sd": d_sd,
-        "diff_median": d_med, "diff_iqr": f"[{d_q1:.1f}, {d_q3:.1f}]",
-        "p_ttest": p_ttest, "p_wsrt": p_wsrt,
-        "normality_p": norm_p, "is_normal": is_normal,
-        "n_pairs": len(diff),
-    }
-
-
-def _format_p(p: float) -> str:
-    """Format p-value for display."""
-    if np.isnan(p):
-        return "N/A"
-    if p < 0.001:
-        return f"p={p:.2e}"
-    return f"p={p:.3f}"
-
 
 # =============================================================================
 # Table 8.1a
@@ -192,8 +109,8 @@ def create_table_8_1a(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             continue
         s = compute_paired_statistics(df[c1], df[c2])
         
-        p_t = _format_p(s['p_ttest'])
-        p_w = _format_p(s['p_wsrt'])
+        p_t = format_p(s['p_ttest'])
+        p_w = format_p(s['p_wsrt'])
         
         parametric_rows.append({
             "Endpoint": name,
@@ -206,9 +123,9 @@ def create_table_8_1a(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         nonparametric_rows.append({
             "Endpoint": name,
-            "Temp Basal Median [IQR]":  f"{s['seg1_median']:.2f} {s['seg1_iqr']}",
-            "Autobolus Median [IQR]":   f"{s['seg2_median']:.2f} {s['seg2_iqr']}",
-            "Paired Diff Median [IQR]": f"{s['diff_median']:.2f} {s['diff_iqr']}",
+            "Temp Basal Median [IQR]":  f"{s['seg1_median']:.2f} [{s['seg1_q1']:.1f}, {s['seg1_q3']:.1f}]",
+            "Autobolus Median [IQR]":   f"{s['seg2_median']:.2f} [{s['seg2_q1']:.1f}, {s['seg2_q3']:.1f}]",
+            "Paired Diff Median [IQR]": f"{s['diff_median']:.2f} [{s['diff_q1']:.1f}, {s['diff_q3']:.1f}]",
             "p (Wilcoxon signed-rank)": p_w,
             "Normality (Shapiro p)": f"{s['normality_p']:.2e}" if not np.isnan(s['normality_p']) else "N/A",
             "N": s["n_pairs"],
@@ -241,7 +158,7 @@ def create_figure_8_1a(df: pd.DataFrame, output_path: str):
                 continue
 
             s = compute_paired_statistics(df[c1], df[c2])
-            p_str = f"t: {_format_p(s['p_ttest'])}  WSRT: {_format_p(s['p_wsrt'])}"
+            p_str = f"t: {format_p(s['p_ttest'])}  WSRT: {format_p(s['p_wsrt'])}"
 
             for s1, s2 in zip(v1, v2):
                 ax.plot([0, 1], [s1, s2], "o-", color="gray", alpha=0.3, lw=0.5, ms=3)
@@ -301,7 +218,7 @@ def create_figure_8_1b(df: pd.DataFrame, output_path: str):
                 continue
 
             s = compute_paired_statistics(df[c1], df[c2])
-            p_str = f"t: {_format_p(s['p_ttest'])}  WSRT: {_format_p(s['p_wsrt'])}"
+            p_str = f"t: {format_p(s['p_ttest'])}  WSRT: {format_p(s['p_wsrt'])}"
 
             ax.hist(diff, bins=20, edgecolor="black", alpha=0.7, color=COLORS_PRIMARY)
             ax.axvline(0, color=COLORS_ACCENT, ls="--", lw=2, label="Zero")
@@ -547,4 +464,4 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
 def run_in_databricks(spark):
     return run_analysis(spark)
 
-run_in_databricks(spark)
+run_in_databricks(spark) # type: ignore[name-defined]

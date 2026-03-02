@@ -41,19 +41,6 @@ from scipy import stats
 from typing import Dict, List, Optional, Tuple
 import os
 
-# Optional imports — graceful fallback if not installed
-try:
-    from statsmodels.stats.multicomp import pairwise_tukeyhsd
-    _HAS_STATSMODELS = True
-except ImportError:
-    _HAS_STATSMODELS = False
-
-try:
-    import scikit_posthocs as sp
-    _HAS_SCIKIT_POSTHOCS = True
-except ImportError:
-    _HAS_SCIKIT_POSTHOCS = False
-
 # Configuration
 OUTPUT_DIR = "outputs/analysis_8_5"
 SEG1 = "tb_to_ab_seg1"  # temp basal period
@@ -83,185 +70,17 @@ SAFETY_OUTCOMES = [
     ("Hypoglycemic events (n/14 d)", "hypo_events",   "n"),
 ]
 
-# =============================================================================
-# Font sizes — centralized so every figure stays consistent
-# =============================================================================
-FONT = {
-    "suptitle":   18,
-    "title":      15,
-    "axis_label": 14,
-    "tick":       12,
-    "legend":     11,
-    "annotation": 13,
-}
-
-# Color scheme
-COLORS_PRIMARY  = "#607cff"
-COLORS_SECONDARY = "#4f59be"
-COLORS_ACCENT   = "#241144"
+from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT
+from utils.statistics import (
+    test_normality, compute_paired_statistics, format_p,
+    compute_within_subgroup_stats, compute_between_subgroup_stats, compute_posthoc,
+)
 
 # Per-subgroup category palettes (used in grouped plots)
 PALETTE_GENDER = ["#607cff", "#ff7c60", "#aaaaaa"]
 PALETTE_AGE    = ["#607cff", "#4f59be", "#3a3f8a", "#241144"]
 PALETTE_YLD    = ["#76D3A6", "#FF8B7C", "#FB5951"]
 
-
-# =============================================================================
-# Statistics helpers (identical to analysis_8-4)
-# =============================================================================
-
-def test_normality(data: pd.Series, alpha: float = 0.05) -> Tuple[bool, float]:
-    if len(data.dropna()) < 3:
-        return False, np.nan
-    _, p = stats.shapiro(data.dropna())
-    return p > alpha, p
-
-
-def compute_paired_statistics(
-    seg1: pd.Series, seg2: pd.Series, use_parametric: Optional[bool] = None
-) -> Dict:
-    valid = seg1.notna() & seg2.notna()
-    s1, s2 = seg1[valid], seg2[valid]
-    diff = s2 - s1
-
-    is_normal, norm_p = test_normality(diff)
-    if use_parametric is None:
-        use_parametric = is_normal
-
-    def _summary(x):
-        return x.mean(), x.std(), x.median(), x.quantile(0.25), x.quantile(0.75)
-
-    s1_mean, s1_sd, s1_med, s1_q1, s1_q3 = _summary(s1)
-    s2_mean, s2_sd, s2_med, s2_q1, s2_q3 = _summary(s2)
-    d_mean,  d_sd,  d_med,  d_q1,  d_q3  = _summary(diff)
-
-    p_ttest = np.nan
-    if len(diff) >= 3:
-        _, p_ttest = stats.ttest_rel(s1, s2)
-
-    p_wsrt = np.nan
-    if len(diff) >= 3:
-        try:
-            _, p_wsrt = stats.wilcoxon(s1, s2)
-        except ValueError:
-            pass
-
-    d_ci_low = d_ci_hi = np.nan
-    if len(diff) >= 2:
-        se = diff.std(ddof=1) / np.sqrt(len(diff))
-        t_crit = stats.t.ppf(0.975, df=len(diff) - 1)
-        d_ci_low = d_mean - t_crit * se
-        d_ci_hi  = d_mean + t_crit * se
-
-    return {
-        "seg1_mean": s1_mean, "seg1_sd": s1_sd,
-        "seg1_median": s1_med, "seg1_q1": s1_q1, "seg1_q3": s1_q3,
-        "seg2_mean": s2_mean, "seg2_sd": s2_sd,
-        "seg2_median": s2_med, "seg2_q1": s2_q1, "seg2_q3": s2_q3,
-        "diff_mean": d_mean, "diff_sd": d_sd,
-        "diff_ci_low": d_ci_low, "diff_ci_hi": d_ci_hi,
-        "diff_median": d_med, "diff_q1": d_q1, "diff_q3": d_q3,
-        "p_ttest": p_ttest, "p_wsrt": p_wsrt,
-        "normality_p": norm_p, "is_normal": is_normal,
-        "n_pairs": len(diff),
-    }
-
-
-def _format_p(p: float) -> str:
-    if np.isnan(p):
-        return "N/A"
-    if p < 0.001:
-        return f"p={p:.2e}"
-    return f"p={p:.3f}"
-
-
-# =============================================================================
-# New statistics helpers for subgroup analyses
-# =============================================================================
-
-def compute_within_subgroup_stats(delta: pd.Series) -> Dict:
-    """One-sample tests of ΔTIR vs 0 for a subgroup."""
-    d = delta.dropna()
-    n = len(d)
-    if n < 3:
-        return {
-            "n": n, "mean": np.nan, "sd": np.nan,
-            "median": np.nan, "q1": np.nan, "q3": np.nan,
-            "ci_low": np.nan, "ci_hi": np.nan,
-            "p_ttest": np.nan, "p_wsrt": np.nan,
-        }
-
-    mean   = d.mean()
-    sd     = d.std(ddof=1)
-    median = d.median()
-    q1     = d.quantile(0.25)
-    q3     = d.quantile(0.75)
-
-    se = sd / np.sqrt(n)
-    t_crit = stats.t.ppf(0.975, df=n - 1)
-    ci_low = mean - t_crit * se
-    ci_hi  = mean + t_crit * se
-
-    _, p_ttest = stats.ttest_1samp(d, 0)
-    p_wsrt = np.nan
-    try:
-        _, p_wsrt = stats.wilcoxon(d)
-    except ValueError:
-        pass
-
-    return {
-        "n": n, "mean": mean, "sd": sd,
-        "median": median, "q1": q1, "q3": q3,
-        "ci_low": ci_low, "ci_hi": ci_hi,
-        "p_ttest": p_ttest, "p_wsrt": p_wsrt,
-    }
-
-
-def compute_between_subgroup_stats(groups: List[pd.Series]) -> Dict:
-    """One-way ANOVA + Kruskal-Wallis across subgroup categories."""
-    clean = [g.dropna() for g in groups if len(g.dropna()) >= 2]
-    if len(clean) < 2:
-        return {"p_anova": np.nan, "f_stat": np.nan, "p_kruskal": np.nan, "h_stat": np.nan}
-
-    f_stat, p_anova = stats.f_oneway(*clean)
-    h_stat, p_kruskal = stats.kruskal(*clean)
-    return {"p_anova": p_anova, "f_stat": f_stat, "p_kruskal": p_kruskal, "h_stat": h_stat}
-
-
-def compute_posthoc(
-    groups_dict: Dict[str, pd.Series]
-) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
-    """Tukey's HSD + Dunn's test. Returns (tukey_df, dunn_df) or (None, None)."""
-    labels = []
-    values = []
-    for grp_label, series in groups_dict.items():
-        clean = series.dropna()
-        labels.extend([grp_label] * len(clean))
-        values.extend(clean.tolist())
-
-    values_arr = np.array(values)
-    labels_arr = np.array(labels)
-
-    tukey_df = None
-    if _HAS_STATSMODELS and len(values_arr) >= 4:
-        try:
-            result = pairwise_tukeyhsd(values_arr, labels_arr, alpha=ALPHA_BONFERRONI)
-            tukey_df = pd.DataFrame(
-                data=result.summary().data[1:],
-                columns=result.summary().data[0],
-            )
-        except Exception as e:
-            print(f"  Tukey's HSD failed: {e}")
-
-    dunn_df = None
-    if _HAS_SCIKIT_POSTHOCS and len(values_arr) >= 4:
-        try:
-            long_df = pd.DataFrame({"value": values, "group": labels})
-            dunn_df = sp.posthoc_dunn(long_df, val_col="value", group_col="group", p_adjust="bonferroni")
-        except Exception as e:
-            print(f"  Dunn's test failed: {e}")
-
-    return tukey_df, dunn_df
 
 
 # =============================================================================
@@ -452,7 +271,7 @@ def create_table_8_5b(
                     f"{s['mean']:.2f} ± {s['sd']:.2f}" if not np.isnan(s["mean"]) else "N/A"
                 ),
                 "95% CI": ci_str,
-                "p (one-sample t vs 0)": _format_p(s["p_ttest"]),
+                "p (one-sample t vs 0)": format_p(s["p_ttest"]),
             })
             nonparametric_rows.append({
                 "Demographic Factor": info["label"],
@@ -462,7 +281,7 @@ def create_table_8_5b(
                     f"{s['median']:.2f} [{s['q1']:.2f}, {s['q3']:.2f}]"
                     if not np.isnan(s["median"]) else "N/A"
                 ),
-                "p (Wilcoxon vs 0)": _format_p(s["p_wsrt"]),
+                "p (Wilcoxon vs 0)": format_p(s["p_wsrt"]),
             })
 
     tbl_p  = pd.DataFrame(parametric_rows)
@@ -497,9 +316,9 @@ def create_table_8_5c(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
         rows.append({
             "Demographic Factor": info["label"],
             "ANOVA F": f"{s['f_stat']:.3f}" if not np.isnan(s["f_stat"]) else "N/A",
-            "p (ANOVA)": _format_p(s["p_anova"]),
+            "p (ANOVA)": format_p(s["p_anova"]),
             "KW H": f"{s['h_stat']:.3f}" if not np.isnan(s["h_stat"]) else "N/A",
-            "p (Kruskal-Wallis)": _format_p(s["p_kruskal"]),
+            "p (Kruskal-Wallis)": format_p(s["p_kruskal"]),
             f"Significant (α={ALPHA_BONFERRONI:.3f})": "Yes" if sig else "No",
         })
 
@@ -571,8 +390,8 @@ def create_figure_8_5a(df: pd.DataFrame, output_path: str):
             [df.loc[df[sg_col] == cat, "delta_tir"] for cat in cats]
         )
         p_str = (
-            f"ANOVA {_format_p(between_res['p_anova'])}  "
-            f"KW {_format_p(between_res['p_kruskal'])}"
+            f"ANOVA {format_p(between_res['p_anova'])}  "
+            f"KW {format_p(between_res['p_kruskal'])}"
         )
 
         # Boxplots
@@ -652,8 +471,8 @@ def create_figure_8_5b(df: pd.DataFrame, output_path: str):
                 [df.loc[df[sg_col] == cat, delta_col] for cat in cats]
             )
             p_str = (
-                f"ANOVA {_format_p(between_res['p_anova'])}  "
-                f"KW {_format_p(between_res['p_kruskal'])}"
+                f"ANOVA {format_p(between_res['p_anova'])}  "
+                f"KW {format_p(between_res['p_kruskal'])}"
             )
 
             bp = ax.boxplot(
@@ -793,7 +612,7 @@ def run_sensitivity_gender_missing(df: pd.DataFrame):
         p_str = "N/A"
         if len(g1) >= 3 and len(g2) >= 3:
             _, p = stats.ttest_ind(g1, g2, equal_var=False)
-            p_str = _format_p(p)
+            p_str = format_p(p)
 
         row["p (independent t-test)"] = p_str
         rows.append(row)
@@ -868,4 +687,4 @@ def run_in_databricks(spark):
     return run_analysis(spark)
 
 
-run_in_databricks(spark)
+run_in_databricks(spark) # type: ignore[name-defined]
