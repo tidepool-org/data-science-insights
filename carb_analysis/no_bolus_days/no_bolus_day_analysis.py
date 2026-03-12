@@ -271,7 +271,8 @@ for pair_start in [0, 2]:
 
 ax.set_xticks(bar_positions)
 ax.set_xticklabels(
-    [f"{label}\n(n={len(groups[g]):,})" for g, label in zip(GROUPS, GROUP_LABELS)],
+    [f"{label}\n{len(groups[g]):,} days\n{groups[g]['_userId'].nunique():,} users"
+     for g, label in zip(GROUPS, GROUP_LABELS)],
     fontsize=10,
 )
 ax.set_ylabel("Percent Time (%)", fontsize=12)

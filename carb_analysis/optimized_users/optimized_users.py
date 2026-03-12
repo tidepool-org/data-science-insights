@@ -304,7 +304,8 @@ for cat in categories:
 
 ax.set_xticks([0, 1])
 ax.set_xticklabels(
-    [f"{label}\n(n={len(groups[g]):,})" for g, label in zip(GROUPS, GROUP_LABELS)],
+    [f"{label}\n{len(groups[g]):,} days\n{groups[g]['_userId'].nunique():,} users"
+     for g, label in zip(GROUPS, GROUP_LABELS)],
     fontsize=12,
 )
 ax.set_ylabel("Percent Time (%)", fontsize=12)

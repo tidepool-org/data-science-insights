@@ -45,22 +45,22 @@ BUCKET_VALUES = {
 # Per-group CBG bucket counts (must sum to N_CBG=200)
 GROUP_CONFIGS = {
     "temp_basal_no_bolus": {
-        "counts": {"below_54": 2, "54_70": 4, "70_180": 150, "180_250": 36, "above_250": 8},
+        "counts": {"below_54": 160, "54_70": 10, "70_180": 10, "180_250": 10, "above_250": 10},
         "is_autobolus": False,
         "is_bolus_day": False,
     },
     "autobolus_no_bolus": {
-        "counts": {"below_54": 1, "54_70": 4, "70_180": 130, "180_250": 51, "above_250": 14},
+        "counts": {"below_54": 10, "54_70": 160, "70_180": 10, "180_250": 10, "above_250": 10},
         "is_autobolus": True,
         "is_bolus_day": False,
     },
     "temp_basal_bolus": {
-        "counts": {"below_54": 3, "54_70": 4, "70_180": 120, "180_250": 54, "above_250": 19},
+        "counts": {"below_54": 10, "54_70": 10, "70_180": 160, "180_250": 10, "above_250": 10},
         "is_autobolus": False,
         "is_bolus_day": True,
     },
     "autobolus_bolus": {
-        "counts": {"below_54": 1, "54_70": 3, "70_180": 110, "180_250": 62, "above_250": 24},
+        "counts": {"below_54": 10, "54_70": 10, "70_180": 10, "180_250": 160, "above_250": 10},
         "is_autobolus": True,
         "is_bolus_day": True,
     },

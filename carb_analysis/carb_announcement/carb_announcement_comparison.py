@@ -208,8 +208,10 @@ for cat in categories:
                 ls="--", color="black", lw=1, alpha=0.8)
 
 ax.set_xticks([0, 1])
-ax.set_xticklabels([f"Carbs Logged\n(n={len(carbs):,})", f"No Carbs\n(n={len(no_carbs):,})"],
-                    fontsize=12)
+ax.set_xticklabels([
+    f"Carbs Logged\n{len(carbs):,} days\n{carbs['_userId'].nunique():,} users",
+    f"No Carbs\n{len(no_carbs):,} days\n{no_carbs['_userId'].nunique():,} users",
+], fontsize=12)
 ax.set_ylabel("Percent Time (%)", fontsize=12)
 ax.set_ylim(0, 100)
 
