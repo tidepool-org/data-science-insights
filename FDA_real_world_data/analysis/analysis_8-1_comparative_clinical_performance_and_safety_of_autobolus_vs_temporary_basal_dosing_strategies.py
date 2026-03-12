@@ -387,6 +387,50 @@ def create_figure_8_1c_horizontal(df: pd.DataFrame, output_path: str):
     print(f"Saved: {output_path}")
 
 # =============================================================================
+# Non-inferiority test on TIR
+# =============================================================================
+
+def compute_non_inferiority(df: pd.DataFrame, margin: float = 5.0) -> Dict:
+    """
+    One-sided paired t-test for non-inferiority of autobolus TIR vs temp basal TIR.
+
+    H₀: mean(TIR_autobolus - TIR_temp_basal) ≤ -margin  (autobolus is inferior)
+    H₁: mean(TIR_autobolus - TIR_temp_basal) > -margin   (autobolus is non-inferior)
+
+    Returns dict with test statistics and conclusion at α = 0.05.
+    """
+    valid = df["tir_seg1"].notna() & df["tir_seg2"].notna()
+    diff = df.loc[valid, "tir_seg2"] - df.loc[valid, "tir_seg1"]
+    n = len(diff)
+    mean_diff = diff.mean()
+    sd_diff = diff.std(ddof=1)
+
+    t_stat = (mean_diff - (-margin)) / (sd_diff / np.sqrt(n))
+    p_value = 1 - stats.t.cdf(t_stat, df=n - 1)
+
+    result = {
+        "n": n,
+        "mean_diff": mean_diff,
+        "sd_diff": sd_diff,
+        "margin": margin,
+        "t_stat": t_stat,
+        "p_value": p_value,
+        "non_inferior": p_value < 0.05,
+    }
+
+    print(f"\n  Non-Inferiority Test: TIR (Autobolus − Temp Basal)")
+    print(f"  Margin:     {margin:.1f}%")
+    print(f"  N:          {n}")
+    print(f"  Mean Δ:     {mean_diff:+.2f}%")
+    print(f"  SD Δ:       {sd_diff:.2f}%")
+    print(f"  t-stat:     {t_stat:.3f}")
+    print(f"  p-value:    {p_value:.4f}")
+    print(f"  Conclusion: {'Non-inferior' if result['non_inferior'] else 'Cannot conclude non-inferiority'} (α=0.05)")
+
+    return result
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -419,11 +463,14 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     print("\n6. Creating Figure 8.1c (horizontal)...")
     create_figure_8_1c_horizontal(df, f"{output_dir}/figure_8_1c_stacked_bars_horizontal.png")
 
+    print("\n7. Non-inferiority test on TIR (margin = 5%)...")
+    ni_result = compute_non_inferiority(df, margin=5.0)
+
     print("\n" + "=" * 60)
     print("Analysis 8.1 Complete!")
     print("=" * 60)
 
-    return {"table_parametric": table_parametric, "table_nonparametric": table_nonparametric, "df": df}
+    return {"table_parametric": table_parametric, "table_nonparametric": table_nonparametric, "non_inferiority": ni_result, "df": df}
 
 
 def run_in_databricks(spark):

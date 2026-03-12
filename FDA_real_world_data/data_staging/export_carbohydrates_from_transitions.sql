@@ -19,7 +19,7 @@ Nutrition column format: {"carbohydrate":{"net":34.0,"units":"grams"}}
 =============================================================================
 */
 
-CREATE OR REPLACE TABLE dev.fda_510k_rwd.valid_transition_carbs AS
+-- CREATE OR REPLACE TABLE dev.fda_510k_rwd.valid_transition_carbs AS
 
 WITH carb_entries AS (
   SELECT

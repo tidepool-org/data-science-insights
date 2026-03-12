@@ -6,8 +6,8 @@ SHOW_IDENTIFIABLE = False  # True: real user IDs + dates; False: "User 1" + days
 
 # --- Identify the two users of interest ---
 
-glycemic = spark.table("dev.fda_510k_rwd.glycemic_endpoints_transition").toPandas()
-segments = spark.table("dev.fda_510k_rwd.valid_transition_segments").toPandas()
+glycemic = spark.table("dev.fda_510k_rwd.glycemic_endpoints_transition").toPandas() # type: ignore
+segments = spark.table("dev.fda_510k_rwd.valid_transition_segments").toPandas() # type: ignore
 
 worst_tbr = glycemic.loc[glycemic["tbr"].idxmax()]
 worst_user = worst_tbr["_userId"]
@@ -22,7 +22,7 @@ second_worst_ab_user = ab_tbr.loc[1, "_userId"]
 
 # --- Load CBG data ---
 
-cbg = spark.table("dev.fda_510k_rwd.valid_transition_cbg").toPandas()
+cbg = spark.table("dev.fda_510k_rwd.valid_transition_cbg").toPandas() # type: ignore
 cbg["cbg_timestamp"] = pd.to_datetime(cbg["cbg_timestamp"])
 
 

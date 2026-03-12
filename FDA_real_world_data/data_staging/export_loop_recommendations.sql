@@ -29,6 +29,7 @@ legacy dosing strategy classification relevant to this analysis.
 =============================================================================
 */
 
+
 CREATE OR REPLACE TABLE dev.fda_510k_rwd.loop_recommendations AS
 
 WITH merged AS (
@@ -39,7 +40,7 @@ WITH merged AS (
     origin,
     recommendedBasal,
     recommendedBolus
-  FROM dev.default.bddp_sample_all
+  FROM IDENTIFIER(:input_table)
   WHERE reason = 'loop'
     AND TRY_CAST(time:`$date` AS TIMESTAMP) IS NOT NULL
 
@@ -72,3 +73,4 @@ FROM merged
 WHERE CAST(SUBSTRING_INDEX(get_json_object(origin, '$.version'), '.', 1) AS INT) * 10
     + CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(get_json_object(origin, '$.version'), '.', 2), '.', -1) AS INT)
     < 34;
+  
