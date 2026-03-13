@@ -1,19 +1,19 @@
 """
-Create test device data for optimized_users.py end-to-end SQL testing.
+Create test device data for fcl_day_analysis.py end-to-end SQL testing.
 
-Writes to dev.fda_510k_rwd.test_optimized_users_data with the same column
-format as bddp_sample_all. One user, 30 days:
+Writes to dev.fda_510k_rwd.test_fcl_device_data with the same column
+format as bddp_sample_all. One user, 20 days:
 
-  - Days  0–9:   No Bolus  (no dosingDecision, no food)          10 days
-  - Days 10–19:  FCL       (1 correction bolus, no food)         10 days
-  - Days 20–29:  HCL       (meal bolus + food announcement)      10 days
+  - Days  0–4:   TB + FCL  (temp_basal recs, 1 correction bolus)  5 days
+  - Days  5–9:   AB + FCL  (autobolus recs, 1 correction bolus)   5 days
+  - Days 10–14:  TB + HCL  (temp_basal, meal bolus + food)        5 days
+  - Days 15–19:  AB + HCL  (autobolus, meal bolus + food)         5 days
 
-All days use autobolus recommendations. The user has 10 no-bolus days,
-so qualifies (>=10 no-bolus days).
+The user has 10 FCL days, so qualifies (>=10 no-bolus/FCL days).
 
 Each day has 200 CBG readings at 5-min intervals with fixed mg/dL values
-per glycemic bucket, 10 Loop recommendation rows, and optionally dosing
-decision and/or food announcement rows.
+per glycemic bucket, 10 Loop recommendation rows, and dosing decision
+and/or food announcement rows as appropriate.
 """
 
 import json
@@ -28,15 +28,14 @@ spark = spark  # type: ignore[name-defined]  # noqa: F841
 # Config
 # =============================================================================
 
-USER_ID = "test_user_optimized"
+USER_ID = "test_user_fcl"
 START = datetime(2024, 1, 1)
 ORIGIN = json.dumps({"version": "3.2.0"})
 MMOL_PER_MGDL = 1 / 18.018
 INTERVAL_MIN = 5
-N_CBG = 200  # readings per day (must be >= 200 for HAVING filter)
-N_RECS = 10  # loop recommendation rows per day
+N_CBG = 200
+N_RECS = 10
 
-# Fixed CBG values per glycemic bucket (mg/dL), placed far from boundaries
 BUCKET_VALUES = {
     "below_54": 50.0,
     "54_70": 60.0,
@@ -45,33 +44,42 @@ BUCKET_VALUES = {
     "above_250": 280.0,
 }
 
-# Per-group CBG bucket counts (must sum to N_CBG=200)
 GROUP_CONFIGS = {
-    "no_bolus": {
+    "tb_fcl": {
         "counts": {"below_54": 160, "54_70": 10, "70_180": 10, "180_250": 10, "above_250": 10},
-        "has_correction_bolus": False,
-        "has_meal_bolus": False,
-        "has_food": False,
-    },
-    "fcl": {
-        "counts": {"below_54": 10, "54_70": 160, "70_180": 10, "180_250": 10, "above_250": 10},
+        "is_autobolus": False,
         "has_correction_bolus": True,
         "has_meal_bolus": False,
         "has_food": False,
     },
-    "hcl": {
+    "ab_fcl": {
+        "counts": {"below_54": 10, "54_70": 160, "70_180": 10, "180_250": 10, "above_250": 10},
+        "is_autobolus": True,
+        "has_correction_bolus": True,
+        "has_meal_bolus": False,
+        "has_food": False,
+    },
+    "tb_hcl": {
         "counts": {"below_54": 10, "54_70": 10, "70_180": 160, "180_250": 10, "above_250": 10},
+        "is_autobolus": False,
+        "has_correction_bolus": False,
+        "has_meal_bolus": True,
+        "has_food": True,
+    },
+    "ab_hcl": {
+        "counts": {"below_54": 10, "54_70": 10, "70_180": 10, "180_250": 160, "above_250": 10},
+        "is_autobolus": True,
         "has_correction_bolus": False,
         "has_meal_bolus": True,
         "has_food": True,
     },
 }
 
-# How many days per group
 DAYS_PER_GROUP = {
-    "no_bolus": 10,
-    "fcl": 10,
-    "hcl": 10,
+    "tb_fcl": 5,
+    "ab_fcl": 5,
+    "tb_hcl": 5,
+    "ab_hcl": 5,
 }
 
 NUTRITION_JSON = json.dumps({"carbohydrate": {"net": 34.0, "units": "grams"}})
@@ -82,12 +90,10 @@ REQUESTED_BOLUS_JSON = json.dumps({"amount": 5.0})
 # =============================================================================
 
 def _time_json(ts):
-    """Format a timestamp as the JSON column bddp_sample_all expects."""
     return json.dumps({"$date": ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")})
 
 
 def _make_cbg_rows(user_id, day_start, bucket_counts):
-    """Create CBG rows with fixed values per glycemic bucket."""
     rows = []
     i = 0
     for bucket, count in bucket_counts.items():
@@ -98,7 +104,6 @@ def _make_cbg_rows(user_id, day_start, bucket_counts):
                 "_userId": user_id,
                 "time": _time_json(ts),
                 "type": "cbg",
-                "subType": None,
                 "reason": None,
                 "origin": None,
                 "value": mg_dl * MMOL_PER_MGDL,
@@ -107,14 +112,12 @@ def _make_cbg_rows(user_id, day_start, bucket_counts):
                 "requestedBolus": None,
                 "nutrition": None,
                 "food": None,
-                "originalFood": None,
             })
             i += 1
     return rows
 
 
-def _make_loop_rec_rows(user_id, day_start):
-    """Create Loop recommendation rows (reason='loop'), autobolus type."""
+def _make_loop_rec_rows(user_id, day_start, is_autobolus):
     rows = []
     for j in range(N_RECS):
         ts = day_start + timedelta(hours=j)
@@ -122,28 +125,24 @@ def _make_loop_rec_rows(user_id, day_start):
             "_userId": user_id,
             "time": _time_json(ts),
             "type": None,
-            "subType": None,
             "reason": "loop",
             "origin": ORIGIN,
             "value": None,
-            "recommendedBasal": None,
-            "recommendedBolus": 0.5,
+            "recommendedBasal": None if is_autobolus else 1.0,
+            "recommendedBolus": 0.5 if is_autobolus else None,
             "requestedBolus": None,
             "nutrition": None,
             "food": None,
-            "originalFood": None,
         })
     return rows
 
 
 def _make_correction_bolus_row(user_id, day_start):
-    """Create a correction bolus: dosingDecision with requestedBolus but no food/originalFood."""
     ts = day_start + timedelta(hours=12)
     return {
         "_userId": user_id,
         "time": _time_json(ts),
         "type": "dosingDecision",
-        "subType": None,
         "reason": None,
         "origin": None,
         "value": None,
@@ -152,18 +151,15 @@ def _make_correction_bolus_row(user_id, day_start):
         "requestedBolus": REQUESTED_BOLUS_JSON,
         "nutrition": None,
         "food": None,
-        "originalFood": None,
     }
 
 
 def _make_meal_bolus_row(user_id, day_start):
-    """Create a meal bolus: dosingDecision with requestedBolus AND food entry."""
     ts = day_start + timedelta(hours=12)
     return {
         "_userId": user_id,
         "time": _time_json(ts),
         "type": "dosingDecision",
-        "subType": None,
         "reason": None,
         "origin": None,
         "value": None,
@@ -172,18 +168,15 @@ def _make_meal_bolus_row(user_id, day_start):
         "requestedBolus": REQUESTED_BOLUS_JSON,
         "nutrition": None,
         "food": json.dumps({"nutrition": {"carbohydrate": {"net": 34.0}}}),
-        "originalFood": None,
     }
 
 
 def _make_food_row(user_id, day_start):
-    """Create a food announcement row (type='food')."""
     ts = day_start + timedelta(hours=8)
     return {
         "_userId": user_id,
         "time": _time_json(ts),
         "type": "food",
-        "subType": None,
         "reason": None,
         "origin": None,
         "value": None,
@@ -192,7 +185,6 @@ def _make_food_row(user_id, day_start):
         "requestedBolus": None,
         "nutrition": NUTRITION_JSON,
         "food": None,
-        "originalFood": None,
     }
 
 # =============================================================================
@@ -207,7 +199,7 @@ for group_type, n_days in DAYS_PER_GROUP.items():
     for _ in range(n_days):
         day_start = START + timedelta(days=day_offset)
         rows += _make_cbg_rows(USER_ID, day_start, config["counts"])
-        rows += _make_loop_rec_rows(USER_ID, day_start)
+        rows += _make_loop_rec_rows(USER_ID, day_start, config["is_autobolus"])
         if config["has_correction_bolus"]:
             rows.append(_make_correction_bolus_row(USER_ID, day_start))
         if config["has_meal_bolus"]:
@@ -220,7 +212,7 @@ for group_type, n_days in DAYS_PER_GROUP.items():
 # Write to Databricks
 # =============================================================================
 
-TABLE = "dev.fda_510k_rwd.test_optimized_users_data"
+TABLE = "dev.fda_510k_rwd.test_fcl_device_data"
 
 df = pd.DataFrame(rows)
 spark_df = spark.createDataFrame(df)

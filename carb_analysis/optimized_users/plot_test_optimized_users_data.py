@@ -1,8 +1,8 @@
 """
 Plot the raw test data from dev.fda_510k_rwd.test_optimized_users_data.
 
-Simple query → time-series plots showing CBG values, loop recommendation type,
-bolus events, and carb announcements across all 35 days, so you can visually
+Simple query -> time-series plots showing CBG values, loop recommendation type,
+bolus events, and carb announcements across all 30 days, so you can visually
 verify the test data before running the production SQL against it.
 """
 
@@ -24,10 +24,12 @@ SELECT
     type,
     reason,
     value * 18.018 AS cbg_mg_dl,
-    normal AS bolus_units,
+    TRY_CAST(get_json_object(requestedBolus, '$.amount') AS DOUBLE) AS bolus_units,
     recommendedBasal,
     recommendedBolus,
     nutrition,
+    food,
+    originalFood,
     CASE
         WHEN recommendedBolus IS NOT NULL THEN 'autobolus'
         WHEN recommendedBasal IS NOT NULL THEN 'temp_basal'
@@ -39,13 +41,13 @@ ORDER BY ts
 
 cbg = pdf[pdf["type"] == "cbg"].copy()
 recs = pdf[pdf["reason"] == "loop"].copy()
-boluses = pdf[pdf["type"] == "bolus"].copy()
+boluses = pdf[pdf["type"] == "dosingDecision"].copy()
 carbs = pdf[pdf["type"] == "food"].copy()
 
 print(f"Total rows: {len(pdf):,}")
 print(f"  CBG:    {len(cbg):,}")
 print(f"  Recs:   {len(recs):,}  (TB={len(recs[recs['rec_type'] == 'temp_basal']):,}, AB={len(recs[recs['rec_type'] == 'autobolus']):,})")
-print(f"  Bolus:  {len(boluses):,}")
+print(f"  Dosing decisions: {len(boluses):,}")
 print(f"  Carbs:  {len(carbs):,}")
 
 # =============================================================================
@@ -106,7 +108,7 @@ ax = axes[2]
 if len(boluses) > 0:
     ax.stem(boluses["ts"], boluses["bolus_units"], linefmt="C3-", markerfmt="C3o", basefmt="gray")
 ax.set_ylabel("Bolus (units)")
-ax.set_title("Manual Bolus Events")
+ax.set_title("Requested Bolus (Dosing Decision)")
 ax.grid(alpha=0.3)
 
 # --- Panel 4: Carb announcements ---
@@ -127,18 +129,16 @@ fig.autofmt_xdate(rotation=30)
 
 # --- Day-range annotations ---
 day_ranges = [
-    ("2024-01-01", "2024-01-15", "AB + Silent", "#D94A4A"),
-    ("2024-01-16", "2024-01-20", "AB + Carbs Only", "#FF8C00"),
-    ("2024-01-21", "2024-01-25", "AB + Bolus Only", "#8B4513"),
-    ("2024-01-26", "2024-01-30", "AB + Bolus + Carbs", "#6B8E23"),
-    ("2024-01-31", "2024-02-04", "TB + No Bolus", "#4A90D9"),
+    ("2024-01-01", "2024-01-10", "No Bolus", "#4A90D9"),
+    ("2024-01-11", "2024-01-20", "FCL", "#5AC692"),
+    ("2024-01-21", "2024-01-30", "HCL", "#D94A4A"),
 ]
 for start, end, label, color in day_ranges:
     for ax in axes:
         ax.axvspan(start, end, alpha=0.07, color=color)
     axes[0].text(
         mdates.datestr2num(start), axes[0].get_ylim()[1] * 0.95,
-        label, fontsize=7, color=color, fontweight="bold", va="top",
+        label, fontsize=8, color=color, fontweight="bold", va="top",
     )
 
 fig.suptitle(f"Raw Test Data: {TABLE}", fontsize=14, fontweight="bold")

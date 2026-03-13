@@ -1,12 +1,13 @@
 """
-Optimized Users Analysis: Engaged vs Silent Days
+No Bolus vs FCL vs HCL: 3-Group Comparison (Autobolus Users)
 
-For the same qualifying autobolus users (≥10 no-bolus days, Loop v<3.4),
-classify each day by whether the user "engaged" (bolused OR announced carbs)
-vs stayed "silent" (no bolus AND no carb announcement).
+For Loop autobolus users (v<3.4) with >=10 no-bolus days, classify each day:
+  - No Bolus: zero dosingDecision boluses
+  - Full Closed Loop (FCL): no food announcements AND ≤1 correction bolus
+    (dosingDecision with requestedBolus > 0 but no food/originalFood)
+  - Hybrid Closed Loop (HCL): everything else (food or meal boluses or >1 correction)
 
-Key question: Are the high-TIR autobolus no-bolus days truly silent, or are
-users still announcing carbs? And when they do engage, is TIR even higher?
+Compare glycemic endpoints across all groups.
 """
 
 import matplotlib.pyplot as plt
@@ -24,8 +25,9 @@ def format_p(p):
 # pyright: reportMissingImports=false
 spark = spark  # type: ignore[name-defined]  # noqa: F841
 
+# Set to test table for end-to-end testing:
+#   SOURCE_TABLE = "dev.fda_510k_rwd.test_optimized_users_data"
 SOURCE_TABLE = "dev.default.bddp_sample_all"
-SOURCE_TABLE = "dev.fda_510k_rwd.test_optimized_users_data"  # for testing
 
 # =============================================================================
 # Extract data
@@ -46,22 +48,24 @@ WITH loop_windows AS (
     GROUP BY _userId
 ),
 
--- Bolus days: user-days with a manual bolus (subType='normal')
-bolus_days AS (
-    SELECT DISTINCT
+-- Count boluses per day, split by meal (has food/originalFood) vs correction
+daily_bolus_counts AS (
+    SELECT
         s._userId,
-        CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE) AS day
+        CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE) AS day,
+        COUNT(*) AS total_boluses,
+        SUM(CASE WHEN s.food IS NOT NULL OR s.originalFood IS NOT NULL THEN 1 ELSE 0 END) AS meal_boluses
     FROM {SOURCE_TABLE} s
     INNER JOIN loop_windows w ON s._userId = w._userId
-    WHERE s.type = 'bolus'
-        AND s.subType = 'normal'
-        AND s.normal IS NOT NULL
+    WHERE s.type = 'dosingDecision'
+        AND TRY_CAST(get_json_object(s.requestedBolus, '$.amount') AS DOUBLE) > 0
         AND CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE)
             BETWEEN w.loop_start AND w.loop_end
+    GROUP BY s._userId, CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE)
 ),
 
--- Carb announcement days (type='food' with nutrition.carbohydrate.net > 0)
-carb_days AS (
+-- Food announcement days (type='food' with nutrition.carbohydrate.net > 0)
+food_days AS (
     SELECT DISTINCT
         s._userId,
         CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE) AS day
@@ -75,6 +79,7 @@ carb_days AS (
 ),
 
 -- Classify each Loop recommendation as autobolus (1) or temp basal (0)
+-- Then aggregate per user-day: majority vote determines the day's strategy
 daily_rec_type AS (
     SELECT
         s._userId,
@@ -153,12 +158,12 @@ daily_ranges AS (
     HAVING COUNT(*) >= 200  -- ~17 hrs of data minimum
 ),
 
--- No-bolus days only, for users with >=10 no-bolus days
+-- No-bolus days for qualifying users (>=10 days with zero boluses)
 no_bolus_days AS (
     SELECT d.*
     FROM daily_ranges d
-    LEFT JOIN bolus_days b ON d._userId = b._userId AND d.day = b.day
-    WHERE b.day IS NULL
+    LEFT JOIN daily_bolus_counts bc ON d._userId = bc._userId AND d.day = bc.day
+    WHERE bc.day IS NULL
 ),
 
 qualifying_users AS (
@@ -168,11 +173,11 @@ qualifying_users AS (
     HAVING COUNT(*) >= 10
 )
 
--- Final: all days for qualifying users, with bolus/carb/rec classification
+-- Final: all days for qualifying users, classified into 3 groups
 SELECT
     d.*,
-    CASE WHEN b.day IS NOT NULL THEN 1 ELSE 0 END AS has_bolus,
-    CASE WHEN c.day IS NOT NULL THEN 1 ELSE 0 END AS has_carbs,
+    COALESCE(bc.total_boluses, 0) AS total_boluses,
+    COALESCE(bc.meal_boluses, 0) AS meal_boluses,
     r.autobolus_fraction,
     CASE
         WHEN r.autobolus_fraction > 0.5 THEN 'autobolus'
@@ -180,73 +185,56 @@ SELECT
         ELSE 'unknown'
     END AS rec_type,
     CASE
-        WHEN b.day IS NOT NULL OR c.day IS NOT NULL THEN 'engaged'
-        ELSE 'silent'
-    END AS engagement
+        WHEN bc.day IS NULL THEN 'no_bolus'
+        WHEN f.day IS NULL
+            AND bc.meal_boluses = 0
+            AND (bc.total_boluses - bc.meal_boluses) <= 1 THEN 'fcl'
+        ELSE 'hcl'
+    END AS loop_mode
 FROM daily_ranges d
 INNER JOIN qualifying_users q ON d._userId = q._userId
-LEFT JOIN bolus_days b ON d._userId = b._userId AND d.day = b.day
-LEFT JOIN carb_days c ON d._userId = c._userId AND d.day = c.day
+LEFT JOIN daily_bolus_counts bc ON d._userId = bc._userId AND d.day = bc.day
+LEFT JOIN food_days f ON d._userId = f._userId AND d.day = f.day
 LEFT JOIN daily_rec_type r ON d._userId = r._userId AND d.day = r.day
 """)
 
 pdf = df.toPandas()
 
 # =============================================================================
-# Filter to autobolus days, then to users who have silent autobolus days
+# Filter to autobolus days
 # =============================================================================
 
-ab_all = pdf[pdf["rec_type"] == "autobolus"].copy()
+ab = pdf[pdf["rec_type"] == "autobolus"].copy()
 
-# Users who have at least 1 autobolus + silent day
-users_with_silent = ab_all.loc[ab_all["engagement"] == "silent", "_userId"].unique()
-ab = ab_all[ab_all["_userId"].isin(users_with_silent)].copy()
-
-print(f"Qualifying users (>=10 no-bolus days):      {pdf['_userId'].nunique():,}")
-print(f"Users with any autobolus days:              {ab_all['_userId'].nunique():,}")
-print(f"Users with autobolus + silent days:         {len(users_with_silent):,}")
-print(f"Autobolus days for those users:             {len(ab):,}")
+print(f"Qualifying users (>=10 no-bolus days): {pdf['_userId'].nunique():,}")
+print(f"Users with autobolus days:             {ab['_userId'].nunique():,}")
+print(f"Autobolus days:                        {len(ab):,}")
 print()
 
 # =============================================================================
-# Breakdown: bolus × carbs on autobolus days (for users with silent days)
+# Summarize
 # =============================================================================
 
-print("Autobolus day breakdown (users with silent days):")
-print(f"  Silent (no bolus, no carbs):  n={len(ab[(ab['has_bolus'] == 0) & (ab['has_carbs'] == 0)]):,}")
-print(f"  Carbs only (no bolus):        n={len(ab[(ab['has_bolus'] == 0) & (ab['has_carbs'] == 1)]):,}")
-print(f"  Bolus only (no carbs):        n={len(ab[(ab['has_bolus'] == 1) & (ab['has_carbs'] == 0)]):,}")
-print(f"  Bolus + carbs:                n={len(ab[(ab['has_bolus'] == 1) & (ab['has_carbs'] == 1)]):,}")
-print()
+GROUPS = ["no_bolus", "fcl", "hcl"]
+GROUP_LABELS = ["No Bolus", "FCL", "HCL"]
 
-engaged = ab[ab["engagement"] == "engaged"]
-silent = ab[ab["engagement"] == "silent"]
+groups = {g: ab[ab["loop_mode"] == g] for g in GROUPS}
 
-GROUPS = ["silent", "engaged"]
-GROUP_LABELS = ["Silent", "Engaged"]
-groups = {"silent": silent, "engaged": engaged}
-
-print(f"Engaged (bolus OR carbs): n={len(engaged):,}  users={engaged['_userId'].nunique():,}")
-print(f"Silent  (neither):        n={len(silent):,}  users={silent['_userId'].nunique():,}")
-print()
-
-# =============================================================================
-# Metrics table
-# =============================================================================
+for g, label in zip(GROUPS, GROUP_LABELS):
+    print(f"  {label:20s}  n={len(groups[g]):,}  users={groups[g]['_userId'].nunique():,}")
 
 RANGES = ["tbr_very_low", "tbr", "tir", "tar", "tar_very_high", "mean_glucose", "cv"]
 RANGE_LABELS = ["TBR <54%", "TBR <70%", "TIR 70-180%", "TAR >180%", "TAR >250%", "Mean (mg/dL)", "CV (%)"]
-
-header = f"  {'Metric':16s}  {'Silent':>10s}  {'Engaged':>10s}  {'Diff':>10s}"
+print()
+header = f"  {'Metric':16s}" + "".join(f"  {s:>8s}" for s in GROUP_LABELS)
 print(header)
 for col, label in zip(RANGES, RANGE_LABELS):
-    s_mean = silent[col].mean()
-    e_mean = engaged[col].mean()
-    diff = e_mean - s_mean
-    print(f"  {label:16s}  {s_mean:10.1f}  {e_mean:10.1f}  {diff:+10.1f}")
+    means = [groups[g][col].mean() for g in GROUPS]
+    vals = "".join(f"  {m:8.1f}" for m in means)
+    print(f"  {label:16s}{vals}")
 
 # =============================================================================
-# Plot: Stacked bar — engaged vs silent
+# Plot: Stacked bar — 3 groups
 # =============================================================================
 
 def range_slices(group):
@@ -275,12 +263,12 @@ range_labels = [
     ">250 mg/dL (Very High)",
 ]
 
-fig, ax = plt.subplots(figsize=(8, 8))
+fig, ax = plt.subplots(figsize=(10, 8))
 ax.spines["top"].set_visible(False)
 ax.spines["right"].set_visible(False)
 
-width = 0.5
-bottoms = [0, 0]
+width = 0.6
+bottoms = [0] * len(GROUPS)
 
 for cat, rlabel in zip(categories, range_labels):
     for i, g in enumerate(GROUPS):
@@ -290,32 +278,36 @@ for cat, rlabel in zip(categories, range_labels):
                label=label, edgecolor="white", lw=0.5)
         if v > 1.5:
             ax.text(i, bottoms[i] + v / 2, f"{v:.1f}%",
-                    ha="center", va="center", fontsize=10)
+                    ha="center", va="center", fontsize=9)
         bottoms[i] += v
 
-# Connect segment boundaries
-bots = [0, 0]
-for cat in categories:
-    for j in range(2):
-        bots[j] += max(0, group_slices[GROUPS[j]][cat])
-    if bots[0] < 99 and bots[1] < 99:
-        ax.plot([0 + width / 2, 1 - width / 2], [bots[0], bots[1]],
-                ls="--", color="black", lw=1, alpha=0.8)
+# Connect segment boundaries between adjacent bars
+for pair_start in range(len(GROUPS) - 1):
+    bots = [0, 0]
+    for cat in categories:
+        for j in range(2):
+            bots[j] += max(0, group_slices[GROUPS[pair_start + j]][cat])
+        if bots[0] < 99 and bots[1] < 99:
+            ax.plot(
+                [pair_start + width / 2, pair_start + 1 - width / 2],
+                [bots[0], bots[1]],
+                ls="--", color="black", lw=1, alpha=0.8,
+            )
 
-ax.set_xticks([0, 1])
+ax.set_xticks(range(len(GROUPS)))
 ax.set_xticklabels(
     [f"{label}\n{len(groups[g]):,} days\n{groups[g]['_userId'].nunique():,} users"
      for g, label in zip(GROUPS, GROUP_LABELS)],
-    fontsize=12,
+    fontsize=10,
 )
 ax.set_ylabel("Percent Time (%)", fontsize=12)
 ax.set_ylim(0, 100)
 
 handles, labels = ax.get_legend_handles_labels()
-ax.legend(handles[::-1], labels[::-1], loc="upper right", bbox_to_anchor=(1.55, 1),
+ax.legend(handles[::-1], labels[::-1], loc="upper right", bbox_to_anchor=(1.45, 1),
           fontsize=10, frameon=False)
 
-ax.set_title("Autobolus Days: Silent vs Engaged\n(Users With Silent AB Days, Loop v<3.4)",
+ax.set_title("Time in Glycemic Ranges by Group (Autobolus Users)",
              fontsize=14, fontweight="bold")
 ax.grid(axis="y", alpha=0.3)
 plt.tight_layout()
@@ -323,10 +315,10 @@ plt.savefig("optimized_users_stacked_bar.png", dpi=150, bbox_inches="tight")
 plt.show()
 
 # =============================================================================
-# Plot: Box plots — engaged vs silent
+# Plot: Box plots for each glycemic range — 3 groups
 # =============================================================================
 
-BOX_COLORS = ["#4A90D9", "#D94A4A"]
+BOX_COLORS = ["#4A90D9", "#5AC692", "#D94A4A"]
 
 BOX_RANGES = [
     ("TBR <54 mg/dL (%)",     "tbr_very_low"),
@@ -338,7 +330,7 @@ BOX_RANGES = [
     ("CV (%)",                "cv"),
 ]
 
-fig, axes = plt.subplots(4, 2, figsize=(10, 18))
+fig, axes = plt.subplots(4, 2, figsize=(14, 20))
 axes = axes.flatten()
 
 for i, (title, col) in enumerate(BOX_RANGES):
@@ -357,28 +349,27 @@ for i, (title, col) in enumerate(BOX_RANGES):
 
     # Mean markers and annotations
     means = [d.mean() for d in data]
-    ax.plot([1, 2], means, "D--", color="black", markersize=5, lw=1, zorder=3)
+    ax.plot(range(1, 4), means, "D--", color="black", markersize=4, lw=1, zorder=3)
     for j, mean in enumerate(means):
         ax.annotate(
             f"{mean:.1f}",
             xy=(j + 1, mean),
-            xytext=(12, 0),
+            xytext=(10, 0),
             textcoords="offset points",
-            fontsize=9,
+            fontsize=8,
             va="center",
         )
 
-    # Two-sample tests
-    _, p_t = stats.ttest_ind(data[0], data[1], equal_var=False)
-    _, p_mw = stats.mannwhitneyu(data[0], data[1], alternative="two-sided")
-    ax.set_title(f"{title}\nt: {format_p(p_t)}  MWU: {format_p(p_mw)}",
+    # Kruskal-Wallis across all 3 groups
+    _, p_kw = stats.kruskal(*[d for d in data if len(d) > 0])
+    ax.set_title(f"{title}\nKruskal-Wallis: {format_p(p_kw)}",
                  fontsize=10, fontweight="bold")
     ax.grid(axis="y", alpha=0.3)
 
 # Hide unused subplot
 axes[-1].set_visible(False)
 
-fig.suptitle("Autobolus Days: Silent vs Engaged\n(Users With Silent AB Days, Loop v<3.4)",
+fig.suptitle("Glycemic Ranges by Group (Autobolus Users)",
              fontsize=14, fontweight="bold")
 fig.tight_layout()
 plt.savefig("optimized_users_boxplots.png", dpi=150, bbox_inches="tight")

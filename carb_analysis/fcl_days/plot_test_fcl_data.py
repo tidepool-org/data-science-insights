@@ -1,5 +1,5 @@
 """
-Plot the raw test data from dev.fda_510k_rwd.test_no_bolus_device_data.
+Plot the raw test data from dev.fda_510k_rwd.test_fcl_device_data.
 
 4-panel time-series: CBG, rec type, bolus events, carb announcements.
 """
@@ -10,7 +10,7 @@ import matplotlib.dates as mdates
 # pyright: reportMissingImports=false
 spark = spark  # type: ignore[name-defined]  # noqa: F841
 
-TABLE = "dev.fda_510k_rwd.test_no_bolus_device_data"
+TABLE = "dev.fda_510k_rwd.test_fcl_device_data"
 
 # =============================================================================
 # Query raw data
@@ -126,8 +126,8 @@ fig.autofmt_xdate(rotation=30)
 
 # --- Day-range annotations ---
 day_ranges = [
-    ("2024-01-01", "2024-01-06", "TB No Bolus", "#4A90D9"),
-    ("2024-01-06", "2024-01-11", "AB No Bolus", "#D94A4A"),
+    ("2024-01-01", "2024-01-06", "TB FCL", "#4A90D9"),
+    ("2024-01-06", "2024-01-11", "AB FCL", "#D94A4A"),
     ("2024-01-11", "2024-01-16", "TB HCL", "#4A90D9"),
     ("2024-01-16", "2024-01-21", "AB HCL", "#D94A4A"),
 ]
@@ -142,5 +142,5 @@ for i, (start, end, label, color) in enumerate(day_ranges):
 
 fig.suptitle(f"Raw Test Data: {TABLE}", fontsize=14, fontweight="bold")
 fig.tight_layout()
-plt.savefig("plot_test_no_bolus_data.png", dpi=150, bbox_inches="tight")
+plt.savefig("plot_test_fcl_data.png", dpi=150, bbox_inches="tight")
 plt.show()

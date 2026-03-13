@@ -1,15 +1,17 @@
 """
-No Bolus vs HCL: TB vs AB Paired Comparison
+FCL vs HCL: TB vs AB Paired Comparison
 
-For Loop users (v<3.4) with >=10 no-bolus days, compare glycemic
-endpoints between No Bolus and HCL days, paired by recommendation type
+For Loop users (v<3.4) with >=10 no-bolus or FCL days, compare glycemic
+endpoints between FCL and HCL days, paired by recommendation type
 (temp basal vs autobolus).
 
 Day classification:
-  - No Bolus: zero dosingDecision boluses
-  - HCL: at least one dosingDecision bolus
+  - No Bolus: zero dosingDecision boluses (used for qualifying only)
+  - FCL: no food announcements AND ≤1 correction bolus
+  - HCL: everything else
 
-Qualifying: >=10 no-bolus days.
+Qualifying: >=10 FCL days.
+This analysis compares FCL vs HCL (No Bolus days excluded from plots).
 """
 
 import matplotlib.pyplot as plt
@@ -28,7 +30,7 @@ def format_p(p):
 spark = spark  # type: ignore[name-defined]  # noqa: F841
 
 # Set to test table for end-to-end testing:
-#   SOURCE_TABLE = "dev.fda_510k_rwd.test_no_bolus_device_data"
+#   SOURCE_TABLE = "dev.fda_510k_rwd.test_fcl_device_data"
 SOURCE_TABLE = "dev.default.bddp_sample_all"
 
 # =============================================================================
@@ -49,15 +51,30 @@ WITH loop_windows AS (
     GROUP BY _userId
 ),
 
--- Days with at least one dosingDecision bolus
-bolus_days AS (
+daily_bolus_counts AS (
+    SELECT
+        s._userId,
+        CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE) AS day,
+        COUNT(*) AS total_boluses,
+        SUM(CASE WHEN s.food IS NOT NULL OR s.originalFood IS NOT NULL THEN 1 ELSE 0 END) AS meal_boluses
+    FROM {SOURCE_TABLE} s
+    INNER JOIN loop_windows w ON s._userId = w._userId
+    WHERE s.type = 'dosingDecision'
+        AND TRY_CAST(get_json_object(s.requestedBolus, '$.amount') AS DOUBLE) > 0
+        AND CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE)
+            BETWEEN w.loop_start AND w.loop_end
+    GROUP BY s._userId, CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE)
+),
+
+food_days AS (
     SELECT DISTINCT
         s._userId,
         CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE) AS day
     FROM {SOURCE_TABLE} s
     INNER JOIN loop_windows w ON s._userId = w._userId
-    WHERE s.type = 'dosingDecision'
-        AND TRY_CAST(get_json_object(s.requestedBolus, '$.amount') AS DOUBLE) > 0
+    WHERE s.type = 'food'
+        AND s.nutrition IS NOT NULL
+        AND TRY_CAST(get_json_object(s.nutrition, '$.carbohydrate.net') AS DOUBLE) > 0
         AND CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE)
             BETWEEN w.loop_start AND w.loop_end
 ),
@@ -141,6 +158,8 @@ daily_ranges AS (
 classified_days AS (
     SELECT
         d.*,
+        COALESCE(bc.total_boluses, 0) AS total_boluses,
+        COALESCE(bc.meal_boluses, 0) AS meal_boluses,
         r.autobolus_fraction,
         CASE
             WHEN r.autobolus_fraction > 0.5 THEN 'autobolus'
@@ -148,18 +167,22 @@ classified_days AS (
             ELSE 'unknown'
         END AS rec_type,
         CASE
-            WHEN b.day IS NULL THEN 'no_bolus'
+            WHEN bc.day IS NULL THEN 'no_bolus'
+            WHEN f.day IS NULL
+                AND bc.meal_boluses = 0
+                AND (bc.total_boluses - bc.meal_boluses) <= 1 THEN 'fcl'
             ELSE 'hcl'
         END AS loop_mode
     FROM daily_ranges d
-    LEFT JOIN bolus_days b ON d._userId = b._userId AND d.day = b.day
+    LEFT JOIN daily_bolus_counts bc ON d._userId = bc._userId AND d.day = bc.day
+    LEFT JOIN food_days f ON d._userId = f._userId AND d.day = f.day
     LEFT JOIN daily_rec_type r ON d._userId = r._userId AND d.day = r.day
 ),
 
 qualifying_users AS (
     SELECT _userId
     FROM classified_days
-    WHERE loop_mode = 'no_bolus'
+    WHERE loop_mode = 'fcl'
     GROUP BY _userId
     HAVING COUNT(*) >= 10
 )
@@ -171,18 +194,18 @@ INNER JOIN qualifying_users q ON c._userId = q._userId
 
 pdf = df.toPandas()
 
-# Filter to known rec_type and the two behavior groups
+# Filter to known rec_type and the two behavior groups of interest
 pdf = pdf[
     pdf["rec_type"].isin(["temp_basal", "autobolus"])
-    & pdf["loop_mode"].isin(["no_bolus", "hcl"])
+    & pdf["loop_mode"].isin(["fcl", "hcl"])
 ].copy()
 
 # =============================================================================
 # Summarize
 # =============================================================================
 
-MODES = ["no_bolus", "hcl"]
-MODE_LABELS = ["No Bolus", "HCL"]
+MODES = ["fcl", "hcl"]
+MODE_LABELS = ["FCL", "HCL"]
 REC_TYPES = ["temp_basal", "autobolus"]
 REC_LABELS = ["TB", "AB"]
 
@@ -192,9 +215,9 @@ for mode in MODES:
         mask = (pdf["loop_mode"] == mode) & (pdf["rec_type"] == rec)
         groups[(mode, rec)] = pdf[mask]
 
-nb_users = pdf[pdf["loop_mode"] == "no_bolus"]["_userId"].nunique()
-print(f"Users with no-bolus days (TB or AB):  {nb_users:,}")
-print(f"Total days (No Bolus + HCL, TB + AB): n={len(pdf):,}")
+fcl_users = pdf[pdf["loop_mode"] == "fcl"]["_userId"].nunique()
+print(f"Users with FCL days (TB or AB):  {fcl_users:,}")
+print(f"Total days (FCL + HCL, TB + AB):           n={len(pdf):,}")
 print()
 for mode, mode_label in zip(MODES, MODE_LABELS):
     for rec, rec_label in zip(REC_TYPES, REC_LABELS):
@@ -211,7 +234,7 @@ for col, label in zip(RANGES, RANGE_LABELS):
     print(f"  {label:16s}{vals}")
 
 # =============================================================================
-# Plot: Stacked bars — 2 paired comparisons (TB vs AB for No Bolus and HCL)
+# Plot: Stacked bars — 2 paired comparisons (TB vs AB for FCL and HCL)
 # =============================================================================
 
 def range_slices(group):
@@ -301,11 +324,11 @@ handles, labels = ax.get_legend_handles_labels()
 ax.legend(handles[::-1], labels[::-1], loc="upper right", bbox_to_anchor=(1.35, 1),
           fontsize=10, frameon=False)
 
-ax.set_title("No Bolus vs HCL: TB vs AB (Loop Users)",
+ax.set_title("FCL vs HCL: TB vs AB (Loop Users)",
              fontsize=14, fontweight="bold")
 ax.grid(axis="y", alpha=0.3)
 plt.tight_layout()
-plt.savefig("no_bolus_day_stacked_bar.png", dpi=150, bbox_inches="tight")
+plt.savefig("fcl_day_stacked_bar.png", dpi=150, bbox_inches="tight")
 plt.show()
 
 # =============================================================================
@@ -387,15 +410,14 @@ for i, (title, col) in enumerate(BOX_RANGES):
     ax.set_title(f"{title}\nKW: {format_p(p_kw)}  |  {' / '.join(p_texts)}",
                  fontsize=9, fontweight="bold")
 
-    # Vertical separator between behavior groups
     ax.axvline(2.5, ls=":", color="gray", lw=0.8, alpha=0.5)
     ax.grid(axis="y", alpha=0.3)
 
 # Hide unused subplot
 axes[-1].set_visible(False)
 
-fig.suptitle("No Bolus vs HCL: TB vs AB (Loop Users)",
+fig.suptitle("FCL vs HCL: TB vs AB (Loop Users)",
              fontsize=14, fontweight="bold")
 fig.tight_layout()
-plt.savefig("no_bolus_day_boxplots.png", dpi=150, bbox_inches="tight")
+plt.savefig("fcl_day_boxplots.png", dpi=150, bbox_inches="tight")
 plt.show()
