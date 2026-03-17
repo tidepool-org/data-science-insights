@@ -10,7 +10,7 @@ from loop_utils import load_json_data, extract_glucose_timeseries, create_loop_i
 
 FILE_PATH = "/Users/mconn/Downloads/loop_input_data_window_30.json"
 USE_RC = True  # Set to True to enable retrospective correction
-REGENERATE_PREDICTIONS = True  # Set to True to regenerate predictions, False to use saved file
+REGENERATE_PREDICTIONS = False  # Set to True to regenerate predictions, False to use saved file
 PREDICTIONS_SAVE_PATH = "multi_predictions_data.pkl"  # Path to save/load prediction data
 
 def generate_single_prediction(data: Dict, glucose_df: pd.DataFrame, prediction_start: datetime) -> List[float]:
@@ -34,6 +34,39 @@ def generate_single_prediction(data: Dict, glucose_df: pd.DataFrame, prediction_
     except Exception as e:
         print(f"Error generating prediction at {prediction_start}: {e}")
         return []
+
+def extract_carb_and_insulin_data(data: Dict, window_start: datetime, window_end: datetime):
+    """Extract carb entries and insulin doses that fall within the specified window."""
+    carb_entries = []
+    insulin_doses = []
+    
+    # Extract carb entries
+    if 'carbEntries' in data:
+        for entry in data['carbEntries']:
+            entry_time = pd.to_datetime(entry['date'])
+            if window_start <= entry_time <= window_end:
+                carb_entries.append({
+                    'datetime': entry_time,
+                    'amount': entry.get('quantity', entry.get('grams', 0)),
+                    'hours_from_start': (entry_time - window_start).total_seconds() / 3600
+                })
+    
+    # Extract insulin doses (boluses)
+    if 'doses' in data:
+        for dose in data['doses']:
+            dose_time = pd.to_datetime(dose['startDate'])
+            if window_start <= dose_time <= window_end:
+                # Only include boluses (not temp basals)
+                dose_type = dose.get('type', dose.get('deliveryType', ''))
+                if 'bolus' in dose_type.lower() and dose.get('volume', 0) > 0:
+                    insulin_doses.append({
+                        'datetime': dose_time,
+                        'amount': dose.get('volume', 0),
+                        'hours_from_start': (dose_time - window_start).total_seconds() / 3600,
+                        'type': dose_type
+                    })
+    
+    return carb_entries, insulin_doses
 
 def generate_and_save_predictions(filepath: str, save_path: str = PREDICTIONS_SAVE_PATH):
     """
@@ -75,6 +108,10 @@ def generate_and_save_predictions(filepath: str, save_path: str = PREDICTIONS_SA
     
     # Create time axis in hours relative to start
     glucose_window['hours_from_start'] = (glucose_window.index - window_start).total_seconds() / 3600
+    
+    # Extract carb and insulin data within the window
+    carb_entries, insulin_doses = extract_carb_and_insulin_data(data, window_start, window_end)
+    print(f"Found {len(carb_entries)} carb entries and {len(insulin_doses)} insulin doses in window")
     
     # Generate predictions every 5 minutes for 1 hour starting at the 6-hour mark
     prediction_start_time = window_start + timedelta(hours=6)
@@ -120,6 +157,8 @@ def generate_and_save_predictions(filepath: str, save_path: str = PREDICTIONS_SA
         'window_end': window_end,
         'predictions': all_predictions,
         'successful_predictions': successful_predictions,
+        'carb_entries': carb_entries,
+        'insulin_doses': insulin_doses,
         'use_rc': USE_RC,
         'file_path': filepath,
         'generation_timestamp': datetime.now()
@@ -201,8 +240,11 @@ def plot_multi_prediction_timeline(prediction_data: Dict = None, plot_save_path:
     window_start = prediction_data['window_start']
     window_end = prediction_data['window_end']
     use_rc = prediction_data['use_rc']
+    carb_entries = prediction_data.get('carb_entries', [])
+    insulin_doses = prediction_data.get('insulin_doses', [])
     
     print(f"Plotting window from {window_start} to {window_end}")
+    print(f"Plotting {len(carb_entries)} carb entries and {len(insulin_doses)} insulin doses")
     
     # Create the plot with 3 subplots
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 10), height_ratios=[3, 1, 1])
@@ -225,7 +267,7 @@ def plot_multi_prediction_timeline(prediction_data: Dict = None, plot_save_path:
     for pred_entry in all_predictions:
         i = pred_entry['prediction_index']
         alpha_val = 1.0
-        linestyle = '--' if i == 0 else ':'  # First prediction dashed, others dotted
+        linestyle = ':' if i == 0 else ':'  # First prediction dashed, others dotted
         linewidth = 2 if i == 0 else 2
         
         # Plot on main subplot
@@ -254,14 +296,38 @@ def plot_multi_prediction_timeline(prediction_data: Dict = None, plot_save_path:
     # Plot absolute error in third subplot
     _plot_error_subplot(ax3, prediction_data_for_error, glucose_window, error_type='absolute')
     
+    # Add vertical lines for carb entries on all plots (draw first, so they appear behind)
+    # for carb in carb_entries:
+    #     for ax in [ax1, ax2, ax3]:
+    #         ax.axvline(x=carb['hours_from_start'], color='orange', linestyle='-', 
+    #                   linewidth=3, alpha=1, zorder=1)  # Low zorder for background
+    #         # Add text label on main plot only
+    #         if ax == ax1:
+    #             ax.text(carb['hours_from_start']-.02, ax.get_ylim()[1] * 0.95, 
+    #                    f"{carb['amount']:.0f}g", rotation=90, 
+    #                    horizontalalignment='right', verticalalignment='top',
+    #                    color='orange', fontsize=8, fontweight='bold', zorder=2)
+
+    # # Add vertical lines for insulin doses on all plots (draw first, so they appear behind)
+    # for dose in insulin_doses:
+    #     for ax in [ax1, ax2, ax3]:
+    #         ax.axvline(x=dose['hours_from_start'], color='purple', linestyle='-', 
+    #                   linewidth=1, alpha=1, zorder=1)  # Low zorder for background
+    #         # Add text label on main plot only
+    #         if ax == ax1:
+    #             ax.text(dose['hours_from_start'], ax.get_ylim()[1] * 0.9, 
+    #                    f"{dose['amount']:.1f}U", rotation=90, 
+    #                    horizontalalignment='right', verticalalignment='top',
+    #                    color='purple', fontsize=8, fontweight='bold', zorder=2)
+    
     # Formatting for main plot
     ax1.set_ylabel('Glucose (mg/dL)', fontsize=12)
     ax1.set_title(f'{successful_predictions} Loop Predictions Every 5min Starting at 6h Mark\n'
-                 f'USE_RC={use_rc}', fontsize=14)
+                 f'USE_RC={use_rc}, {len(carb_entries)} carbs, {len(insulin_doses)} boluses', fontsize=14)
     ax1.grid(True, alpha=0.3)
-    ax1.legend(loc='upper left')
+    ax1.legend(loc='lower left')
     ax1.set_xlim(3, 13)
-    ax1.axvline(x=6, color='red', linestyle='--', alpha=0.5, label='Prediction Start')
+    ax1.axvline(x=6, linewidth=2, color='red', linestyle='--', alpha=1, label='Prediction Start')
     ax1.set_xticklabels([])  # Hide x-ticks for main plot
     
     # Formatting for regular error plot
@@ -269,8 +335,8 @@ def plot_multi_prediction_timeline(prediction_data: Dict = None, plot_save_path:
     ax2.set_title('Prediction Error vs Actual Glucose (Signed)', fontsize=12)
     ax2.grid(True, alpha=0.3)
     ax2.set_xlim(3, 13)
-    ax2.axhline(y=0, color='black', linestyle='-', alpha=0.5)  # Reference line at 0 error
-    ax2.axvline(x=6, color='red', linestyle='--', alpha=0.5)
+    ax2.axhline(y=0, color='black', linestyle='-', alpha=1)  # Reference line at 0 error
+    ax2.axvline(x=6, linewidth=2, color='red', linestyle='--', alpha=1)
     ax2.set_xticklabels([])  # Hide x-ticks for main plot
 
     # Formatting for absolute error plot
@@ -279,8 +345,8 @@ def plot_multi_prediction_timeline(prediction_data: Dict = None, plot_save_path:
     ax3.set_title('Prediction Absolute Error vs Actual Glucose', fontsize=12)
     ax3.grid(True, alpha=0.3)
     ax3.set_xlim(3, 13)
-    ax3.axhline(y=0, color='black', linestyle='-', alpha=0.5)  # Reference line at 0 error
-    ax3.axvline(x=6, color='red', linestyle='--', alpha=0.5)
+    ax3.axhline(y=0, color='black', linestyle='-', alpha=1)  # Reference line at 0 error
+    ax3.axvline(x=6, linewidth=2, color='red', linestyle='--', alpha=1)
     
     plt.tight_layout()
     
@@ -299,6 +365,8 @@ def plot_multi_prediction_timeline(prediction_data: Dict = None, plot_save_path:
     print(f"\nSummary:")
     print(f"Plotted {successful_predictions} predictions")
     print(f"Real glucose data: {len(glucose_window)} points over 13 hours")
+    print(f"Carb entries: {len(carb_entries)}")
+    print(f"Insulin doses: {len(insulin_doses)}")
     print(f"Window: {window_start} to {window_end}")
 
 def main():

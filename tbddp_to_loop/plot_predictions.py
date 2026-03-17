@@ -3,15 +3,60 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from typing import List
+import re
+import os
 
 DATA_DIR = '/Users/mconn/data/tbddp/poc/'
-FILE_1 = DATA_DIR + 'error_data_use_rc=true.csv'
-FILE_2 = DATA_DIR + 'error_data_use_rc=false.csv'
+FILE_1 = DATA_DIR + 'error_data_use_rc=True_mid_abs_isf=True_carb_model=linear.csv'
+FILE_2 = DATA_DIR + 'error_data_use_rc=True_mid_abs_isf=True_carb_model=piecewiseLinear.csv'
 
 '''
 horizon_0min,horizon_5min,horizon_10min,horizon_15min,...,horizon_355min
 2.000267546,10.20069773,13.45398785,13.38326964,...,42.3849428   
 '''
+
+def parse_parameters_from_filename(filepath: str) -> dict:
+    """
+    Parse parameters from filename like 'error_data_use_rc=True_mid_abs_isf=True_carb_model=linear.csv'
+    Returns dict with parameter values.
+    """
+    filename = os.path.basename(filepath)
+    params = {}
+    
+    # Extract parameters using regex
+    use_rc_match = re.search(r'use_rc=([^_]+)', filename)
+    if use_rc_match:
+        params['use_rc'] = use_rc_match.group(1) == 'True'
+    
+    mid_abs_isf_match = re.search(r'mid_abs_isf=([^_]+)', filename)
+    if mid_abs_isf_match:
+        params['mid_abs_isf'] = mid_abs_isf_match.group(1) == 'True'
+    
+    carb_model_match = re.search(r'carb_model=([^.]+)', filename)
+    if carb_model_match:
+        params['carb_model'] = carb_model_match.group(1)
+    
+    return params
+
+def generate_label_from_params(params: dict) -> str:
+    """
+    Generate a readable label from parameter dictionary.
+    """
+    parts = []
+    
+    if 'use_rc' in params:
+        rc_label = "RC enabled" if params['use_rc'] else "RC disabled"
+        parts.append(rc_label)
+    
+    if 'mid_abs_isf' in params:
+        isf_label = "Mid-abs ISF" if params['mid_abs_isf'] else "Standard ISF"
+        parts.append(isf_label)
+    
+    if 'carb_model' in params:
+        model_label = f"Carb: {params['carb_model']}"
+        parts.append(model_label)
+    
+    return ", ".join(parts)
 
 def load_error_data(filepath: str) -> List[List[float]]:
     """
@@ -30,17 +75,26 @@ def load_error_data(filepath: str) -> List[List[float]]:
         print(f"Error loading {filepath}: {e}")
         return []
 
-def plot_comparison_errors(file1_path: str, file2_path: str, dataset1_name: str = "Dataset 1", dataset2_name: str = "Dataset 2", save_path: str = None):
+def plot_comparison_errors(file1_path: str, file2_path: str, dataset1_name: str = None, dataset2_name: str = None, save_path: str = None):
     """
     Load and plot error statistics from two different files overlaid.
     
     Args:
         file1_path: Path to first CSV file
         file2_path: Path to second CSV file  
-        dataset1_name: Name for first dataset in legend
-        dataset2_name: Name for second dataset in legend
+        dataset1_name: Name for first dataset in legend (if None, auto-generated from filename)
+        dataset2_name: Name for second dataset in legend (if None, auto-generated from filename)
         save_path: Optional path to save plot
     """
+    # Parse parameters and generate labels if not provided
+    if dataset1_name is None:
+        params1 = parse_parameters_from_filename(file1_path)
+        dataset1_name = generate_label_from_params(params1)
+    
+    if dataset2_name is None:
+        params2 = parse_parameters_from_filename(file2_path)
+        dataset2_name = generate_label_from_params(params2)
+    
     # Load data from both files
     errors1 = load_error_data(file1_path)
     errors2 = load_error_data(file2_path)
@@ -193,6 +247,5 @@ def plot_error_statistics(all_errors: List[List[float]], save_path: str = None):
 
 if __name__ == "__main__":
     # Load and plot comparison of the two error files
-    plot_comparison_errors(FILE_1, FILE_2, 
-                          dataset1_name="Include Positive Velocity and RC = True", 
-                          dataset2_name="Include Positive Velocity and RC = False")
+    # Labels will be auto-generated from filenames
+    plot_comparison_errors(FILE_1, FILE_2)
