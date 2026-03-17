@@ -1,13 +1,16 @@
-CREATE OR REPLACE TABLE dev.fda_510k_rwd.user_days_closed_loop AS 
+DECLARE OR REPLACE device_table STRING DEFAULT 'dev.default.bddp_sample_all';
+-- DECLARE OR REPLACE device_table STRING DEFAULT 'dev.closed_loop_rwd.test_closed_loop_device_data';
+
+CREATE OR REPLACE TABLE dev.closed_loop_rwd.user_days_closed_loop AS 
 
 WITH loop_windows AS (
     SELECT
         _userId,
-        CAST(MIN(TRY_CAST(time:`$date` AS TIMESTAMP)) AS DATE) AS loop_start,
-        CAST(MAX(TRY_CAST(time:`$date` AS TIMESTAMP)) AS DATE) AS loop_end,
+        CAST(MIN(TRY_TO_TIMESTAMP(get_json_object(time, '$.$date'))) AS DATE) AS loop_start,
+        CAST(MAX(TRY_TO_TIMESTAMP(get_json_object(time, '$.$date'))) AS DATE) AS loop_end,
         MIN(get_json_object(origin, '$.version')) AS min_version,
         MAX(get_json_object(origin, '$.version')) AS max_version
-    FROM dev.default.bddp_sample_100
+    FROM IDENTIFIER(device_table)
     WHERE reason = 'loop'
     GROUP BY _userId
 ),
@@ -15,21 +18,40 @@ WITH loop_windows AS (
 daily_bolus_counts AS (
     SELECT
         s._userId,
-        CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE) AS day,
+        CAST(TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')) AS DATE) AS day,
         COUNT(*) AS total_boluses,
-        SUM(CASE WHEN TRY_CAST(get_json_object(s.requestedBolus, '$.amount') AS DOUBLE) > 0 THEN 1 ELSE 0 END) AS nonzero_boluses
-    FROM dev.default.bddp_sample_100 s
+        SUM(CASE WHEN TRY_CAST(get_json_object(s.requestedBolus, '$.amount') AS DOUBLE) > 0 THEN 1 ELSE 0 END) AS nonzero_boluses,
+        SUM(CASE WHEN TRY_CAST(get_json_object(s.requestedBolus, '$.amount') AS DOUBLE) > 0
+                  AND (s.food IS NOT NULL OR s.originalFood IS NOT NULL) THEN 1 ELSE 0 END) AS meal_boluses,
+        SUM(CASE WHEN TRY_CAST(get_json_object(s.requestedBolus, '$.amount') AS DOUBLE) > 0
+                  AND s.food IS NULL AND s.originalFood IS NULL THEN 1 ELSE 0 END) AS correction_boluses
+    FROM IDENTIFIER(device_table) s
     INNER JOIN loop_windows w ON s._userId = w._userId
     WHERE s.type = 'dosingDecision'
-        AND CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE)
+        AND CAST(TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')) AS DATE)
             BETWEEN w.loop_start AND w.loop_end
-    GROUP BY s._userId, CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE)
+    GROUP BY s._userId, CAST(TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')) AS DATE)
+),
+
+daily_food_counts AS (
+    SELECT
+        s._userId,
+        CAST(TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')) AS DATE) AS day,
+        COUNT(*) AS food_entries
+    FROM IDENTIFIER(device_table) s
+    INNER JOIN loop_windows w ON s._userId = w._userId
+    WHERE s.type = 'food'
+        AND s.nutrition IS NOT NULL
+        AND TRY_CAST(get_json_object(s.nutrition, '$.carbohydrate.net') AS DOUBLE) > 0
+        AND CAST(TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')) AS DATE)
+            BETWEEN w.loop_start AND w.loop_end
+    GROUP BY s._userId, CAST(TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')) AS DATE)
 ),
 
 daily_rec_type AS (
     SELECT
         s._userId,
-        CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE) AS day,
+        CAST(TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')) AS DATE) AS day,
         COUNT(*) AS total_loop_recs,
         SUM(CASE WHEN s.recommendedBasal IS NOT NULL OR s.recommendedBolus IS NOT NULL THEN 1 ELSE 0 END) AS recs_with_recommendation,
         SUM(CASE WHEN s.recommendedBolus IS NOT NULL THEN 1 ELSE 0 END) AS recs_with_bolus,
@@ -42,29 +64,29 @@ daily_rec_type AS (
                 ELSE 0.0
             END
         ) AS DOUBLE) AS autobolus_fraction
-    FROM dev.default.bddp_sample_100 s
+    FROM IDENTIFIER(device_table) s
     INNER JOIN loop_windows w ON s._userId = w._userId
     WHERE s.reason = 'loop'
-        AND CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE)
+        AND CAST(TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')) AS DATE)
             BETWEEN w.loop_start AND w.loop_end
-    GROUP BY s._userId, CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE)
+    GROUP BY s._userId, CAST(TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')) AS DATE)
 ),
 
 cbg_raw AS (
     SELECT
         s._userId,
-        TRY_CAST(s.time:`$date` AS TIMESTAMP) AS cbg_timestamp,
-        CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE) AS day,
+        TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')) AS cbg_timestamp,
+        CAST(TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')) AS DATE) AS day,
         s.value * 18.018 AS cbg_mg_dl,
-        DATE_TRUNC('hour', TRY_CAST(s.time:`$date` AS TIMESTAMP))
-            + INTERVAL '5' MINUTE * FLOOR(MINUTE(TRY_CAST(s.time:`$date` AS TIMESTAMP)) / 5)
+        DATE_TRUNC('hour', TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')))
+            + INTERVAL '5' MINUTE * FLOOR(MINUTE(TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date'))) / 5)
             AS cbg_bucket
-    FROM dev.default.bddp_sample_100 s
+    FROM IDENTIFIER(device_table) s
     INNER JOIN loop_windows w ON s._userId = w._userId
     WHERE s.type = 'cbg'
         AND s.value IS NOT NULL
         AND s.value * 18.018 BETWEEN 38 AND 500
-        AND CAST(TRY_CAST(s.time:`$date` AS TIMESTAMP) AS DATE)
+        AND CAST(TRY_TO_TIMESTAMP(get_json_object(s.time, '$.$date')) AS DATE)
             BETWEEN w.loop_start AND w.loop_end
 ),
 
@@ -119,6 +141,9 @@ classified_days AS (
         w.max_version,
         COALESCE(bc.total_boluses, 0) AS dosing_decisions,
         COALESCE(bc.nonzero_boluses, 0) AS nonzero_boluses,
+        COALESCE(bc.meal_boluses, 0) AS meal_boluses,
+        COALESCE(bc.correction_boluses, 0) AS correction_boluses,
+        COALESCE(fc.food_entries, 0) AS food_entries,
         COALESCE(r.total_loop_recs, 0) AS total_loop_recs,
         COALESCE(r.recs_with_recommendation, 0) AS recs_with_recommendation,
         COALESCE(r.recs_with_bolus, 0) AS recs_with_bolus,
@@ -137,6 +162,7 @@ classified_days AS (
     FROM daily_ranges d
     INNER JOIN loop_windows w ON d._userId = w._userId
     LEFT JOIN daily_bolus_counts bc ON d._userId = bc._userId AND d.day = bc.day
+    LEFT JOIN daily_food_counts fc ON d._userId = fc._userId AND d.day = fc.day
     LEFT JOIN daily_rec_type r ON d._userId = r._userId AND d.day = r.day
 )
 
@@ -144,3 +170,5 @@ SELECT *
 FROM classified_days
 ORDER BY _userId, day; 
 
+
+SELECT * FROM dev.closed_loop_rwd.user_days_closed_loop;
