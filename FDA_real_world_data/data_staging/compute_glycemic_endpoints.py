@@ -5,7 +5,6 @@ from pyspark.sql.types import StructType, StructField, StringType, IntegerType
 # Databricks runtime globals (available in notebook execution context)
 # pyright: reportMissingImports=false
 spark = spark  # type: ignore[name-defined]  # noqa: F841
-dbutils = dbutils  # type: ignore[name-defined]  # noqa: F841
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +137,12 @@ MODE_CONFIG = {
 # Main execution
 # ---------------------------------------------------------------------------
 
-MODE = dbutils.widgets.get("mode")
+import argparse
+
+_parser = argparse.ArgumentParser()
+_parser.add_argument("--mode", default="transition")
+_args, _ = _parser.parse_known_args()
+MODE = _args.mode
 
 if MODE not in MODE_CONFIG:
     raise ValueError(f"Unknown mode '{MODE}'. Valid modes: {sorted(MODE_CONFIG)}")

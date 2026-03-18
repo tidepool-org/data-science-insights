@@ -1,13 +1,11 @@
+import argparse
+
 spark = spark  # type: ignore[name-defined]  # noqa: F841
-dbutils = dbutils  # type: ignore[name-defined]  # noqa: F841
 
-DEFAULT_INPUT_TABLE = "dev.default.bddp_sample_all_2"
-
-dbutils.widgets.text("input_table", DEFAULT_INPUT_TABLE)
-INPUT_TABLE = dbutils.widgets.get("input_table")
-
-if not INPUT_TABLE.strip():
-    raise ValueError("input_table parameter is required")
+parser = argparse.ArgumentParser()
+parser.add_argument("--input_table", default="dev.default.bddp_sample_all_2")
+args, _ = parser.parse_known_args()
+INPUT_TABLE = args.input_table
 
 spark.sql("""
 CREATE OR REPLACE TABLE dev.fda_510k_rwd.loop_recommendations AS
