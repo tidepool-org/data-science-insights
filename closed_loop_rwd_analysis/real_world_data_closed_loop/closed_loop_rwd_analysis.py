@@ -1,19 +1,84 @@
 """
 TB vs AB Paired Comparisons Across Three Behavior Conditions
+============================================================
 
-Reads from the pre-built user_days_closed_loop table. Runs three
-independent analyses, each comparing a behavior condition vs HCL,
-paired by rec_type (temp basal vs autobolus):
+GOAL
+----
+Understand whether autobolus (AB) improves glycemic outcomes vs temp basal (TB)
+for Loop users (v<3.4), stratified by how aggressively they use the system.
+The hypothesis: AB should help most for users who are least engaged (no bolusing,
+no carb announcements), since AB compensates for the lack of manual intervention.
 
-1. No Bolus vs HCL         — qualifying: >=10 no-bolus days
-2. No Meals No Bolus vs HCL — qualifying: >=10 no-meal-no-bolus days
-3. FCL vs HCL              — qualifying: >=10 FCL days
+PIPELINE
+--------
+This file is step 2 of a 2-step pipeline:
 
-Day definitions (from pre-computed columns):
-  - No Bolus:          nonzero_boluses == 0
-  - No Meals No Bolus: nonzero_boluses == 0 AND food_entries == 0
-  - FCL:               food_entries == 0 AND meal_boluses == 0 AND correction_boluses <= 1
-  - HCL:               everything else
+  1. export_user_day_closed_loop.sql
+     - Reads raw device data from bddp_sample_all_2 (created_timestamp column)
+     - Computes per-user-day: glycemic ranges (TIR, TBR, TAR, etc.), rec type
+       (autobolus_fraction), bolus counts (meal vs correction), food entries
+     - Writes to: dev.closed_loop_rwd.user_days_closed_loop
+     - Must be re-run whenever the source data or classification logic changes
+
+  2. THIS FILE (closed_loop_rwd_analysis.py)
+     - Reads the pre-built user_days_closed_loop table
+     - Filters to Loop v<3.4 users, drops rec_type='unknown' days
+     - Runs 3 independent analyses (each with its own qualifying cohort):
+
+       Analysis 1: No Bolus vs HCL
+         Condition: nonzero_boluses == 0
+         Qualifying: >=10 no-bolus days
+         Question: Do users who skip boluses entirely do better on AB vs TB?
+
+       Analysis 2: No Meals + No Bolus vs HCL
+         Condition: nonzero_boluses == 0 AND food_entries == 0
+         Qualifying: >=10 such days
+         Question: Same as above, but restricted to days with zero food
+         announcements — truly hands-off usage.
+
+       Analysis 3: FCL (Functional Closed Loop) vs HCL
+         Condition: food_entries == 0 AND meal_boluses == 0 AND correction_boluses <= 1
+         Qualifying: >=10 FCL days
+         Question: Users who let the algorithm run with at most 1 correction
+         bolus and no carb input — does AB close the gap with HCL?
+
+     Each analysis produces:
+       - Summary table (user/day counts, mean glycemic metrics per group)
+       - Stacked bar chart (time-in-range breakdown, TB vs AB paired)
+       - Box plots with Mann-Whitney U per pair and Kruskal-Wallis overall
+
+SUPPORTING FILES
+----------------
+  - create_test_data.py: Generates synthetic device data (40 days, 8 groups)
+    covering all 3 conditions + HCL, writes to test table for end-to-end testing
+  - plot_test_data.py: 4-panel plot of raw test data for visual verification
+
+STATUS (March 2026)
+-------------------
+  - Export SQL is working against bddp_sample_all_2 with created_timestamp
+  - This analysis runs end-to-end and produces all 6 figures
+  - Key finding from initial run: TB no-bolus users have notably worse TIR (~55%)
+    vs AB no-bolus (~71%), suggesting AB substantially compensates for
+    lack of manual bolusing
+  - rec_type='unknown' days (no loop recs with recommendations) are excluded;
+    qualifying counts reflect only days with known TB/AB classification
+
+NEXT STEPS
+----------
+  - Validate the results — spot-check individual users to confirm classification
+  - Consider whether the version filter (v<3.4) is still appropriate or if we
+    should analyze all versions and stratify by version
+  - Consider paired within-user analysis (users who have both TB and AB days)
+    for a stronger causal comparison
+  - May want to add effect size measures (Cohen's d, rank-biserial correlation)
+  - Investigate why HCL AB shows lower TIR than HCL TB — this is counterintuitive
+    since AB should be at least as good. Possible explanations: confounding by time
+    (users switch TB→AB over time, and sicker/harder-to-control users adopt AB
+    later), or AB users may bolus differently knowing the algorithm is more
+    aggressive. Need to dig into user-level trajectories and control for time.
+  - Sensitivity analysis on qualifying threshold: sweep min_days (e.g. 5, 10, 15,
+    20, 30) and report how cohort size and effect sizes change. Ensures results
+    aren't driven by the arbitrary >=10 day cutoff.
 """
 
 import matplotlib.pyplot as plt
