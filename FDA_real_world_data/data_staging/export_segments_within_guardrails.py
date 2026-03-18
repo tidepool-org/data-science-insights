@@ -54,14 +54,12 @@ GUARDRAILS = {
 # =============================================================================
 
 def _parse_timestamp(value):
-    """Parse a timestamp value from bddp_sample_all.
+    """Parse a timestamp value from bddp_sample_all_2.
 
-    The raw `time` column is a struct {"$date": "..."} in MongoDB/Spark.
-    After toPandas() it arrives as a dict, a pandas Timestamp, or a string.
+    The `created_timestamp` column is a plain string timestamp.
+    After toPandas() it arrives as a pandas Timestamp or a string.
     Returns a tz-aware pandas Timestamp (UTC), or pd.NaT on failure.
     """
-    if isinstance(value, dict):
-        value = value.get("$date")
     return pd.to_datetime(value, errors="coerce", utc=True)
 
 
@@ -444,7 +442,7 @@ def validate_pump_settings(df):
 
         results.append({
             '_userId': user_id,
-            'settings_time': _parse_timestamp(row.get('time')),
+            'settings_time': _parse_timestamp(row.get('created_timestamp')),
 
             # Max Basal Delivery Rate
             'basal_rate_max': basal_check['rate_maximum'],
@@ -520,10 +518,10 @@ MODE_CONFIG = {
     "transition": {
         "sql": f"""
             SELECT s.*
-            FROM dev.default.bddp_sample_all s
+            FROM dev.default.bddp_sample_all_2 s
             INNER JOIN {CATALOG}.valid_transition_segments vs
                 ON s._userId = vs._userId
-                AND TRY_CAST(s.time:`$date` AS DATE)
+                AND TRY_CAST(s.created_timestamp AS DATE)
                     BETWEEN vs.tb_to_ab_seg1_start AND vs.tb_to_ab_seg2_end
             WHERE s.type = 'pumpSettings'
         """,
@@ -532,10 +530,10 @@ MODE_CONFIG = {
     "stable": {
         "sql": f"""
             SELECT s.*
-            FROM dev.default.bddp_sample_all s
+            FROM dev.default.bddp_sample_all_2 s
             INNER JOIN {CATALOG}.stable_autobolus_segments sa
                 ON s._userId = sa._userId
-                AND TRY_CAST(s.time:`$date` AS DATE)
+                AND TRY_CAST(s.created_timestamp AS DATE)
                     BETWEEN sa.segment_start AND sa.segment_end
             WHERE s.type = 'pumpSettings'
         """,
@@ -547,6 +545,7 @@ MODE_CONFIG = {
 # MAIN EXECUTION
 # =============================================================================
 
+dbutils.widgets.text("mode", "transition")
 MODE = dbutils.widgets.get("mode")
 
 if MODE not in MODE_CONFIG:

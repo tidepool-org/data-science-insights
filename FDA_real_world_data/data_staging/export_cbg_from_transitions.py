@@ -1,3 +1,6 @@
+spark = spark  # type: ignore[name-defined]  # noqa: F841
+
+spark.sql("""
 CREATE OR REPLACE TABLE dev.fda_510k_rwd.valid_transition_cbg AS
 
 SELECT
@@ -14,4 +17,5 @@ WHERE CAST(c.cbg_timestamp AS DATE) BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab
   AND CASE
         WHEN CAST(c.cbg_timestamp AS DATE) BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg1_end THEN 'tb_to_ab_seg1'
         WHEN CAST(c.cbg_timestamp AS DATE) BETWEEN t.tb_to_ab_seg2_start AND t.tb_to_ab_seg2_end THEN 'tb_to_ab_seg2'
-      END IS NOT NULL;
+      END IS NOT NULL
+""")

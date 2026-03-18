@@ -1,3 +1,6 @@
+spark = spark  # type: ignore[name-defined]  # noqa: F841
+
+spark.sql("""
 CREATE OR REPLACE TABLE dev.fda_510k_rwd.valid_override_cbg AS
 
 SELECT
@@ -18,4 +21,5 @@ INNER JOIN dev.fda_510k_rwd.loop_cbg c
     ON o._userId = c._userId
     AND c.cbg_timestamp >= o.override_time
     AND c.cbg_timestamp <= o.override_time + o.duration * INTERVAL '1' SECOND + INTERVAL '2' HOUR
-WHERE o.is_valid_name_only = TRUE;
+WHERE o.is_valid_name_only = TRUE
+""")

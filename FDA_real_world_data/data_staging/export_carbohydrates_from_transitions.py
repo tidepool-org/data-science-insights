@@ -1,36 +1,18 @@
-/*
-=============================================================================
-CARBOHYDRATE ENTRIES FROM TRANSITION SEGMENTS
-FDA 510(k) Submission: Loop Autobolus Feature
-=============================================================================
+spark = spark  # type: ignore[name-defined]  # noqa: F841
 
-Purpose
--------
-Extract all carbohydrate (food) entries that fall within the transition
-segments (temp basal → autobolus) for each user.
-
-Data Source
------------
-- dev.default.bddp_sample_all (type = 'food', nutrition column)
-- dev.fda_510k_rwd.valid_transition_segments
-
-Nutrition column format: {"carbohydrate":{"net":34.0,"units":"grams"}}
-
-=============================================================================
-*/
-
--- CREATE OR REPLACE TABLE dev.fda_510k_rwd.valid_transition_carbs AS
+spark.sql("""
+CREATE OR REPLACE TABLE dev.fda_510k_rwd.valid_transition_carbs AS
 
 WITH carb_entries AS (
   SELECT
     _userId,
-    TRY_CAST(time:`$date` AS TIMESTAMP) AS carb_timestamp,
+    TRY_CAST(created_timestamp AS TIMESTAMP) AS carb_timestamp,
     TRY_CAST(
       get_json_object(nutrition, '$.carbohydrate.net') AS DOUBLE
     ) AS carb_grams
-  FROM dev.default.bddp_sample_all
+  FROM dev.default.bddp_sample_all_2
   WHERE type = 'food'
-    AND TRY_CAST(time:`$date` AS TIMESTAMP) IS NOT NULL
+    AND TRY_CAST(created_timestamp AS TIMESTAMP) IS NOT NULL
     AND nutrition IS NOT NULL
 )
 
@@ -48,4 +30,5 @@ WHERE CAST(c.carb_timestamp AS DATE) BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_a
   AND CASE
         WHEN CAST(c.carb_timestamp AS DATE) BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg1_end THEN 'tb_to_ab_seg1'
         WHEN CAST(c.carb_timestamp AS DATE) BETWEEN t.tb_to_ab_seg2_start AND t.tb_to_ab_seg2_end THEN 'tb_to_ab_seg2'
-      END IS NOT NULL;
+      END IS NOT NULL
+""")
