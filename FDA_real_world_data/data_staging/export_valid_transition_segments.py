@@ -1,7 +1,12 @@
-spark = spark  # type: ignore[name-defined]  # noqa: F841
-
-spark.sql("""
-CREATE OR REPLACE TABLE dev.fda_510k_rwd.valid_transition_segments AS
+def run(
+    spark,
+    output_table="dev.fda_510k_rwd.valid_transition_segments",
+    loop_recommendations_table="dev.fda_510k_rwd.loop_recommendations",
+    user_dates_table="dev.default.bddp_user_dates",
+    user_gender_table="dev.default.user_gender",
+):
+    spark.sql(f"""
+CREATE OR REPLACE TABLE {output_table} AS
 WITH
 params AS (
   SELECT
@@ -20,7 +25,7 @@ daily_agg AS (
     SUM(is_autobolus) AS autobolus_rows,
     COUNT(is_autobolus) AS recommendation_rows,
     COUNT(*) AS total_rows
-  FROM dev.fda_510k_rwd.loop_recommendations
+  FROM {loop_recommendations_table}
   GROUP BY _userId, day
 ),
 
@@ -137,34 +142,6 @@ valid_user_table AS (
 
   FROM ranked
   GROUP BY _userId
-),
-
-exclusion_summary AS (
-  SELECT
-    COUNT(*) AS total_windows_evaluated,
-
-    SUM(CASE WHEN rec_rows_seg1 = 0 OR rec_rows_seg2 = 0
-        THEN 1 ELSE 0 END) AS excluded_zero_recommendations,
-
-    SUM(CASE WHEN DATE_SUB(day, 27) < first_day
-        THEN 1 ELSE 0 END) AS excluded_insufficient_history,
-
-    SUM(CASE WHEN total_rows_seg1 * 1.0 / (SELECT samples_per_segment FROM params) < (SELECT min_coverage FROM params)
-        THEN 1 ELSE 0 END) AS excluded_low_coverage_seg1,
-
-    SUM(CASE WHEN total_rows_seg2 * 1.0 / (SELECT samples_per_segment FROM params) < (SELECT min_coverage FROM params)
-        THEN 1 ELSE 0 END) AS excluded_low_coverage_seg2,
-
-    SUM(CASE
-      WHEN rec_rows_seg1 > 0
-       AND rec_rows_seg2 > 0
-       AND DATE_SUB(day, 27) >= first_day
-       AND total_rows_seg1 * 1.0 / (SELECT samples_per_segment FROM params) >= (SELECT min_coverage FROM params)
-       AND total_rows_seg2 * 1.0 / (SELECT samples_per_segment FROM params) >= (SELECT min_coverage FROM params)
-      THEN 1 ELSE 0
-    END) AS windows_passing_all_filters
-
-  FROM sliding_window
 )
 
 SELECT
@@ -176,8 +153,13 @@ SELECT
   ROUND(DATEDIFF(t.tb_to_ab_seg1_start, d.diagnosis_date) / 365.25, 1) AS tb_to_ab_years_lwd
 
 FROM valid_user_table t
-LEFT JOIN dev.default.bddp_user_dates d ON t._userId = d.userid
-LEFT JOIN dev.default.user_gender g ON t._userId = g.userid
+LEFT JOIN {user_dates_table} d ON t._userId = d.userid
+LEFT JOIN {user_gender_table} g ON t._userId = g.userid
 WHERE ROUND(DATEDIFF(t.tb_to_ab_seg1_start, d.dob) / 365.25, 1) > 6 OR d.dob IS NULL
 ORDER BY t._userId
 """)
+
+
+if __name__ == "__main__":
+    spark = spark  # type: ignore[name-defined]  # noqa: F841
+    run(spark)

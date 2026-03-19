@@ -1,0 +1,182 @@
+resources:
+  jobs:
+    FDA_Pipeline:
+      name: FDA Pipeline
+      tasks:
+        - task_key: Export_CBG_From_Loop
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_cbg_from_loop.py
+          environment_key: Default
+        - task_key: Export_Loop_Recommendations
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_loop_recommendations.py
+            parameters:
+              - --input_table
+              - dev.default.bddp_sample_all_2
+          environment_key: Default
+        - task_key: Export_Autobolus_Durability
+          depends_on:
+            - task_key: Export_Loop_Recommendations
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_autobolus_durability.py
+          environment_key: Default
+        - task_key: Export_Autobolus_Event_Times
+          depends_on:
+            - task_key: Export_Autobolus_Durability
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_autobolus_event_times.py
+          environment_key: Default
+        - task_key: Analysis_8-7
+          depends_on:
+            - task_key: Export_Autobolus_Event_Times
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-7_autobolus_adoption_durability.py
+          environment_key: Default
+        - task_key: Export_Stable_Autobolus_Segments
+          depends_on:
+            - task_key: Export_Loop_Recommendations
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_stable_autobolus_segments.py
+          environment_key: Default
+        - task_key: Export_CBG_From_Stable
+          depends_on:
+            - task_key: Export_Stable_Autobolus_Segments
+            - task_key: Export_CBG_From_Loop
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_cbg_from_stable.py
+          environment_key: Default
+        - task_key: Compute_Glycemic_Endpoints_Stable
+          depends_on:
+            - task_key: Export_CBG_From_Stable
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/compute_glycemic_endpoints.py
+            parameters:
+              - --mode
+              - stable
+          environment_key: Default
+        - task_key: Export_Stable_within_Guardrails
+          depends_on:
+            - task_key: Export_Stable_Autobolus_Segments
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_segments_within_guardrails.py
+            parameters:
+              - --mode
+              - stable
+          environment_key: Default
+        - task_key: Analysis_8-6
+          depends_on:
+            - task_key: Compute_Glycemic_Endpoints_Stable
+            - task_key: Export_Stable_within_Guardrails
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-6_socioeconomic_subgroup_analysis.py
+          environment_key: Default
+        - task_key: Export_Valid_Transition_Segments
+          depends_on:
+            - task_key: Export_Loop_Recommendations
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_valid_transition_segments.py
+          environment_key: Default
+        - task_key: Export_CBG_From_Transitions
+          depends_on:
+            - task_key: Export_Valid_Transition_Segments
+            - task_key: Export_CBG_From_Loop
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_cbg_from_transitions.py
+          environment_key: Default
+        - task_key: Compute_Glycemic_Endpoints_Transitions
+          depends_on:
+            - task_key: Export_CBG_From_Transitions
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/compute_glycemic_endpoints.py
+            parameters:
+              - --mode
+              - transition
+          environment_key: Default
+        - task_key: Export_Carbohydrates_from_Transition
+          depends_on:
+            - task_key: Export_Valid_Transition_Segments
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_carbohydrates_from_transitions.py
+          environment_key: Default
+        - task_key: Export_Overrides_From_Transition
+          depends_on:
+            - task_key: Export_Valid_Transition_Segments
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_overrides_from_transitions.py
+          environment_key: Default
+        - task_key: Export_CBG_From_Overrides
+          depends_on:
+            - task_key: Export_CBG_From_Loop
+            - task_key: Export_Overrides_From_Transition
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_cbg_from_overrides.py
+          environment_key: Default
+        - task_key: Compute_Glycemic_Endpoints_Overrides
+          depends_on:
+            - task_key: Export_CBG_From_Overrides
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/compute_glycemic_endpoints.py
+            parameters:
+              - --mode
+              - override
+          environment_key: Default
+        - task_key: Export_Transition_within_Guardrails
+          depends_on:
+            - task_key: Export_Valid_Transition_Segments
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_segments_within_guardrails.py
+            parameters:
+              - --mode
+              - transition
+          environment_key: Default
+        - task_key: Analysis_8-1
+          depends_on:
+            - task_key: Compute_Glycemic_Endpoints_Transitions
+            - task_key: Export_Transition_within_Guardrails
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-1_comparative_clinical_performance_and_safety_of_autobolus_vs_temporary_basal_dosing_strategies.py
+          environment_key: Default
+        - task_key: Analysis_8-2
+          depends_on:
+            - task_key: Compute_Glycemic_Endpoints_Overrides
+            - task_key: Export_Transition_within_Guardrails
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-2_glycemic_outcomes_during_preset_activation.py
+          environment_key: Default
+        - task_key: Analysis_8-3
+          depends_on:
+            - task_key: Export_Overrides_From_Transition
+            - task_key: Export_CBG_From_Transitions
+            - task_key: Export_Transition_within_Guardrails
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-3_preset_parameter_changes.py
+          environment_key: Default
+        - task_key: Analysis_8-4
+          depends_on:
+            - task_key: Export_Overrides_From_Transition
+            - task_key: Export_Transition_within_Guardrails
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-4_preset_activation_duration.py
+          environment_key: Default
+        - task_key: Analysis_8-5
+          depends_on:
+            - task_key: Compute_Glycemic_Endpoints_Transitions
+            - task_key: Export_Transition_within_Guardrails
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-5_demographic_subgroup_analysis.py
+          environment_key: Default
+        - task_key: Analysis_8-8
+          depends_on:
+            - task_key: Export_Carbohydrates_from_Transition
+            - task_key: Compute_Glycemic_Endpoints_Transitions
+            - task_key: Export_Transition_within_Guardrails
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-8_carbohydrate_consumption_consistency.py
+          environment_key: Default
+      queue:
+        enabled: true
+      environments:
+        - environment_key: Default
+          spec:
+            environment_version: "4"
+      performance_target: PERFORMANCE_OPTIMIZED
