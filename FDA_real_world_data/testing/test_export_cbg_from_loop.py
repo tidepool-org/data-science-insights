@@ -1,0 +1,135 @@
+"""
+Unit test for export_cbg_from_loop.py.
+
+Tests: Loop user filtering, cbg type filtering, mmol→mg/dL conversion,
+range filtering (38-500 mg/dL), 5-min bucket dedup, null/bad timestamp exclusion.
+
+Run on Databricks.
+"""
+
+import sys
+
+from pyspark.sql import SparkSession
+
+sys.path.insert(0, "../data_staging")
+
+from export_cbg_from_loop import run  # noqa: E402
+from staging_test_helpers import (  # noqa: E402
+    TEST_SCHEMA,
+    assert_row_count,
+    read_test_output,
+    setup_test_table,
+    teardown_test_tables,
+)
+
+spark = SparkSession.builder.getOrCreate()
+
+# --- Table names ---
+INPUT_TABLE = f"{TEST_SCHEMA}._test_cbg_input"
+OUTPUT_TABLE = f"{TEST_SCHEMA}._test_cbg_output"
+
+ALL_TABLES = [INPUT_TABLE, OUTPUT_TABLE]
+
+# --- Constants ---
+MMOL_PER_MGDL = 1 / 18.018
+
+# --- Test data ---
+# Input mimics bddp_sample_all_2 schema: _userId, created_timestamp, type, reason, value
+TEST_ROWS = [
+    {  # Row 1: valid CBG for a Loop user — included
+        "_userId": "loop_user",
+        "created_timestamp": "2025-01-15 12:00:00",
+        "type": "cbg",
+        "reason": "loop",
+        "value": 120.0 * MMOL_PER_MGDL,
+    },
+    {  # Row 2: same user, same 5-min bucket, earlier timestamp — deduped out
+        "_userId": "loop_user",
+        "created_timestamp": "2025-01-15 12:02:00",
+        "type": "cbg",
+        "reason": "loop",
+        "value": 130.0 * MMOL_PER_MGDL,
+    },
+    {  # Row 3: Loop recommendation row (makes loop_user a "Loop user")
+        "_userId": "loop_user",
+        "created_timestamp": "2025-01-15 12:00:00",
+        "type": None,
+        "reason": "loop",
+        "value": None,
+    },
+    {  # Row 4: CBG from non-Loop user — excluded
+        "_userId": "non_loop_user",
+        "created_timestamp": "2025-01-15 12:00:00",
+        "type": "cbg",
+        "reason": None,
+        "value": 100.0 * MMOL_PER_MGDL,
+    },
+    {  # Row 5: CBG below range (37 mg/dL < 38) — excluded
+        "_userId": "loop_user",
+        "created_timestamp": "2025-01-15 12:05:00",
+        "type": "cbg",
+        "reason": "loop",
+        "value": 37.0 * MMOL_PER_MGDL,
+    },
+    {  # Row 6: CBG above range (501 mg/dL > 500) — excluded
+        "_userId": "loop_user",
+        "created_timestamp": "2025-01-15 12:10:00",
+        "type": "cbg",
+        "reason": "loop",
+        "value": 501.0 * MMOL_PER_MGDL,
+    },
+    {  # Row 7: null value — excluded
+        "_userId": "loop_user",
+        "created_timestamp": "2025-01-15 12:15:00",
+        "type": "cbg",
+        "reason": "loop",
+        "value": None,
+    },
+    {  # Row 8: bad timestamp — excluded
+        "_userId": "loop_user",
+        "created_timestamp": "not-a-timestamp",
+        "type": "cbg",
+        "reason": "loop",
+        "value": 100.0 * MMOL_PER_MGDL,
+    },
+    {  # Row 9: different 5-min bucket — included
+        "_userId": "loop_user",
+        "created_timestamp": "2025-01-15 12:05:30",
+        "type": "cbg",
+        "reason": "loop",
+        "value": 150.0 * MMOL_PER_MGDL,
+    },
+]
+
+
+# --- Run test ---
+try:
+    setup_test_table(spark, INPUT_TABLE, TEST_ROWS)
+    run(spark, input_table=INPUT_TABLE, output_table=OUTPUT_TABLE)
+    result = read_test_output(spark, OUTPUT_TABLE)
+
+    # 1. Only 2 rows survive: row 2 wins dedup over row 1 in 12:00 bucket (later timestamp),
+    #    row 9 is in a different bucket.
+    #    Excluded: row 3 (not cbg), row 4 (non-Loop user), row 5 (< 38),
+    #    row 6 (> 500), row 7 (null value), row 8 (bad timestamp)
+    assert_row_count(result, 2, "rows after filtering and dedup")
+
+    # 2. Only loop_user appears
+    users = result["_userId"].unique().tolist()
+    assert users == ["loop_user"], f"expected only loop_user, got {users}"
+    print("PASS: only Loop users included")
+
+    # 3. mg/dL conversion correct — dedup kept 130 (row 2, later timestamp) not 120 (row 1)
+    mg_values = sorted(result["cbg_mg_dl"].round(0).tolist())
+    assert mg_values == [130.0, 150.0], f"expected [130.0, 150.0], got {mg_values}"
+    print("PASS: mmol/L → mg/dL conversion correct")
+
+    # 4. Dedup kept later timestamp (12:02 not 12:00 in the 12:00 bucket)
+    bucket_12_00 = result[result["cbg_mg_dl"].round(0) == 130.0]
+    assert len(bucket_12_00) == 1, "expected 1 row in 12:00 bucket (dedup winner)"
+    print("PASS: 5-min bucket dedup kept correct row")
+
+    print("\nAll tests passed.")
+
+finally:
+    teardown_test_tables(spark, *ALL_TABLES)

@@ -1,10 +1,8 @@
+import argparse
+
 import pandas as pd
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType
-
-# Databricks runtime globals (available in notebook execution context)
-# pyright: reportMissingImports=false
-spark = spark  # type: ignore[name-defined]  # noqa: F841
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +31,7 @@ def _compute_hypo_events(spark, cbg_df, group_cols, threshold_start=54, threshol
         streak_below = 0
         streak_above = 0
 
-        for val in pdf["cbg_mg_dl"]:
+        for val in pdf["cbg_mg_dl"].astype(float):
             if not in_event:
                 if val < threshold_start:
                     streak_below += 1
@@ -113,13 +111,13 @@ CATALOG = "dev.fda_510k_rwd"
 
 MODE_CONFIG = {
     "transition": {
-        "input_table": f"{CATALOG}.valid_transition_cbg",
-        "output_table": f"{CATALOG}.glycemic_endpoints_transition",
+        "default_input_table": f"{CATALOG}.valid_transition_cbg",
+        "default_output_table": f"{CATALOG}.glycemic_endpoints_transition",
         "group_cols": ["_userId", "segment"],
     },
     "override": {
-        "input_table": f"{CATALOG}.valid_override_cbg",
-        "output_table": f"{CATALOG}.glycemic_endpoints_override",
+        "default_input_table": f"{CATALOG}.valid_override_cbg",
+        "default_output_table": f"{CATALOG}.glycemic_endpoints_override",
         "group_cols": [
             "_userId", "overridePreset",
             "brsf", "btl", "bth", "crsf", "issf",
@@ -127,28 +125,31 @@ MODE_CONFIG = {
         ],
     },
     "stable": {
-        "input_table": f"{CATALOG}.stable_autobolus_cbg",
-        "output_table": f"{CATALOG}.glycemic_endpoints_stable_autobolus",
+        "default_input_table": f"{CATALOG}.stable_autobolus_cbg",
+        "default_output_table": f"{CATALOG}.glycemic_endpoints_stable_autobolus",
         "group_cols": ["_userId", "segment"],
     },
 }
 
-# ---------------------------------------------------------------------------
-# Main execution
-# ---------------------------------------------------------------------------
 
-import argparse
+def run(spark, mode="transition", input_table=None, output_table=None):
+    if mode not in MODE_CONFIG:
+        raise ValueError(f"Unknown mode '{mode}'. Valid modes: {sorted(MODE_CONFIG)}")
 
-_parser = argparse.ArgumentParser()
-_parser.add_argument("--mode", default="transition")
-_args, _ = _parser.parse_known_args()
-MODE = _args.mode
+    cfg = MODE_CONFIG[mode]
+    input_table = input_table or cfg["default_input_table"]
+    output_table = output_table or cfg["default_output_table"]
 
-if MODE not in MODE_CONFIG:
-    raise ValueError(f"Unknown mode '{MODE}'. Valid modes: {sorted(MODE_CONFIG)}")
+    cbg_df = spark.table(input_table)
+    endpoints = compute_glycemic_endpoints(spark, cbg_df, group_cols=cfg["group_cols"])
+    endpoints.write.mode("overwrite").saveAsTable(output_table)
 
-cfg = MODE_CONFIG[MODE]
 
-cbg_df = spark.table(cfg["input_table"])
-endpoints = compute_glycemic_endpoints(spark, cbg_df, group_cols=cfg["group_cols"])
-endpoints.write.mode("overwrite").saveAsTable(cfg["output_table"])
+if __name__ == "__main__":
+    spark = spark  # type: ignore[name-defined]  # noqa: F841
+
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--mode", default="transition")
+    _args, _ = _parser.parse_known_args()
+
+    run(spark, mode=_args.mode)

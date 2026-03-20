@@ -1,12 +1,15 @@
-spark = spark  # type: ignore[name-defined]  # noqa: F841
-
-spark.sql("""
-CREATE OR REPLACE TABLE dev.fda_510k_rwd.loop_cbg AS
+def run(
+    spark,
+    input_table="dev.default.bddp_sample_all_2",
+    output_table="dev.fda_510k_rwd.loop_cbg",
+):
+    spark.sql(f"""
+CREATE OR REPLACE TABLE {output_table} AS
 
 WITH
 loop_users AS (
   SELECT DISTINCT _userId
-  FROM dev.default.bddp_sample_all_2
+  FROM {input_table}
   WHERE reason = 'loop'
 ),
 
@@ -15,10 +18,11 @@ cbg_raw AS (
     s._userId,
     TRY_CAST(s.created_timestamp AS TIMESTAMP) AS cbg_timestamp,
     (s.value * 18.018) AS cbg_mg_dl
-  FROM dev.default.bddp_sample_all_2 s
+  FROM {input_table} s
   INNER JOIN loop_users u ON s._userId = u._userId
   WHERE s.type = 'cbg'
     AND s.value IS NOT NULL
+    AND TRY_CAST(s.created_timestamp AS TIMESTAMP) IS NOT NULL
 ),
 
 cbg_bucketed AS (
@@ -46,3 +50,8 @@ cbg_deduped AS (
 SELECT _userId, cbg_timestamp, cbg_mg_dl
 FROM cbg_deduped
 """)
+
+
+if __name__ == "__main__":
+    spark = spark  # type: ignore[name-defined]  # noqa: F841
+    run(spark)

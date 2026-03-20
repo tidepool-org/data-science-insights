@@ -1,10 +1,17 @@
-import pandas as pd
+import argparse
 import json
 import traceback
 
-# Databricks runtime globals (available in notebook execution context)
-# pyright: reportMissingImports=false
-spark = spark  # type: ignore[name-defined]  # noqa: F841
+import pandas as pd
+from pyspark.sql.types import (
+    BooleanType,
+    DoubleType,
+    IntegerType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
+)
 
 # =============================================================================
 # GUARDRAILS (arbitrary values for now - update as needed)
@@ -502,66 +509,127 @@ def validate_pump_settings(df):
         print(f"SUMMARY: {len(errors)} rows failed out of {len(df)}")
         print(f"{'='*60}")
 
-    results_df = pd.DataFrame(results)
+    results_df = pd.DataFrame(results, columns=RESULTS_COLUMNS)
     errors_df = pd.DataFrame(errors) if errors else pd.DataFrame()
 
     return results_df, errors_df
 
+
+RESULTS_COLUMNS = [
+    "_userId", "settings_time",
+    "basal_rate_max", "basal_valid",
+    "basal_schedule_count", "basal_schedule_rate_min", "basal_schedule_rate_max", "basal_schedules_valid",
+    "bg_target_schedule_count", "bg_target_min", "bg_target_max", "bg_targets_valid",
+    "bg_target_preprandial_schedule_count", "bg_target_preprandial_min", "bg_target_preprandial_max", "bg_targets_preprandial_valid",
+    "bg_target_workout_schedule_count", "bg_target_workout_min", "bg_target_workout_max", "bg_targets_workout_valid",
+    "glucose_safety_limit", "glucose_safety_limit_valid",
+    "insulin_sensitivity_schedule_count", "insulin_sensitivity_min", "insulin_sensitivity_max", "insulin_sensitivity_valid",
+    "bolus_amount_max", "bolus_valid",
+    "carb_ratio_schedule_count", "carb_ratio_min", "carb_ratio_max", "carb_ratios_valid",
+    "all_valid", "violation_count", "violations",
+]
+
+RESULTS_SCHEMA = StructType([
+    StructField("_userId", StringType(), True),
+    StructField("settings_time", TimestampType(), True),
+    StructField("basal_rate_max", DoubleType(), True),
+    StructField("basal_valid", BooleanType(), True),
+    StructField("basal_schedule_count", IntegerType(), True),
+    StructField("basal_schedule_rate_min", DoubleType(), True),
+    StructField("basal_schedule_rate_max", DoubleType(), True),
+    StructField("basal_schedules_valid", BooleanType(), True),
+    StructField("bg_target_schedule_count", IntegerType(), True),
+    StructField("bg_target_min", DoubleType(), True),
+    StructField("bg_target_max", DoubleType(), True),
+    StructField("bg_targets_valid", BooleanType(), True),
+    StructField("bg_target_preprandial_schedule_count", IntegerType(), True),
+    StructField("bg_target_preprandial_min", DoubleType(), True),
+    StructField("bg_target_preprandial_max", DoubleType(), True),
+    StructField("bg_targets_preprandial_valid", BooleanType(), True),
+    StructField("bg_target_workout_schedule_count", IntegerType(), True),
+    StructField("bg_target_workout_min", DoubleType(), True),
+    StructField("bg_target_workout_max", DoubleType(), True),
+    StructField("bg_targets_workout_valid", BooleanType(), True),
+    StructField("glucose_safety_limit", DoubleType(), True),
+    StructField("glucose_safety_limit_valid", BooleanType(), True),
+    StructField("insulin_sensitivity_schedule_count", IntegerType(), True),
+    StructField("insulin_sensitivity_min", DoubleType(), True),
+    StructField("insulin_sensitivity_max", DoubleType(), True),
+    StructField("insulin_sensitivity_valid", BooleanType(), True),
+    StructField("bolus_amount_max", DoubleType(), True),
+    StructField("bolus_valid", BooleanType(), True),
+    StructField("carb_ratio_schedule_count", IntegerType(), True),
+    StructField("carb_ratio_min", DoubleType(), True),
+    StructField("carb_ratio_max", DoubleType(), True),
+    StructField("carb_ratios_valid", BooleanType(), True),
+    StructField("all_valid", BooleanType(), True),
+    StructField("violation_count", IntegerType(), True),
+    StructField("violations", StringType(), True),
+])
+
 # =============================================================================
-# MODE CONFIGURATION
+# RUN
 # =============================================================================
 
 CATALOG = "dev.fda_510k_rwd"
 
 MODE_CONFIG = {
     "transition": {
-        "sql": f"""
+        "sql_template": """
             SELECT s.*
-            FROM dev.default.bddp_sample_all_2 s
-            INNER JOIN {CATALOG}.valid_transition_segments vs
+            FROM {input_table} s
+            INNER JOIN {segments_table} vs
                 ON s._userId = vs._userId
                 AND TRY_CAST(s.created_timestamp AS DATE)
                     BETWEEN vs.tb_to_ab_seg1_start AND vs.tb_to_ab_seg2_end
             WHERE s.type = 'pumpSettings'
         """,
-        "output_table": f"{CATALOG}.valid_transition_guardrails",
+        "default_input_table": "dev.default.bddp_sample_all_2",
+        "default_segments_table": f"{CATALOG}.valid_transition_segments",
+        "default_output_table": f"{CATALOG}.valid_transition_guardrails",
     },
     "stable": {
-        "sql": f"""
+        "sql_template": """
             SELECT s.*
-            FROM dev.default.bddp_sample_all_2 s
-            INNER JOIN {CATALOG}.stable_autobolus_segments sa
+            FROM {input_table} s
+            INNER JOIN {segments_table} sa
                 ON s._userId = sa._userId
                 AND TRY_CAST(s.created_timestamp AS DATE)
                     BETWEEN sa.segment_start AND sa.segment_end
             WHERE s.type = 'pumpSettings'
         """,
-        "output_table": f"{CATALOG}.valid_stable_guardrails",
+        "default_input_table": "dev.default.bddp_sample_all_2",
+        "default_segments_table": f"{CATALOG}.stable_autobolus_segments",
+        "default_output_table": f"{CATALOG}.valid_stable_guardrails",
     },
 }
 
-# =============================================================================
-# MAIN EXECUTION
-# =============================================================================
 
-import argparse
+def run(spark, mode="transition", input_table=None, segments_table=None, output_table=None):
+    if mode not in MODE_CONFIG:
+        raise ValueError(f"Unknown mode '{mode}'. Valid modes: {sorted(MODE_CONFIG)}")
 
-_parser = argparse.ArgumentParser()
-_parser.add_argument("--mode", default="transition")
-_args, _ = _parser.parse_known_args()
-MODE = _args.mode
+    cfg = MODE_CONFIG[mode]
+    input_table = input_table or cfg["default_input_table"]
+    segments_table = segments_table or cfg["default_segments_table"]
+    output_table = output_table or cfg["default_output_table"]
 
-if MODE not in MODE_CONFIG:
-    raise ValueError(f"Unknown mode '{MODE}'. Valid modes: {sorted(MODE_CONFIG)}")
+    sql = cfg["sql_template"].format(input_table=input_table, segments_table=segments_table)
+    settings_df = spark.sql(sql).toPandas()
+    results_df, _ = validate_pump_settings(settings_df)
 
-cfg = MODE_CONFIG[MODE]
+    print(f"Total settings records: {len(results_df)}")
+    if len(results_df) > 0:
+        print(f"Records with violations: {(results_df['violation_count'] > 0).sum()}")
 
-settings_df = spark.sql(cfg["sql"]).toPandas()
-results_df, _ = validate_pump_settings(settings_df)
+    spark.createDataFrame(results_df, schema=RESULTS_SCHEMA).write.mode("overwrite").saveAsTable(output_table)
 
-print(f"Total settings records: {len(results_df)}")
-print(f"Records with violations: {(results_df['violation_count'] > 0).sum()}")
-print(f"Users with any violation: "
-      f"{results_df[results_df['violation_count'] > 0]['_userId'].nunique()}")
 
-spark.createDataFrame(results_df).write.mode("overwrite").saveAsTable(cfg["output_table"])
+if __name__ == "__main__":
+    spark = spark  # type: ignore[name-defined]  # noqa: F841
+
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--mode", default="transition")
+    _args, _ = _parser.parse_known_args()
+
+    run(spark, mode=_args.mode)
