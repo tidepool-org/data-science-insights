@@ -60,25 +60,25 @@ VALID_SETTINGS = {
 input_rows = [
     {  # Row 1: valid pump settings within segment window
         "_userId": "user_a",
-        "created_timestamp": "2025-01-10 08:00:00",
+        "time_string": "2025-01-10 08:00:00",
         "type": "pumpSettings",
         **VALID_SETTINGS,
     },
     {  # Row 2: settings with basal rate violation (35 > 30 max)
         "_userId": "user_a",
-        "created_timestamp": "2025-01-20 08:00:00",
+        "time_string": "2025-01-20 08:00:00",
         "type": "pumpSettings",
         **{**VALID_SETTINGS, "basal": json.dumps({"rateMaximum": {"value": 35.0}})},
     },
     {  # Row 3: settings outside segment window — excluded by join
         "_userId": "user_a",
-        "created_timestamp": "2025-02-15 08:00:00",
+        "time_string": "2025-02-15 08:00:00",
         "type": "pumpSettings",
         **VALID_SETTINGS,
     },
     {  # Row 4: non-pumpSettings type — excluded by WHERE
         "_userId": "user_a",
-        "created_timestamp": "2025-01-10 08:00:00",
+        "time_string": "2025-01-10 08:00:00",
         "type": "cbg",
         **VALID_SETTINGS,
     },
