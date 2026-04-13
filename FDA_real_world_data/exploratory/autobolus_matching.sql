@@ -1,6 +1,6 @@
 -- WITH loop_users AS (
---   SELECT 
---     `_userId`, 
+--   SELECT
+--     `_userId`,
 --     MIN(time_string) AS first_loop_time
 --   FROM dev.default.bddp_sample_all_2
 --   WHERE reason = 'loop'
@@ -29,7 +29,7 @@
 --   `_userId`,
 --   LEFT(time_string, 10) AS day
 -- FROM dev.default.bddp_sample_all_2
--- WHERE 
+-- WHERE
 --   type = 'bolus'
 --   AND subType = 'automated'
 -- GROUP BY
@@ -52,90 +52,118 @@
 --   `_userId`,
 --   day;
 
--- Boluses with a dosingDecision within 30 seconds that has a non-loop reason
+-- -- Boluses with a dosingDecision within 30 seconds that has a non-loop reason
+-- WITH boluses AS (
+--   SELECT
+--     `_userId`,
+--     time_string,
+--     TRY_CAST(time_string AS TIMESTAMP) AS bolus_ts,
+--     type,
+--     subType,
+--     normal,
+--     recommendedBolus
+--   FROM dev.default.bddp_sample_all_2
+--   WHERE type = 'bolus' or type = 'basal'
+-- ),
+--
+-- dosing_decisions AS (
+--   SELECT
+--     `_userId`,
+--     time_string,
+--     TRY_CAST(time_string AS TIMESTAMP) AS dd_ts,
+--     reason,
+--     recommendedBolus AS dd_recommendedBolus,
+--     recommendedBasal AS dd_recommendedBasal
+--   FROM dev.default.bddp_sample_all_2
+--   WHERE
+--     type = 'dosingDecision'
+-- ),
+--
+-- matched_pairs AS (
+--   SELECT
+--     b.`_userId`,
+--     b.time_string AS bolus_time,
+--     b.bolus_ts,
+--     b.type,
+--     b.subType,
+--     b.normal,
+--     b.recommendedBolus,
+--     dd.time_string AS dd_time,
+--     dd.dd_ts,
+--     dd.reason AS dd_reason,
+--     dd.dd_recommendedBolus,
+--     dd.dd_recommendedBasal
+--   FROM boluses b
+--   INNER JOIN dosing_decisions dd
+--     ON b.`_userId` = dd.`_userId`
+--     AND LEFT(b.time_string, 10) = LEFT(dd.time_string, 10)
+--     AND TIMESTAMPDIFF(SECOND, dd.dd_ts, b.bolus_ts) BETWEEN 0 AND 30
+-- )
+--
+-- SELECT
+--   `_userId`,
+--   time_string,
+--   record_type,
+--   subType,
+--   reason,
+--   normal,
+--   recommendedBolus,
+--   recommendedBasal
+-- FROM (
+--   SELECT DISTINCT
+--     `_userId`,
+--     bolus_time AS time_string,
+--     type AS record_type,
+--     subType,
+--     NULL AS reason,
+--     normal,
+--     recommendedBolus,
+--     NULL AS recommendedBasal
+--   FROM matched_pairs
+--
+--   UNION ALL
+--
+--   SELECT DISTINCT
+--     `_userId`,
+--     dd_time AS time_string,
+--     'dosingDecision' AS record_type,
+--     NULL AS subType,
+--     dd_reason AS reason,
+--     NULL AS normal,
+--     dd_recommendedBolus AS recommendedBolus,
+--     dd_recommendedBasal AS recommendedBasal
+--   FROM matched_pairs
+-- )
+-- ORDER BY
+--   `_userId`,
+--   time_string
+
+-- User-days with at least one bolus matched to a dosingDecision with reason='loop'
 WITH boluses AS (
   SELECT
     `_userId`,
     time_string,
-    TRY_CAST(time_string AS TIMESTAMP) AS bolus_ts,
-    type,
-    subType,
-    normal,
-    recommendedBolus
+    TRY_CAST(time_string AS TIMESTAMP) AS bolus_ts
   FROM dev.default.bddp_sample_all_2
-  WHERE type = 'bolus' or type = 'basal'
+  WHERE type = 'bolus'
 ),
 
-dosing_decisions AS (
+loop_decisions AS (
   SELECT
     `_userId`,
-    time_string,
-    TRY_CAST(time_string AS TIMESTAMP) AS dd_ts,
-    reason,
-    recommendedBolus AS dd_recommendedBolus,
-    recommendedBasal AS dd_recommendedBasal
+    TRY_CAST(time_string AS TIMESTAMP) AS dd_ts
   FROM dev.default.bddp_sample_all_2
-  WHERE
-    type = 'dosingDecision'
-    -- AND reason != 'loop'
-    -- AND reason != 'updateRemoteRecommendatio n'
-),
-
-matched_pairs AS (
-  SELECT
-    b.`_userId`,
-    b.time_string AS bolus_time,
-    b.bolus_ts,
-    b.type,
-    b.subType,
-    b.normal,
-    b.recommendedBolus,
-    dd.time_string AS dd_time,
-    dd.dd_ts,
-    dd.reason AS dd_reason,
-    dd.dd_recommendedBolus,
-    dd.dd_recommendedBasal
-  FROM boluses b
-  INNER JOIN dosing_decisions dd
-    ON b.`_userId` = dd.`_userId`
-    AND LEFT(b.time_string, 10) = LEFT(dd.time_string, 10)
-    AND TIMESTAMPDIFF(SECOND, dd.dd_ts, b.bolus_ts) BETWEEN 0 AND 30
+  WHERE type = 'dosingDecision'
+    AND reason = 'loop'
 )
 
-SELECT
-  `_userId`,
-  time_string,
-  record_type,
-  subType,
-  reason,
-  normal,
-  recommendedBolus,
-  recommendedBasal
-FROM (
-  SELECT DISTINCT
-    `_userId`,
-    bolus_time AS time_string,
-    type AS record_type,
-    subType,
-    NULL AS reason,
-    normal,
-    recommendedBolus,
-    NULL AS recommendedBasal
-  FROM matched_pairs
-
-  UNION ALL
-
-  SELECT DISTINCT
-    `_userId`,
-    dd_time AS time_string,
-    'dosingDecision' AS record_type,
-    NULL AS subType,
-    dd_reason AS reason,
-    NULL AS normal,
-    dd_recommendedBolus AS recommendedBolus,
-    dd_recommendedBasal AS recommendedBasal
-  FROM matched_pairs
-)
+SELECT DISTINCT
+  b.`_userId`,
+  LEFT(b.time_string, 10) AS day
+FROM boluses b
+INNER JOIN loop_decisions dd
+  ON b.`_userId` = dd.`_userId`
+  AND TIMESTAMPDIFF(SECOND, dd.dd_ts, b.bolus_ts) BETWEEN 0 AND 30
 ORDER BY
-  `_userId`,
-  time_string
+  b.`_userId`,
+  day
