@@ -6,7 +6,7 @@ import pandas as pd
 from pyspark.sql.types import (
     BooleanType,
     DoubleType,
-    IntegerType,
+    LongType,
     StringType,
     StructField,
     StructType,
@@ -62,7 +62,7 @@ GUARDRAILS = {
 def _parse_timestamp(value):
     """Parse a timestamp value from bddp_sample_all_2.
 
-    The `created_timestamp` column is a plain string timestamp.
+    The `time_string` column is a plain string timestamp.
     After toPandas() it arrives as a pandas Timestamp or a string.
     Returns a tz-aware pandas Timestamp (UTC), or pd.NaT on failure.
     """
@@ -377,146 +377,121 @@ def check_carb_ratios(ratios_json):
 # MAIN PROCESSING
 # =============================================================================
 
-def validate_pump_settings(df):
-    """
-    Validate pump settings DataFrame against guardrails.
+def validate_pump_settings_row(row):
+    """Validate a single pump settings row. Returns a dict or None on error."""
+    user_id = row.get('_userId')
 
-    Expects columns: _userId, basal, basalSchedules, bgTargets,
-                     bgTargetsPreprandial, bgTargetsWorkout,
-                     bgSafetyLimit, insulinSensitivities,
-                     bolus, carbRatios
-    (adjust column names as needed based on your actual schema)
-    """
+    try:
+        basal_check = check_basal(row.get('basal'))
+        schedules_check = check_basal_schedules(row.get('basalSchedules'))
+        targets_check = check_bg_targets(row.get('bgTargets'))
+        preprandial_check = check_bg_targets_preprandial(row.get('bgTargetsPreprandial'))
+        workout_check = check_bg_targets_workout(row.get('bgTargetsWorkout'))
+        safety_check = check_glucose_safety_limit(row.get('bgSafetyLimit'))
+        sensitivity_check = check_insulin_sensitivity(row.get('insulinSensitivities'))
+        bolus_check = check_bolus(row.get('bolus'))
+        carb_check = check_carb_ratios(row.get('carbRatios'))
 
+    except Exception as e:
+        print(f"\nERROR processing _userId={user_id}: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        return None
+
+    all_violations = (
+        ([basal_check['violation']] if basal_check['violation'] else []) +
+        schedules_check['violations'] +
+        targets_check['violations'] +
+        preprandial_check['violations'] +
+        workout_check['violations'] +
+        ([safety_check['violation']] if safety_check['violation'] else []) +
+        sensitivity_check['violations'] +
+        bolus_check['violations'] +
+        carb_check['violations']
+    )
+
+    validity_flags = [
+        basal_check['valid'],
+        schedules_check['valid'],
+        targets_check['valid'],
+        preprandial_check['valid'],
+        workout_check['valid'],
+        safety_check['valid'],
+        sensitivity_check['valid'],
+        bolus_check['valid'],
+        carb_check['valid'],
+    ]
+
+    return {
+        '_userId': user_id,
+        'settings_time': _parse_timestamp(row.get('time_string')),
+        'segment_start': str(row.get('segment_start')) if row.get('segment_start') is not None else None,
+        'segment_end': str(row.get('segment_end')) if row.get('segment_end') is not None else None,
+
+        'basal_rate_max': basal_check['rate_maximum'],
+        'basal_valid': basal_check['valid'],
+
+        'basal_schedule_count': schedules_check['schedule_count'],
+        'basal_schedule_rate_min': schedules_check['rate_min'],
+        'basal_schedule_rate_max': schedules_check['rate_max'],
+        'basal_schedules_valid': schedules_check['valid'],
+
+        'bg_target_schedule_count': targets_check['schedule_count'],
+        'bg_target_min': targets_check['target_min'],
+        'bg_target_max': targets_check['target_max'],
+        'bg_targets_valid': targets_check['valid'],
+
+        'bg_target_preprandial_schedule_count': preprandial_check['schedule_count'],
+        'bg_target_preprandial_min': preprandial_check['target_min'],
+        'bg_target_preprandial_max': preprandial_check['target_max'],
+        'bg_targets_preprandial_valid': preprandial_check['valid'],
+
+        'bg_target_workout_schedule_count': workout_check['schedule_count'],
+        'bg_target_workout_min': workout_check['target_min'],
+        'bg_target_workout_max': workout_check['target_max'],
+        'bg_targets_workout_valid': workout_check['valid'],
+
+        'glucose_safety_limit': safety_check['value'],
+        'glucose_safety_limit_valid': safety_check['valid'],
+
+        'insulin_sensitivity_schedule_count': sensitivity_check['schedule_count'],
+        'insulin_sensitivity_min': sensitivity_check['sensitivity_min'],
+        'insulin_sensitivity_max': sensitivity_check['sensitivity_max'],
+        'insulin_sensitivity_valid': sensitivity_check['valid'],
+
+        'bolus_amount_max': bolus_check['amount_maximum'],
+        'bolus_valid': bolus_check['valid'],
+
+        'carb_ratio_schedule_count': carb_check['schedule_count'],
+        'carb_ratio_min': carb_check['ratio_min'],
+        'carb_ratio_max': carb_check['ratio_max'],
+        'carb_ratios_valid': carb_check['valid'],
+
+        'all_valid': all(v in {True, None} for v in validity_flags),
+        'violation_count': len(all_violations),
+        'violations': '; '.join(all_violations) if all_violations else None,
+    }
+
+
+def validate_pump_settings_partition(pdf):
+    """Validate a pandas partition of pump settings rows.
+
+    Used with Spark's groupBy().applyInPandas() to distribute
+    processing across the cluster instead of collecting to driver.
+    """
     results = []
-    errors = []
+    for _, row in pdf.iterrows():
+        result = validate_pump_settings_row(row)
+        if result is not None:
+            results.append(result)
 
-    for idx, row in df.iterrows():
-        user_id = row.get('_userId')
+    if not results:
+        return pd.DataFrame(columns=RESULTS_COLUMNS)
 
-        try:
-            basal_check = check_basal(row.get('basal'))
-            schedules_check = check_basal_schedules(row.get('basalSchedules'))
-            targets_check = check_bg_targets(row.get('bgTargets'))
-            preprandial_check = check_bg_targets_preprandial(row.get('bgTargetsPreprandial'))
-            workout_check = check_bg_targets_workout(row.get('bgTargetsWorkout'))
-            safety_check = check_glucose_safety_limit(row.get('bgSafetyLimit'))
-            sensitivity_check = check_insulin_sensitivity(row.get('insulinSensitivities'))
-            bolus_check = check_bolus(row.get('bolus'))
-            carb_check = check_carb_ratios(row.get('carbRatios'))
-
-        except Exception as e:
-            print(f"\n{'='*60}")
-            print(f"ERROR processing row {idx}, _userId={user_id}")
-            print(f"Exception: {type(e).__name__}: {e}")
-            print(f"{'='*60}")
-            for col in ['basal', 'basalSchedules', 'bgTargets', 'bgTargetsPreprandial',
-                         'bgTargetsWorkout', 'bgSafetyLimit', 'insulinSensitivities',
-                         'bolus', 'carbRatios']:
-                val = row.get(col)
-                print(f"  {col}: type={type(val).__name__}, value={repr(val)[:200]}")
-            traceback.print_exc()
-            print()
-
-            errors.append({'_userId': user_id, 'row_index': idx, 'error': str(e)})
-            continue
-
-        # Aggregate all violations
-        all_violations = (
-            ([basal_check['violation']] if basal_check['violation'] else []) +
-            schedules_check['violations'] +
-            targets_check['violations'] +
-            preprandial_check['violations'] +
-            workout_check['violations'] +
-            ([safety_check['violation']] if safety_check['violation'] else []) +
-            sensitivity_check['violations'] +
-            bolus_check['violations'] +
-            carb_check['violations']
-        )
-
-        validity_flags = [
-            basal_check['valid'],
-            schedules_check['valid'],
-            targets_check['valid'],
-            preprandial_check['valid'],
-            workout_check['valid'],
-            safety_check['valid'],
-            sensitivity_check['valid'],
-            bolus_check['valid'],
-            carb_check['valid'],
-        ]
-
-        results.append({
-            '_userId': user_id,
-            'settings_time': _parse_timestamp(row.get('created_timestamp')),
-
-            # Max Basal Delivery Rate
-            'basal_rate_max': basal_check['rate_maximum'],
-            'basal_valid': basal_check['valid'],
-
-            # Scheduled Basal Rates
-            'basal_schedule_count': schedules_check['schedule_count'],
-            'basal_schedule_rate_min': schedules_check['rate_min'],
-            'basal_schedule_rate_max': schedules_check['rate_max'],
-            'basal_schedules_valid': schedules_check['valid'],
-
-            # Correction Range
-            'bg_target_schedule_count': targets_check['schedule_count'],
-            'bg_target_min': targets_check['target_min'],
-            'bg_target_max': targets_check['target_max'],
-            'bg_targets_valid': targets_check['valid'],
-
-            # Preprandial Targets
-            'bg_target_preprandial_schedule_count': preprandial_check['schedule_count'],
-            'bg_target_preprandial_min': preprandial_check['target_min'],
-            'bg_target_preprandial_max': preprandial_check['target_max'],
-            'bg_targets_preprandial_valid': preprandial_check['valid'],
-
-            # Workout Targets
-            'bg_target_workout_schedule_count': workout_check['schedule_count'],
-            'bg_target_workout_min': workout_check['target_min'],
-            'bg_target_workout_max': workout_check['target_max'],
-            'bg_targets_workout_valid': workout_check['valid'],
-
-            # Glucose Safety Limit
-            'glucose_safety_limit': safety_check['value'],
-            'glucose_safety_limit_valid': safety_check['valid'],
-
-            # Insulin Sensitivity
-            'insulin_sensitivity_schedule_count': sensitivity_check['schedule_count'],
-            'insulin_sensitivity_min': sensitivity_check['sensitivity_min'],
-            'insulin_sensitivity_max': sensitivity_check['sensitivity_max'],
-            'insulin_sensitivity_valid': sensitivity_check['valid'],
-
-            # Max Bolus Delivery Limit
-            'bolus_amount_max': bolus_check['amount_maximum'],
-            'bolus_valid': bolus_check['valid'],
-
-            # Carbohydrate Ratio
-            'carb_ratio_schedule_count': carb_check['schedule_count'],
-            'carb_ratio_min': carb_check['ratio_min'],
-            'carb_ratio_max': carb_check['ratio_max'],
-            'carb_ratios_valid': carb_check['valid'],
-
-            # Overall
-            'all_valid': all(v in {True, None} for v in validity_flags),
-            'violation_count': len(all_violations),
-            'violations': '; '.join(all_violations) if all_violations else None,
-        })
-
-    if errors:
-        print(f"\n{'='*60}")
-        print(f"SUMMARY: {len(errors)} rows failed out of {len(df)}")
-        print(f"{'='*60}")
-
-    results_df = pd.DataFrame(results, columns=RESULTS_COLUMNS)
-    errors_df = pd.DataFrame(errors) if errors else pd.DataFrame()
-
-    return results_df, errors_df
+    return pd.DataFrame(results, columns=RESULTS_COLUMNS)
 
 
 RESULTS_COLUMNS = [
-    "_userId", "settings_time",
+    "_userId", "settings_time", "segment_start", "segment_end",
     "basal_rate_max", "basal_valid",
     "basal_schedule_count", "basal_schedule_rate_min", "basal_schedule_rate_max", "basal_schedules_valid",
     "bg_target_schedule_count", "bg_target_min", "bg_target_max", "bg_targets_valid",
@@ -532,38 +507,40 @@ RESULTS_COLUMNS = [
 RESULTS_SCHEMA = StructType([
     StructField("_userId", StringType(), True),
     StructField("settings_time", TimestampType(), True),
+    StructField("segment_start", StringType(), True),
+    StructField("segment_end", StringType(), True),
     StructField("basal_rate_max", DoubleType(), True),
     StructField("basal_valid", BooleanType(), True),
-    StructField("basal_schedule_count", IntegerType(), True),
+    StructField("basal_schedule_count", LongType(), True),
     StructField("basal_schedule_rate_min", DoubleType(), True),
     StructField("basal_schedule_rate_max", DoubleType(), True),
     StructField("basal_schedules_valid", BooleanType(), True),
-    StructField("bg_target_schedule_count", IntegerType(), True),
+    StructField("bg_target_schedule_count", LongType(), True),
     StructField("bg_target_min", DoubleType(), True),
     StructField("bg_target_max", DoubleType(), True),
     StructField("bg_targets_valid", BooleanType(), True),
-    StructField("bg_target_preprandial_schedule_count", IntegerType(), True),
+    StructField("bg_target_preprandial_schedule_count", LongType(), True),
     StructField("bg_target_preprandial_min", DoubleType(), True),
     StructField("bg_target_preprandial_max", DoubleType(), True),
     StructField("bg_targets_preprandial_valid", BooleanType(), True),
-    StructField("bg_target_workout_schedule_count", IntegerType(), True),
+    StructField("bg_target_workout_schedule_count", LongType(), True),
     StructField("bg_target_workout_min", DoubleType(), True),
     StructField("bg_target_workout_max", DoubleType(), True),
     StructField("bg_targets_workout_valid", BooleanType(), True),
     StructField("glucose_safety_limit", DoubleType(), True),
     StructField("glucose_safety_limit_valid", BooleanType(), True),
-    StructField("insulin_sensitivity_schedule_count", IntegerType(), True),
+    StructField("insulin_sensitivity_schedule_count", LongType(), True),
     StructField("insulin_sensitivity_min", DoubleType(), True),
     StructField("insulin_sensitivity_max", DoubleType(), True),
     StructField("insulin_sensitivity_valid", BooleanType(), True),
     StructField("bolus_amount_max", DoubleType(), True),
     StructField("bolus_valid", BooleanType(), True),
-    StructField("carb_ratio_schedule_count", IntegerType(), True),
+    StructField("carb_ratio_schedule_count", LongType(), True),
     StructField("carb_ratio_min", DoubleType(), True),
     StructField("carb_ratio_max", DoubleType(), True),
     StructField("carb_ratios_valid", BooleanType(), True),
     StructField("all_valid", BooleanType(), True),
-    StructField("violation_count", IntegerType(), True),
+    StructField("violation_count", LongType(), True),
     StructField("violations", StringType(), True),
 ])
 
@@ -576,13 +553,21 @@ CATALOG = "dev.fda_510k_rwd"
 MODE_CONFIG = {
     "transition": {
         "sql_template": """
-            SELECT s.*
-            FROM {input_table} s
-            INNER JOIN {segments_table} vs
-                ON s._userId = vs._userId
-                AND TRY_CAST(s.created_timestamp AS DATE)
-                    BETWEEN vs.tb_to_ab_seg1_start AND vs.tb_to_ab_seg2_end
-            WHERE s.type = 'pumpSettings'
+            WITH segments AS (
+                SELECT _userId, tb_to_ab_seg1_start, tb_to_ab_seg2_end
+                FROM {segments_table}
+            ),
+            pump_settings AS (
+                SELECT *
+                FROM {input_table}
+                WHERE type = 'pumpSettings'
+            )
+            SELECT ps.*, seg.tb_to_ab_seg1_start AS segment_start, seg.tb_to_ab_seg2_end AS segment_end
+            FROM pump_settings ps
+            INNER JOIN segments seg
+                ON ps._userId = seg._userId
+                AND TRY_CAST(ps.time_string AS DATE)
+                    BETWEEN seg.tb_to_ab_seg1_start AND seg.tb_to_ab_seg2_end
         """,
         "default_input_table": "dev.default.bddp_sample_all_2",
         "default_segments_table": f"{CATALOG}.valid_transition_segments",
@@ -590,13 +575,21 @@ MODE_CONFIG = {
     },
     "stable": {
         "sql_template": """
-            SELECT s.*
-            FROM {input_table} s
-            INNER JOIN {segments_table} sa
-                ON s._userId = sa._userId
-                AND TRY_CAST(s.created_timestamp AS DATE)
+            WITH all_segments AS (
+                SELECT _userId, segment_start, segment_end
+                FROM {segments_table}
+            ),
+            pump_settings AS (
+                SELECT *
+                FROM {input_table}
+                WHERE type = 'pumpSettings'
+            )
+            SELECT ps.*, sa.segment_start, sa.segment_end
+            FROM pump_settings ps
+            INNER JOIN all_segments sa
+                ON ps._userId = sa._userId
+                AND TRY_CAST(ps.time_string AS DATE)
                     BETWEEN sa.segment_start AND sa.segment_end
-            WHERE s.type = 'pumpSettings'
         """,
         "default_input_table": "dev.default.bddp_sample_all_2",
         "default_segments_table": f"{CATALOG}.stable_autobolus_segments",
@@ -615,14 +608,24 @@ def run(spark, mode="transition", input_table=None, segments_table=None, output_
     output_table = output_table or cfg["default_output_table"]
 
     sql = cfg["sql_template"].format(input_table=input_table, segments_table=segments_table)
-    settings_df = spark.sql(sql).toPandas()
-    results_df, _ = validate_pump_settings(settings_df)
+    spark_df = spark.sql(sql)
 
-    print(f"Total settings records: {len(results_df)}")
-    if len(results_df) > 0:
-        print(f"Records with violations: {(results_df['violation_count'] > 0).sum()}")
+    row_count = spark_df.count()
+    print(f"Rows from join: {row_count}")
 
-    spark.createDataFrame(results_df, schema=RESULTS_SCHEMA).write.mode("overwrite").saveAsTable(output_table)
+    results_df = (
+        spark_df
+        .groupBy("_userId")
+        .applyInPandas(validate_pump_settings_partition, schema=RESULTS_SCHEMA)
+    )
+
+    results_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+
+    written = spark.table(output_table)
+    total = written.count()
+    violations = written.filter("violation_count > 0").count()
+    print(f"Total settings records: {total}")
+    print(f"Records with violations: {violations}")
 
 
 if __name__ == "__main__":
