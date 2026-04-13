@@ -16,22 +16,22 @@ loop_users AS (
 cbg_raw AS (
   SELECT
     s._userId,
-    TRY_CAST(s.created_timestamp AS TIMESTAMP) AS cbg_timestamp,
+    TRY_CAST(s.time_string AS TIMESTAMP) AS cbg_timestamp,
     (s.value * 18.018) AS cbg_mg_dl
   FROM {input_table} s
   INNER JOIN loop_users u ON s._userId = u._userId
   WHERE s.type = 'cbg'
     AND s.value IS NOT NULL
-    AND TRY_CAST(s.created_timestamp AS TIMESTAMP) IS NOT NULL
+    AND TRY_CAST(s.time_string AS TIMESTAMP) IS NOT NULL
 ),
 
 cbg_bucketed AS (
   SELECT
     *,
+    cbg_mg_dl BETWEEN 38 AND 500 AS is_plausible,
     DATE_TRUNC('hour', cbg_timestamp)
       + INTERVAL '5' MINUTE * FLOOR(MINUTE(cbg_timestamp) / 5) AS cbg_bucket
   FROM cbg_raw
-  WHERE cbg_mg_dl BETWEEN 38 AND 500
 ),
 
 cbg_deduped AS (
@@ -47,7 +47,7 @@ cbg_deduped AS (
   WHERE rn = 1
 )
 
-SELECT _userId, cbg_timestamp, cbg_mg_dl
+SELECT _userId, cbg_timestamp, cbg_mg_dl, is_plausible
 FROM cbg_deduped
 """)
 
