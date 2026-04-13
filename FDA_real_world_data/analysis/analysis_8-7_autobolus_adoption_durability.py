@@ -39,25 +39,48 @@ OUTPUT_DIR = "outputs/analysis_8_7"
 
 
 def load_durability(spark) -> pd.DataFrame:
-    """Load the autobolus durability table."""
+    """Load the autobolus durability table, filtered to qualified users."""
     df = spark.table("dev.fda_510k_rwd.autobolus_durability").toPandas()
+
+    n_total = len(df)
+    df = df[
+        (df["is_adopted"] == True)  # noqa: E712
+        & (df["has_min_followup"] == True)  # noqa: E712
+        & (df["has_final_coverage"] == True)  # noqa: E712
+        & (df["is_age_eligible"] == True)  # noqa: E712
+    ].copy()
 
     for col in df.select_dtypes(include=["object"]).columns:
         if col not in ("_userId", "gender"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    print(f"  Loaded {len(df)} qualified users")
+    print(f"  Loaded {len(df)} qualified users (from {n_total} total)")
     return df
 
 
 def load_event_times(spark) -> pd.DataFrame:
-    """Load pre-computed KM event times from SQL."""
+    """Load weekly event times, reduce to one row per user for KM curve."""
     df = spark.table("dev.fda_510k_rwd.autobolus_event_times").toPandas()
-    df["time"] = pd.to_numeric(df["time"], errors="coerce")
-    df["event"] = df["event"].astype(bool)
-    print(f"  Loaded {len(df)} users ({df['event'].sum()} events, "
-          f"{(~df['event']).sum()} censored)")
-    return df
+
+    # For users with a discontinuation event, take the event week.
+    # For censored users, take the max observed week.
+    event_users = df[df["is_event_week"] == True].drop_duplicates(subset="_userId", keep="first")  # noqa: E712
+    censored_users = df[df["has_discontinuation"] == False].groupby("_userId").agg(  # noqa: E712
+        week_post_adoption=("week_post_adoption", "max")
+    ).reset_index()
+    censored_users = censored_users[~censored_users["_userId"].isin(event_users["_userId"])]
+
+    event_users = event_users[["_userId", "week_post_adoption"]].copy()
+    event_users["event"] = True
+    censored_users["event"] = False
+
+    result = pd.concat([event_users, censored_users], ignore_index=True)
+    result = result.rename(columns={"week_post_adoption": "time"})
+    result["time"] = pd.to_numeric(result["time"], errors="coerce")
+
+    print(f"  Loaded {len(result)} users ({result['event'].sum()} events, "
+          f"{(~result['event']).sum()} censored)")
+    return result
 
 
 
