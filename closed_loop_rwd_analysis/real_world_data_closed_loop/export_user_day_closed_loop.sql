@@ -119,10 +119,11 @@ daily_ranges AS (
         CAST(SUM(CASE WHEN cbg_mg_dl > 250 THEN 1 ELSE 0 END)
             * 100.0 / COUNT(*) AS DOUBLE) AS tar_very_high,
         CAST(AVG(cbg_mg_dl) AS DOUBLE) AS mean_glucose,
-        CAST(STDDEV(cbg_mg_dl) * 100.0 / AVG(cbg_mg_dl) AS DOUBLE) AS cv
+        CAST(STDDEV(cbg_mg_dl) * 100.0 / AVG(cbg_mg_dl) AS DOUBLE) AS cv,
+        CAST(COUNT(*) * 1.0 / 288 AS DOUBLE) AS cbg_coverage
     FROM cbg
     GROUP BY _userId, day
-    HAVING COUNT(*) >= 200
+    HAVING COUNT(*) * 1.0 / 288 > 0.70  -- >70% of 288 possible 5-min readings
 ),
 
 classified_days AS (
