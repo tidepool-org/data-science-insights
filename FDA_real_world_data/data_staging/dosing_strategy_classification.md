@@ -4,6 +4,8 @@
 
 We need to classify each user-day as either **autobolus (AB)** or **temp basal (TB)** based on how Loop was delivering automated insulin. We have two independent methods for making this classification, each relying on different data in the `bddp` table.
 
+Implementation: [export_loop_recommendations.py](https://github.com/tidepool-org/data-science-insights/blob/master/FDA_real_world_data/data_staging/export_loop_recommendations.py)
+
 ---
 
 ## Method 1: dosingDecision matching
@@ -73,7 +75,7 @@ This method depends on HealthKit metadata being present. Not all records may hav
 
 ## Combined approach
 
-The merged query (`export_loop_recommendations.py`) unions the results from both methods. A day is classified as:
+The combined query unions the results from both methods. A day is classified as:
 
 - **autobolus** if **either** method detects an automated bolus on that day
 - **temp_basal** if **either** method detects automated basals but **neither** detects an automated bolus
