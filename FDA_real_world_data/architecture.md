@@ -6,9 +6,11 @@
 FDA_real_world_data/
 ├── fda_analysis_pipeline.yml          — Databricks job DAG (task dependencies)
 ├── data_staging/                      — SQL-based data transformation scripts
-│   ├── export_loop_recommendations.py          — Extract Loop recs (basal vs bolus)
+│   ├── export_loop_recommendations.py          — Extract Loop recs (basal vs bolus, per-row)
+│   ├── export_loop_recommendation_day.py       — Classify user-days as autobolus/temp_basal (dosingDecision match)
 │   ├── export_cbg_from_loop.py                 — Extract + deduplicate CBG readings
-│   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window)
+│   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window, row-level)
+│   ├── export_valid_transition_segments_day.py  — Identify TB→AB transitions (day-level counts from loop_recommendation_day)
 │   ├── export_stable_autobolus_segments.py      — Identify 14-day stable AB periods
 │   ├── export_segments_within_guardrails.py     — Validate pump settings against FDA guardrails
 │   ├── export_autobolus_durability.py           — Track adoption + discontinuation
@@ -39,22 +41,25 @@ FDA_real_world_data/
 │   ├── run_all_tests.py           — Glob + execute all test_*.py, report pass/fail
 │   ├── staging_test_helpers.py    — setup_test_table(), read_test_output(), assert_row_count(), make_loop_recs()
 │   ├── create_test_loop_data.py   — Synthetic loop data generator
-│   └── test_export_*.py           — One test file per staging script (12 total)
+│   └── test_export_*.py           — One test file per staging script (13 total)
 │
 └── exploratory/
-    ├── autobolus_frequency.py     — Ad-hoc autobolus frequency analysis
-    └── autobolus_matching.sql     — Match bolus/basal to dosingDecision within 30s
+    ├── autobolus_frequency.py              — Ad-hoc autobolus frequency analysis
+    ├── autobolus_matching.sql              — Match bolus to loop dosingDecision within ±5s
+    └── autobolus_labeling_comparison.py   — Compare 3 autobolus labeling methods (subType, recommendedBolus, dosingDecision match)
 ```
 
 ## Pipeline DAG
 
 ```
 Phase 1: Base Tables
-  export_cbg_from_loop         → loop_cbg
-  export_loop_recommendations  → loop_recommendations
+  export_cbg_from_loop            → loop_cbg
+  export_loop_recommendations     → loop_recommendations (per-row classification)
+  export_loop_recommendation_day  → loop_recommendation_day (per-day classification via dosingDecision match)
 
 Phase 2: Segment Extraction
-  export_valid_transition_segments   → valid_transition_segments
+  export_valid_transition_segments       → valid_transition_segments (from loop_recommendations, row-level)
+  export_valid_transition_segments_day   → valid_transition_segments_day (from loop_recommendation_day, day-level)
   export_stable_autobolus_segments   → stable_autobolus_segments
   export_autobolus_durability        → autobolus_durability
     → export_autobolus_event_times   → autobolus_event_times
@@ -95,6 +100,8 @@ Phase 4: Adoption
 
 ### Autobolus vs Temp Basal
 Two dosing modes in Loop: temp basal modulates basal rate; autobolus recommends bolus. A recommendation is one or the other, never both.
+
+**Day-level classification** (`export_loop_recommendation_day`): matches bolus/basal delivery records to `dosingDecision` records with `reason='loop'` within ±5 seconds. A day is `'autobolus'` if any bolus matches; `'temp_basal'` if only basal records match. This is more precise than the row-level `recommendedBolus IS NOT NULL` approach in `export_loop_recommendations`, which picks up manual bolus wizard use.
 
 ### Adoption & Durability
 - **Adoption:** ≥80% autobolus over 3-day rolling window
@@ -145,8 +152,10 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 
 | Task | File |
 |------|------|
+| Day-level AB/TB classification | `export_loop_recommendation_day.py` |
 | CBG extraction + dedup | `export_cbg_from_loop.py` |
-| TB→AB transition detection | `export_valid_transition_segments.py` |
+| TB→AB transition detection (row-level) | `export_valid_transition_segments.py` |
+| TB→AB transition detection (day-level) | `export_valid_transition_segments_day.py` |
 | Stable AB period detection | `export_stable_autobolus_segments.py` |
 | Adoption + discontinuation | `export_autobolus_durability.py` + `export_autobolus_event_times.py` |
 | Pump settings validation | `export_segments_within_guardrails.py` |

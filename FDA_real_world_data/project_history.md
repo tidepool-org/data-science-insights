@@ -4,6 +4,44 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-04-10: Autobolus labeling investigation + day-level classification
+
+### Autobolus labeling comparison
+- Compared three methods of identifying autobolus user-days:
+  - Method 1 (`subType='automated'`): 1.5M days — too broad, includes automated basal adjustments
+  - Method 2 (`recommendedBolus IS NOT NULL`): 278K days — current approach, picks up manual bolus wizard use
+  - Method 3 (bolus matched to loop dosingDecision within ±5s): 226K days — most precise
+- Methods 2 and 3 overlap 99.7% on loop-matched days; 52K extra in Method 2 are manual bolus wizard
+- Created `exploratory/autobolus_labeling_comparison.py` to run and report the comparison
+
+### New: `export_loop_recommendation_day.py`
+- Day-level classification using Method 3 (dosingDecision temporal matching)
+- Matches bolus/basal records to `dosingDecision` with `reason='loop'` within ±5 seconds
+- Day is `'autobolus'` if any bolus matches; `'temp_basal'` if only basal matches
+- Output: `dev.fda_510k_rwd.loop_recommendation_day` (`_userId`, `day`, `day_type`)
+- Sits alongside existing row-level `loop_recommendations` table (downstream scripts still need per-row aggregation)
+- Same-day pre-filter in JOIN for performance
+- Added `testing/test_export_loop_recommendation_day.py` (13 test rows, 7 behaviors)
+
+### New: `export_valid_transition_segments_day.py`
+- Day-level counterpart to `export_valid_transition_segments.py`
+- Reads from `loop_recommendation_day` instead of `loop_recommendations`
+- Counts autobolus/temp_basal days instead of per-row recommendation counts
+- Segment score = `LEAST(temp_basal_pct_seg1, autobolus_pct_seg2)` — minimum percentage from explicit day counts
+- Coverage = `total_days / 14` instead of `total_rows / (288 × 14)`
+- Output: `dev.fda_510k_rwd.valid_transition_segments_day` (same schema as original)
+
+### Guardrails file consolidation
+- Merged `export_segments_within_guardrails_new.py` improvements back into `export_segments_within_guardrails.py`
+- Restored docstrings that were stripped during the refactor
+- Deleted the `_new` variant
+
+### Documentation
+- Created `architecture.md` — directory structure, pipeline DAG, domain concepts, quick lookup table
+- Created `project_history.md` (this file)
+
+---
+
 ## 2026-04-13: Staging pipeline refactor (final round) + exploratory work
 
 **Commits:** `60d653f` through `eaa7234`
@@ -117,4 +155,5 @@ _Update this section as work continues._
 - Guardrails validation: guardrail values are placeholder ("arbitrary values for now") — need FDA-confirmed limits
 - `compute_glycemic_endpoints.py` and `export_valid_transition_segments.py` may benefit from the same argparse/param refactor pattern applied to newer scripts
 - `analysis_8-6` is minimal (106 lines) — may need expansion
-- Exploratory autobolus matching work (dosingDecision join) not yet integrated into pipeline
+- Day-level classification (`loop_recommendation_day`) not yet wired into pipeline YAML or consumed by downstream scripts
+- Evaluate whether `loop_recommendation_day` should eventually replace `loop_recommendations` for downstream aggregation
