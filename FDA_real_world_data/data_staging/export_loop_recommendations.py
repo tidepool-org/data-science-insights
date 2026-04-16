@@ -207,18 +207,18 @@ day_versions AS (
       _userId,
       CAST(LEFT(time_string, 10) AS DATE) AS day,
       loop_version,
-      COALESCE(TRY_CAST(SPLIT(loop_version, '\\.')[0] AS INT), 0) * 1000000
-        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\.')[1] AS INT), 0) * 1000
-        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\.')[2] AS INT), 0) AS version_int
+      COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\.')[0] AS INT), 0) * 1000000
+        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\.')[1] AS INT), 0) * 1000
+        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\.')[2] AS INT), 0) AS version_int
     FROM loop_decisions
     UNION ALL
     SELECT
       _userId,
       day,
       loop_version,
-      COALESCE(TRY_CAST(SPLIT(loop_version, '\\.')[0] AS INT), 0) * 1000000
-        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\.')[1] AS INT), 0) * 1000
-        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\.')[2] AS INT), 0) AS version_int
+      COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\.')[0] AS INT), 0) * 1000000
+        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\.')[1] AS INT), 0) * 1000
+        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\.')[2] AS INT), 0) AS version_int
     FROM hk_automated
   )
   GROUP BY _userId, day
