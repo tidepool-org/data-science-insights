@@ -4,6 +4,30 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-04-16: `export_loop_recommendations.py` — emit counts, defer classification
+
+### Dropped `day_type` column
+- Replaced the `classified` CTE (UNION ALL with LEFT-JOIN-IS-NULL priority rule) with a single `day_counts` CTE that FULL OUTER JOINs `all_autobolus_days` and `all_temp_basal_days`
+- Output no longer includes `day_type`; instead every row carries all four counts (`dd_autobolus_count`, `hk_autobolus_count`, `dd_temp_basal_count`, `hk_temp_basal_count`) when signals exist
+- Previously, a day with both autobolus and temp_basal signals had the temp_basal counts nulled out. Now both sides are preserved, giving downstream full information to apply its own classification threshold.
+- Downstream rule (same semantics as before the refactor): AB day = any autobolus count > 0; TB day = autobolus counts NULL/0 AND any temp_basal count > 0
+
+### Test rewrite
+- `test_export_loop_recommendations.py` was still written for a much older schema (asserted `is_autobolus`, `settings_time` — columns removed long ago). Rewritten around the current production schema with 9 test scenarios covering:
+  - DD-only autobolus, DD-only temp_basal
+  - HK-only autobolus (no DD present)
+  - Day with both signals — now asserts both counts populated (previously would have asserted `day_type='autobolus'`)
+  - normalBolus ±15s exclusion, `subType='normal'` exclusion, non-loop DD reason exclusion, bad timestamp exclusion
+  - Numeric vs lexicographic version selection (3.10.1 > 3.2.0)
+
+### Docs
+- `architecture.md`: updated description, pipeline DAG, and domain-concepts section
+- `docs/dosing_strategy_classification.md`: reframed per-method sections as "Per-day counts" (matching the actual CTE behavior); rewrote Combined approach + Output schema
+
+**Commit:** _not yet committed_
+
+---
+
 ## 2026-04-10: Autobolus labeling investigation + day-level classification
 
 ### Autobolus labeling comparison
@@ -39,6 +63,21 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 ### Documentation
 - Created `architecture.md` — directory structure, pipeline DAG, domain concepts, quick lookup table
 - Created `project_history.md` (this file)
+
+---
+
+## 2026-04-16: Per-segment version tracking + version-parsing robustness
+
+### `export_loop_recommendations.py`
+- Switched `CAST(... AS INT)` to `TRY_CAST` in the version-integer computation — empty-string components (e.g. `SPLIT('3.10', '\\.')[2]`) were throwing `CAST_INVALID_INPUT` because `CAST('' AS INT)` fails before `COALESCE` can substitute
+- Added `version_int` to the output schema so downstream scripts can sort versions numerically without recomputing the split/cast logic
+
+### `export_valid_transition_segments_day.py`
+- Source table renamed: now reads from `loop_recommendations` (parameter `loop_recommendations_table`, was `loop_recommendation_day_table`)
+- Added `max_loop_version_seg1` / `max_loop_version_seg2` tracking within each 14-day window via `MAX(STRUCT(version_int, loop_version)) OVER ...` — struct ordering compares numerically by first field
+- Output adds `tb_to_ab_max_loop_version_seg1` and `tb_to_ab_max_loop_version_seg2` for the best-scoring window per user
+
+**Commit:** `0632ee1`
 
 ---
 

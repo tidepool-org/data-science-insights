@@ -2,7 +2,7 @@
 
 ## Overview
 
-We need to classify each user-day as either **autobolus (AB)** or **temp basal (TB)** based on how Loop was delivering automated insulin. We have two independent methods for making this classification, each relying on different data in the `bddp` table.
+Each user-day needs to be labeled as either **autobolus (AB)** or **temp basal (TB)** based on how Loop was delivering automated insulin. Two independent methods count the automated events on each day, each relying on different data in the `bddp` table. The staging query emits the per-method counts; the AB/TB label is applied downstream where the threshold is easier to tune.
 
 Implementation: [export_loop_recommendations.py](https://github.com/tidepool-org/data-science-insights/blob/master/FDA_real_world_data/data_staging/export_loop_recommendations.py)
 
@@ -74,10 +74,12 @@ dd_filtered AS (
 
 A `normalBolus` dosingDecision indicates the user explicitly requested a bolus — its presence near a delivery record means this is user-initiated, not automated.
 
-### Day-level classification
+### Per-day counts
 
-- **autobolus**: the day has at least one non-normal bolus (`subType != 'normal'`) matched to a loop dosingDecision (after exclusions). Normal boluses are user-initiated and excluded.
-- **temp_basal**: the day has basal matches but no qualifying bolus matches
+- `dd_autobolus_count`: distinct non-normal boluses (`subType != 'normal'`) matched to a loop dosingDecision on the day, after the normalBolus exclusion. Normal boluses are user-initiated and excluded.
+- `dd_temp_basal_count`: distinct basals matched to a loop dosingDecision on the day.
+
+A day can have both counts populated; downstream applies the AB/TB rule.
 
 ### Limitations
 
@@ -109,12 +111,12 @@ WHERE get_json_object(origin, '$.payload.sourceRevision.source.name') = 'Loop'
   AND type IN ('bolus', 'basal')
 ```
 
-### Day-level classification
+### Per-day counts
 
-Same as Method 1:
+- `hk_autobolus_count`: automated `bolus` records on the day
+- `hk_temp_basal_count`: automated `basal` records on the day
 
-- **autobolus**: the day has at least one automated `bolus` record
-- **temp_basal**: the day has automated `basal` records but no automated `bolus` records
+A day can have both counts populated; downstream applies the AB/TB rule.
 
 ### Limitations
 
@@ -124,12 +126,12 @@ This method depends on HealthKit metadata being present. Not all records may hav
 
 ## Combined approach
 
-The combined query unions the results from both methods. A day is classified as:
+The combined query FULL OUTER JOINs the per-day count tables from both methods, producing one row per `(_userId, day)` with all four counts populated. A day that appears in only one method keeps NULLs for the missing side; a day that appears in both keeps counts from both.
 
-- **autobolus** if **either** method detects an automated bolus on that day
-- **temp_basal** if **either** method detects automated basals but **neither** detects an automated bolus
-
-This gives the most complete coverage, since each method may capture days that the other misses.
+Classification is **not** performed in this query — downstream consumers apply their own threshold rules against the counts. For example:
+- **autobolus day**: any `autobolus_count > 0` from either method
+- **temp_basal day**: `autobolus_count = 0 AND temp_basal_count > 0` from either method
+- **tighter threshold**: require `dd_autobolus_count >= 3` to reduce false positives from coincidental correction boluses
 
 The `loop_version` column reports the highest version observed across both methods for each user-day, using numeric comparison (`MAX_BY` on a version integer) so that `3.10` correctly sorts above `3.9`.
 
@@ -141,11 +143,11 @@ The `loop_version` column reports the highest version observed across both metho
 |---|---|
 | `_userId` | User identifier |
 | `day` | Calendar date |
-| `day_type` | `'autobolus'` or `'temp_basal'` |
-| `dd_autobolus_count` | Autoboluses detected by dosingDecision matching |
-| `hk_autobolus_count` | Autoboluses detected by HealthKit metadata |
-| `dd_temp_basal_count` | Temp basals detected by dosingDecision matching |
-| `hk_temp_basal_count` | Temp basals detected by HealthKit metadata |
+| `dd_autobolus_count` | Autoboluses detected by dosingDecision matching (NULL if none) |
+| `hk_autobolus_count` | Autoboluses detected by HealthKit metadata (NULL if none) |
+| `dd_temp_basal_count` | Temp basals detected by dosingDecision matching (NULL if none) |
+| `hk_temp_basal_count` | Temp basals detected by HealthKit metadata (NULL if none) |
 | `loop_version` | Max Loop version observed that day |
+| `version_int` | Sortable integer form of `loop_version` (`major*1_000_000 + minor*1_000 + patch`) for numeric aggregation downstream |
 
-The per-day counts enable downstream threshold evaluation — e.g., requiring ≥3 autoboluses per day to classify as an AB day, which reduces false positives from coincidental correction boluses.
+A row appears in the output when at least one of the four counts is populated. Days with no automated bolus and no automated basal signal from either method are absent.

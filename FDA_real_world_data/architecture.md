@@ -6,12 +6,12 @@
 FDA_real_world_data/
 ├── fda_analysis_pipeline.yml          — Databricks job DAG (task dependencies)
 ├── data_staging/                      — SQL-based data transformation scripts
-│   ├── export_loop_recommendations.py          — Classify user-days as autobolus/temp_basal (combined: dosingDecision match + HealthKit metadata)
+│   ├── export_loop_recommendations.py          — Count automated bolus/basal events per user-day (combined: dosingDecision match + HealthKit metadata); downstream applies classification thresholds
 │   ├── export_loop_recommendation_day.py       — Classify user-days as autobolus/temp_basal (dosingDecision match only)
 │   ├── export_loop_recommendation_healthkit.py — Classify user-days as autobolus/temp_basal (HealthKit metadata only)
 │   ├── export_cbg_from_loop.py                 — Extract + deduplicate CBG readings
 │   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window, row-level)
-│   ├── export_valid_transition_segments_day.py  — Identify TB→AB transitions (day-level counts from loop_recommendation_day)
+│   ├── export_valid_transition_segments_day.py  — Identify TB→AB transitions (day-level counts from loop_recommendations; tracks max Loop version per segment)
 │   ├── export_stable_autobolus_segments.py      — Identify 14-day stable AB periods
 │   ├── export_segments_within_guardrails.py     — Validate pump settings against FDA guardrails
 │   ├── export_autobolus_durability.py           — Track adoption + discontinuation
@@ -60,13 +60,13 @@ FDA_real_world_data/
 ```
 Phase 1: Base Tables
   export_cbg_from_loop            → loop_cbg
-  export_loop_recommendations     → loop_recommendations (per-day classification, combined methods)
+  export_loop_recommendations     → loop_recommendations (per-day counts from both methods; classification applied downstream)
   export_loop_recommendation_day  → loop_recommendation_day (per-day classification via dosingDecision match only)
   export_loop_recommendation_healthkit → loop_recommendation_healthkit_day (per-day classification via HealthKit metadata only)
 
 Phase 2: Segment Extraction
   export_valid_transition_segments       → valid_transition_segments (from loop_recommendations, row-level)
-  export_valid_transition_segments_day   → valid_transition_segments_day (from loop_recommendation_day, day-level)
+  export_valid_transition_segments_day   → valid_transition_segments_day (from loop_recommendations, day-level, with max Loop version per seg1/seg2)
   export_stable_autobolus_segments   → stable_autobolus_segments
   export_autobolus_durability        → autobolus_durability
     → export_autobolus_event_times   → autobolus_event_times
@@ -112,7 +112,7 @@ Two dosing modes in Loop: temp basal modulates basal rate; autobolus recommends 
 1. **dosingDecision match** (`export_loop_recommendation_day`): matches bolus/basal delivery records to the most recent `dosingDecision` with `reason='loop'` in the 5 seconds before the delivery record. Excludes boluses with a `reason='normalBolus'` DD within ±15 seconds (user-initiated correction boluses that coincide with a loop DD).
 2. **HealthKit metadata** (`export_loop_recommendation_healthkit`): uses `MetadataKeyAutomaticallyIssued` on insulin delivery records where HealthKit source is Loop, then differentiates by `type` (bolus vs basal).
 
-Both methods: a day is `'autobolus'` if any automated bolus is detected; `'temp_basal'` if only automated basals. The combined query (`export_loop_recommendations`) unions both methods for maximum coverage. Per-day counts from each method are included in the output (`dd_autobolus_count`, `hk_autobolus_count`, `dd_temp_basal_count`, `hk_temp_basal_count`) for downstream threshold evaluation.
+The combined query (`export_loop_recommendations`) FULL OUTER JOINs the two methods and emits one row per (user, day) with all four counts populated (`dd_autobolus_count`, `hk_autobolus_count`, `dd_temp_basal_count`, `hk_temp_basal_count`). Classification is deferred to downstream consumers — e.g. an AB day is any row with `autobolus_count > 0`; a TB day has `autobolus_count = 0 AND temp_basal_count > 0`.
 
 ### Adoption & Durability
 - **Adoption:** ≥80% autobolus over 3-day rolling window

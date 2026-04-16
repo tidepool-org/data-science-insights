@@ -1,6 +1,6 @@
-"""Classify each user-day as autobolus or temp_basal.
+"""Count automated bolus and basal events per user-day.
 
-Two independent classification methods are used and combined:
+Two independent detection methods are used:
 
 1. dosingDecision: Matches bolus/basal records to the most recent
    dosingDecision with reason='loop' in the 5 seconds before the record.
@@ -9,8 +9,10 @@ Two independent classification methods are used and combined:
 2. HealthKit: Uses MetadataKeyAutomaticallyIssued on insulin delivery records
    where the HealthKit source is Loop.
 
-A day is 'autobolus' if any automated bolus is detected by either method;
-'temp_basal' if only automated basals are detected.
+Output is one row per (user, day) with four counts
+(dd_autobolus_count, hk_autobolus_count, dd_temp_basal_count, hk_temp_basal_count).
+Downstream consumers define autobolus / temp_basal days from the counts —
+e.g. autobolus = any autobolus count > 0.
 """
 
 import argparse
@@ -222,44 +224,30 @@ day_versions AS (
   GROUP BY _userId, day
 ),
 
-classified AS (
+day_counts AS (
   SELECT
-    _userId,
-    day,
-    'autobolus' AS day_type,
-    dd_autobolus_count,
-    hk_autobolus_count,
-    NULL AS dd_temp_basal_count,
-    NULL AS hk_temp_basal_count
-  FROM all_autobolus_days
-
-  UNION ALL
-
-  SELECT
-    tb._userId,
-    tb.day,
-    'temp_basal' AS day_type,
-    NULL AS dd_autobolus_count,
-    NULL AS hk_autobolus_count,
+    COALESCE(ab._userId, tb._userId) AS _userId,
+    COALESCE(ab.day, tb.day) AS day,
+    ab.dd_autobolus_count,
+    ab.hk_autobolus_count,
     tb.dd_temp_basal_count,
     tb.hk_temp_basal_count
-  FROM all_temp_basal_days tb
-  LEFT JOIN all_autobolus_days ab
-    ON tb._userId = ab._userId AND tb.day = ab.day
-  WHERE ab._userId IS NULL
+  FROM all_autobolus_days ab
+  FULL OUTER JOIN all_temp_basal_days tb
+    ON ab._userId = tb._userId
+    AND ab.day = tb.day
 )
 
 SELECT
   c._userId,
   c.day,
-  c.day_type,
   c.dd_autobolus_count,
   c.hk_autobolus_count,
   c.dd_temp_basal_count,
   c.hk_temp_basal_count,
   dv.loop_version,
   dv.version_int
-FROM classified c
+FROM day_counts c
 LEFT JOIN day_versions dv
   ON c._userId = dv._userId
   AND c.day = dv.day
