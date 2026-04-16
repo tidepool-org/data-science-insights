@@ -12,28 +12,54 @@ Implementation: [export_loop_recommendations.py](https://github.com/tidepool-org
 
 This method uses the `dosingDecision` records that Loop writes each time it runs its algorithm. These records have `type = 'dosingDecision'` and `reason = 'loop'`.
 
-The logic: when Loop issues an automated bolus or temp basal, the resulting insulin delivery record appears within a few seconds of the dosingDecision. We join delivery records to decisions using a **5-second window**:
+The logic: when Loop issues an automated bolus or temp basal, the dosingDecision precedes the resulting insulin delivery record by a few seconds. We match each delivery record to the **most recent** loop dosingDecision in the **5 seconds before** it:
 
 ```sql
 FROM bddp b
 INNER JOIN loop_decisions dd
   ON b._userId = dd._userId
   AND LEFT(b.time_string, 10) = LEFT(dd.time_string, 10)
-  AND ABS(TIMESTAMPDIFF(SECOND, dd.dd_ts, TRY_CAST(b.time_string AS TIMESTAMP))) <= 5
-WHERE b.type = 'bolus'  -- or 'basal' for temp basal detection
+  AND TIMESTAMPDIFF(SECOND, dd.dd_ts, TRY_CAST(b.time_string AS TIMESTAMP))
+      BETWEEN 0 AND 5
+WHERE b.type IN ('bolus', 'basal')
+QUALIFY ROW_NUMBER() OVER (
+  PARTITION BY b._userId, b.time_string
+  ORDER BY dd.dd_ts DESC
+) = 1
 ```
 
-- If a **bolus** record matches a dosingDecision within 5 seconds, that day has autobolus activity.
-- If a **basal** record matches a dosingDecision within 5 seconds, that day has temp basal activity.
+- The window is **directional** — the DD must occur at or before the delivery, not after.
+- When multiple DDs fall in the window, `ROW_NUMBER()` picks the most recent one.
+
+### False positive mitigation: normalBolus exclusion
+
+A user-initiated correction bolus can land within 5 seconds of a loop DD by coincidence (e.g., the user submits a correction right before a new CGM value triggers a loop cycle). This would misclassify the correction as an autobolus.
+
+To prevent this, we exclude any bolus that has a `dosingDecision` with `reason = 'normalBolus'` within **±15 seconds**:
+
+```sql
+AND NOT (
+  b.type = 'bolus'
+  AND EXISTS (
+    SELECT 1
+    FROM normal_bolus_decisions nb
+    WHERE nb._userId = b._userId
+      AND ABS(TIMESTAMPDIFF(SECOND, nb.nb_ts, b.b_ts)) <= 15
+  )
+)
+```
+
+A `normalBolus` dosingDecision indicates the user explicitly requested a bolus — its presence near a delivery record means this is user-initiated, not automated.
 
 ### Day-level classification
 
-- **autobolus**: the day has at least one bolus matched to a dosingDecision
+- **autobolus**: the day has at least one bolus matched to a loop dosingDecision (after exclusions)
 - **temp_basal**: the day has basal matches but no bolus matches
 
 ### Limitations
 
-This method depends on dosingDecision records being present. If these records are missing or sparse, the classification may undercount.
+- Depends on dosingDecision records being present. If missing or sparse, may undercount.
+- The 5-second window and ±15-second normalBolus exclusion are empirical thresholds.
 
 ---
 
@@ -82,7 +108,7 @@ The combined query unions the results from both methods. A day is classified as:
 
 This gives the most complete coverage, since each method may capture days that the other misses.
 
-The `loop_version` column reports the max version observed across both methods for each user-day.
+The `loop_version` column reports the highest version observed across both methods for each user-day, using numeric comparison (`MAX_BY` on a version integer) so that `3.10` correctly sorts above `3.9`.
 
 ---
 
@@ -93,4 +119,10 @@ The `loop_version` column reports the max version observed across both methods f
 | `_userId` | User identifier |
 | `day` | Calendar date |
 | `day_type` | `'autobolus'` or `'temp_basal'` |
+| `dd_autobolus_count` | Autoboluses detected by dosingDecision matching |
+| `hk_autobolus_count` | Autoboluses detected by HealthKit metadata |
+| `dd_temp_basal_count` | Temp basals detected by dosingDecision matching |
+| `hk_temp_basal_count` | Temp basals detected by HealthKit metadata |
 | `loop_version` | Max Loop version observed that day |
+
+The per-day counts enable downstream threshold evaluation — e.g., requiring ≥3 autoboluses per day to classify as an AB day, which reduces false positives from coincidental correction boluses.

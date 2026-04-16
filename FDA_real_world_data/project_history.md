@@ -42,6 +42,56 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-04-16: Autobolus false positive mitigations in `export_loop_recommendations.py`
+
+### Directional matching window
+- Changed dosingDecision matching from ±5 seconds to directional: DD must occur in the 5 seconds **before** the bolus/basal (the loop recommends, then delivers)
+- Uses `ROW_NUMBER() ... ORDER BY dd_ts DESC` to pick only the most recent DD per record
+
+### normalBolus exclusion
+- Added `normal_bolus_decisions` CTE to identify user-initiated bolus decisions (`reason='normalBolus'`)
+- Boluses with a `normalBolus` DD within ±15 seconds are excluded from autobolus classification
+- Prevents misclassifying correction boluses that coincidentally land near a loop DD
+
+### Per-day counts
+- Added `dd_autobolus_count`, `hk_autobolus_count`, `dd_temp_basal_count`, `hk_temp_basal_count` to output
+- Enables downstream threshold evaluation (e.g., require ≥3 autoboluses/day to classify as AB day)
+
+### Version sorting fix
+- Replaced `MAX(loop_version)` (lexicographic, incorrectly sorts 3.9 > 3.10) with `MAX_BY(loop_version, version_int)`
+- Version string encoded as sortable integer: `major * 1_000_000 + minor * 1_000 + patch`
+
+### Exploratory
+- Added `exploratory/autobolus_false_positives.sql` — query to find boluses with multiple DDs within 5 seconds
+
+---
+
+## 2026-04-14: HealthKit-based AB/TB classification + combined query
+
+### New: `export_loop_recommendation_healthkit.py`
+- Alternative day-level classification using HealthKit metadata instead of dosingDecision matching
+- Filters to insulin delivery records where HealthKit source is `Loop` and `MetadataKeyAutomaticallyIssued = 1`
+- Differentiates autobolus vs temp_basal by record `type` (bolus vs basal)
+- Output: `dev.fda_510k_rwd.loop_recommendation_healthkit_day` (`_userId`, `day`, `day_type`, `loop_version`)
+
+### Refactored: `export_loop_recommendations.py`
+- Now combines both classification methods (dosingDecision match + HealthKit metadata) via UNION
+- A day is `autobolus` if either method detects an automated bolus; `temp_basal` if only basals detected by either method
+- Added `loop_version` column (max version across both sources)
+- Output schema: `_userId`, `day`, `day_type`, `loop_version`
+
+### Updated: `export_loop_recommendation_day.py`
+- Added `loop_version` column (extracted from `origin` JSON on dosingDecision records, max per user-day)
+
+### New: `dosing_strategy_classification.md`
+- Documentation of both AB/TB classification methods with SQL snippets
+- Written for colleague review of the classification approaches
+
+### Exploratory: `autobolus_healthkit.sql`
+- Ad-hoc query parsing HealthKit JSON fields for AB/TB classification exploration
+
+---
+
 ## 2026-04-13: Staging pipeline refactor (final round) + exploratory work
 
 **Commits:** `60d653f` through `eaa7234`
@@ -156,4 +206,5 @@ _Update this section as work continues._
 - `compute_glycemic_endpoints.py` and `export_valid_transition_segments.py` may benefit from the same argparse/param refactor pattern applied to newer scripts
 - `analysis_8-6` is minimal (106 lines) — may need expansion
 - Day-level classification (`loop_recommendation_day`) not yet wired into pipeline YAML or consumed by downstream scripts
-- Evaluate whether `loop_recommendation_day` should eventually replace `loop_recommendations` for downstream aggregation
+- Evaluate whether combined `loop_recommendations` (with both methods) should replace individual method tables for downstream aggregation
+- Compare coverage/agreement between dosingDecision and HealthKit classification methods

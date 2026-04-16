@@ -6,8 +6,10 @@
 FDA_real_world_data/
 ├── fda_analysis_pipeline.yml          — Databricks job DAG (task dependencies)
 ├── data_staging/                      — SQL-based data transformation scripts
-│   ├── export_loop_recommendations.py          — Extract Loop recs (basal vs bolus, per-row)
-│   ├── export_loop_recommendation_day.py       — Classify user-days as autobolus/temp_basal (dosingDecision match)
+│   ├── export_loop_recommendations.py          — Classify user-days as autobolus/temp_basal (combined: dosingDecision match + HealthKit metadata)
+│   ├── export_loop_recommendation_day.py       — Classify user-days as autobolus/temp_basal (dosingDecision match only)
+│   ├── export_loop_recommendation_healthkit.py — Classify user-days as autobolus/temp_basal (HealthKit metadata only)
+│   ├── dosing_strategy_classification.md       — Documentation of AB/TB classification logic for both methods
 │   ├── export_cbg_from_loop.py                 — Extract + deduplicate CBG readings
 │   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window, row-level)
 │   ├── export_valid_transition_segments_day.py  — Identify TB→AB transitions (day-level counts from loop_recommendation_day)
@@ -46,7 +48,8 @@ FDA_real_world_data/
 └── exploratory/
     ├── autobolus_frequency.py              — Ad-hoc autobolus frequency analysis
     ├── autobolus_matching.sql              — Match bolus to loop dosingDecision within ±5s
-    └── autobolus_labeling_comparison.py   — Compare 3 autobolus labeling methods (subType, recommendedBolus, dosingDecision match)
+    ├── autobolus_labeling_comparison.py   — Compare 3 autobolus labeling methods (subType, recommendedBolus, dosingDecision match)
+    └── autobolus_healthkit.sql            — Exploratory: parse HealthKit metadata for AB/TB classification
 ```
 
 ## Pipeline DAG
@@ -54,8 +57,9 @@ FDA_real_world_data/
 ```
 Phase 1: Base Tables
   export_cbg_from_loop            → loop_cbg
-  export_loop_recommendations     → loop_recommendations (per-row classification)
-  export_loop_recommendation_day  → loop_recommendation_day (per-day classification via dosingDecision match)
+  export_loop_recommendations     → loop_recommendations (per-day classification, combined methods)
+  export_loop_recommendation_day  → loop_recommendation_day (per-day classification via dosingDecision match only)
+  export_loop_recommendation_healthkit → loop_recommendation_healthkit_day (per-day classification via HealthKit metadata only)
 
 Phase 2: Segment Extraction
   export_valid_transition_segments       → valid_transition_segments (from loop_recommendations, row-level)
@@ -101,7 +105,11 @@ Phase 4: Adoption
 ### Autobolus vs Temp Basal
 Two dosing modes in Loop: temp basal modulates basal rate; autobolus recommends bolus. A recommendation is one or the other, never both.
 
-**Day-level classification** (`export_loop_recommendation_day`): matches bolus/basal delivery records to `dosingDecision` records with `reason='loop'` within ±5 seconds. A day is `'autobolus'` if any bolus matches; `'temp_basal'` if only basal records match. This is more precise than the row-level `recommendedBolus IS NOT NULL` approach in `export_loop_recommendations`, which picks up manual bolus wizard use.
+**Day-level classification** uses two independent methods (see `dosing_strategy_classification.md`):
+1. **dosingDecision match** (`export_loop_recommendation_day`): matches bolus/basal delivery records to the most recent `dosingDecision` with `reason='loop'` in the 5 seconds before the delivery record. Excludes boluses with a `reason='normalBolus'` DD within ±15 seconds (user-initiated correction boluses that coincide with a loop DD).
+2. **HealthKit metadata** (`export_loop_recommendation_healthkit`): uses `MetadataKeyAutomaticallyIssued` on insulin delivery records where HealthKit source is Loop, then differentiates by `type` (bolus vs basal).
+
+Both methods: a day is `'autobolus'` if any automated bolus is detected; `'temp_basal'` if only automated basals. The combined query (`export_loop_recommendations`) unions both methods for maximum coverage. Per-day counts from each method are included in the output (`dd_autobolus_count`, `hk_autobolus_count`, `dd_temp_basal_count`, `hk_temp_basal_count`) for downstream threshold evaluation.
 
 ### Adoption & Durability
 - **Adoption:** ≥80% autobolus over 3-day rolling window
@@ -152,7 +160,10 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 
 | Task | File |
 |------|------|
-| Day-level AB/TB classification | `export_loop_recommendation_day.py` |
+| Day-level AB/TB classification (combined) | `export_loop_recommendations.py` |
+| Day-level AB/TB classification (dosingDecision) | `export_loop_recommendation_day.py` |
+| Day-level AB/TB classification (HealthKit) | `export_loop_recommendation_healthkit.py` |
+| AB/TB classification logic docs | `dosing_strategy_classification.md` |
 | CBG extraction + dedup | `export_cbg_from_loop.py` |
 | TB→AB transition detection (row-level) | `export_valid_transition_segments.py` |
 | TB→AB transition detection (day-level) | `export_valid_transition_segments_day.py` |
