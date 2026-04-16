@@ -18,7 +18,7 @@ import math
 import sys
 from datetime import date
 
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession # type: ignore
 
 
 def _isnull(v):
@@ -27,7 +27,7 @@ def _isnull(v):
 
 sys.path.insert(0, "../data_staging")
 
-from export_loop_recommendations import run  # noqa: E402
+from export_loop_recommendations import run  # type: ignore # noqa: E402
 from staging_test_helpers import (  # noqa: E402
     TEST_SCHEMA,
     assert_row_count,
