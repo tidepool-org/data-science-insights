@@ -198,24 +198,25 @@ day_versions AS (
   SELECT
     _userId,
     day,
-    MAX_BY(loop_version, version_int) AS loop_version
+    MAX_BY(loop_version, version_int) AS loop_version,
+    MAX(version_int) AS version_int
   FROM (
     SELECT
       _userId,
       CAST(LEFT(time_string, 10) AS DATE) AS day,
       loop_version,
-      COALESCE(CAST(SPLIT(loop_version, '\\.')[0] AS INT), 0) * 1000000
-        + COALESCE(CAST(SPLIT(loop_version, '\\.')[1] AS INT), 0) * 1000
-        + COALESCE(CAST(SPLIT(loop_version, '\\.')[2] AS INT), 0) AS version_int
+      COALESCE(TRY_CAST(SPLIT(loop_version, '\\.')[0] AS INT), 0) * 1000000
+        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\.')[1] AS INT), 0) * 1000
+        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\.')[2] AS INT), 0) AS version_int
     FROM loop_decisions
     UNION ALL
     SELECT
       _userId,
       day,
       loop_version,
-      COALESCE(CAST(SPLIT(loop_version, '\\.')[0] AS INT), 0) * 1000000
-        + COALESCE(CAST(SPLIT(loop_version, '\\.')[1] AS INT), 0) * 1000
-        + COALESCE(CAST(SPLIT(loop_version, '\\.')[2] AS INT), 0) AS version_int
+      COALESCE(TRY_CAST(SPLIT(loop_version, '\\.')[0] AS INT), 0) * 1000000
+        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\.')[1] AS INT), 0) * 1000
+        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\.')[2] AS INT), 0) AS version_int
     FROM hk_automated
   )
   GROUP BY _userId, day
@@ -256,7 +257,8 @@ SELECT
   c.hk_autobolus_count,
   c.dd_temp_basal_count,
   c.hk_temp_basal_count,
-  dv.loop_version
+  dv.loop_version,
+  dv.version_int
 FROM classified c
 LEFT JOIN day_versions dv
   ON c._userId = dv._userId

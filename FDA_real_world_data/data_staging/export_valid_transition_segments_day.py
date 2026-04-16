@@ -1,15 +1,16 @@
 """Identify TB→AB transition segments using day-level classification.
 
 Same 14-day sliding window approach as export_valid_transition_segments.py,
-but counts autobolus vs temp_basal days (from loop_recommendation_day)
-instead of per-row recommendation counts.
+but counts autobolus vs temp_basal days (from loop_recommendations)
+instead of per-row recommendation counts. Also tracks the max Loop
+version observed in each segment.
 """
 
 
 def run(
     spark,
     output_table="dev.fda_510k_rwd.valid_transition_segments_day",
-    loop_recommendation_day_table="dev.fda_510k_rwd.loop_recommendation_day",
+    loop_recommendations_table="dev.fda_510k_rwd.loop_recommendations",
     user_dates_table="dev.default.bddp_user_dates",
     user_gender_table="dev.default.user_gender",
 ):
@@ -29,8 +30,10 @@ daily_flags AS (
     _userId,
     day,
     CASE WHEN day_type = 'autobolus' THEN 1 ELSE 0 END AS is_autobolus,
-    CASE WHEN day_type = 'temp_basal' THEN 1 ELSE 0 END AS is_temp_basal
-  FROM {loop_recommendation_day_table}
+    CASE WHEN day_type = 'temp_basal' THEN 1 ELSE 0 END AS is_temp_basal,
+    -- version_int first so struct ordering compares versions numerically (3.10 > 3.9)
+    STRUCT(version_int, loop_version) AS version_struct
+  FROM {loop_recommendations_table}
 ),
 
 user_bounds AS (
@@ -57,10 +60,12 @@ sliding_window AS (
     SUM(is_autobolus) OVER seg1 AS autobolus_days_seg1,
     SUM(is_temp_basal) OVER seg1 AS temp_basal_days_seg1,
     COUNT(*) OVER seg1 AS total_days_seg1,
+    MAX(version_struct) OVER seg1 AS max_version_struct_seg1,
 
     SUM(is_autobolus) OVER seg2 AS autobolus_days_seg2,
     SUM(is_temp_basal) OVER seg2 AS temp_basal_days_seg2,
-    COUNT(*) OVER seg2 AS total_days_seg2
+    COUNT(*) OVER seg2 AS total_days_seg2,
+    MAX(version_struct) OVER seg2 AS max_version_struct_seg2
 
   FROM daily_with_bounds
   WINDOW
@@ -98,6 +103,9 @@ scored AS (
       s.temp_basal_days_seg1 * 1.0 / s.total_days_seg1,
       s.autobolus_days_seg2 * 1.0 / s.total_days_seg2
     ) AS segment_score,
+
+    s.max_version_struct_seg1.loop_version AS max_loop_version_seg1,
+    s.max_version_struct_seg2.loop_version AS max_loop_version_seg2,
 
     s.first_day,
 
@@ -140,7 +148,9 @@ valid_user_table AS (
     MAX(CASE WHEN rn_tb_to_ab = 1 THEN coverage_seg2 END) AS tb_to_ab_coverage_seg2,
     MAX(CASE WHEN rn_tb_to_ab = 1 THEN total_days_seg1 END) AS tb_to_ab_days_seg1,
     MAX(CASE WHEN rn_tb_to_ab = 1 THEN total_days_seg2 END) AS tb_to_ab_days_seg2,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN segment_score END) AS tb_to_ab_segment_score
+    MAX(CASE WHEN rn_tb_to_ab = 1 THEN segment_score END) AS tb_to_ab_segment_score,
+    MAX(CASE WHEN rn_tb_to_ab = 1 THEN max_loop_version_seg1 END) AS tb_to_ab_max_loop_version_seg1,
+    MAX(CASE WHEN rn_tb_to_ab = 1 THEN max_loop_version_seg2 END) AS tb_to_ab_max_loop_version_seg2
 
   FROM ranked
   GROUP BY _userId
