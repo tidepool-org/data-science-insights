@@ -9,7 +9,6 @@ FDA_real_world_data/
 │   ├── export_loop_recommendations.py          — Classify user-days as autobolus/temp_basal (combined: dosingDecision match + HealthKit metadata)
 │   ├── export_loop_recommendation_day.py       — Classify user-days as autobolus/temp_basal (dosingDecision match only)
 │   ├── export_loop_recommendation_healthkit.py — Classify user-days as autobolus/temp_basal (HealthKit metadata only)
-│   ├── dosing_strategy_classification.md       — Documentation of AB/TB classification logic for both methods
 │   ├── export_cbg_from_loop.py                 — Extract + deduplicate CBG readings
 │   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window, row-level)
 │   ├── export_valid_transition_segments_day.py  — Identify TB→AB transitions (day-level counts from loop_recommendation_day)
@@ -45,9 +44,13 @@ FDA_real_world_data/
 │   ├── create_test_loop_data.py   — Synthetic loop data generator
 │   └── test_export_*.py           — One test file per staging script (13 total)
 │
+├── docs/
+│   └── dosing_strategy_classification.md  — AB/TB classification logic, false positive mitigations, both methods
+│
 └── exploratory/
     ├── autobolus_frequency.py              — Ad-hoc autobolus frequency analysis
     ├── autobolus_matching.sql              — Match bolus to loop dosingDecision within ±5s
+    ├── autobolus_false_positives.sql       — Boluses with multiple DDs within 5 seconds
     ├── autobolus_labeling_comparison.py   — Compare 3 autobolus labeling methods (subType, recommendedBolus, dosingDecision match)
     └── autobolus_healthkit.sql            — Exploratory: parse HealthKit metadata for AB/TB classification
 ```
@@ -163,7 +166,7 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 | Day-level AB/TB classification (combined) | `export_loop_recommendations.py` |
 | Day-level AB/TB classification (dosingDecision) | `export_loop_recommendation_day.py` |
 | Day-level AB/TB classification (HealthKit) | `export_loop_recommendation_healthkit.py` |
-| AB/TB classification logic docs | `dosing_strategy_classification.md` |
+| AB/TB classification logic docs | `docs/dosing_strategy_classification.md` |
 | CBG extraction + dedup | `export_cbg_from_loop.py` |
 | TB→AB transition detection (row-level) | `export_valid_transition_segments.py` |
 | TB→AB transition detection (day-level) | `export_valid_transition_segments_day.py` |
