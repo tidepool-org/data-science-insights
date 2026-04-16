@@ -12,11 +12,11 @@ Run on Databricks.
 import sys
 from datetime import date
 
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession  # type: ignore
 
 sys.path.insert(0, "../data_staging")
 
-from export_stable_autobolus_segments import run  # noqa: E402
+from export_stable_autobolus_segments import run  # type: ignore # noqa: E402
 from staging_test_helpers import (  # noqa: E402
     TEST_SCHEMA,
     make_loop_recs,

@@ -11,11 +11,11 @@ import sys
 from datetime import datetime, timedelta
 
 import pandas as pd
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession  # type: ignore
 
 sys.path.insert(0, "../data_staging")
 
-from compute_glycemic_endpoints import run  # noqa: E402
+from compute_glycemic_endpoints import run  # type: ignore # noqa: E402
 from staging_test_helpers import (  # noqa: E402
     TEST_SCHEMA,
     assert_row_count,

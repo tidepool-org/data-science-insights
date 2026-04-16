@@ -11,11 +11,11 @@ Run on Databricks.
 import sys
 from datetime import datetime
 
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession  # type: ignore
 
 sys.path.insert(0, "../data_staging")
 
-from export_cbg_from_overrides import run  # noqa: E402
+from export_cbg_from_overrides import run  # type: ignore # noqa: E402
 from staging_test_helpers import (  # noqa: E402
     TEST_SCHEMA,
     assert_row_count,
