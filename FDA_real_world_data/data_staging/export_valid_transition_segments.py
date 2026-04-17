@@ -18,7 +18,7 @@ min/median/max daily autobolus count among AB-classified days in seg2.
 
 def run(
     spark,
-    output_table="dev.fda_510k_rwd.valid_transition_segments_day",
+    output_table="dev.fda_510k_rwd.valid_transition_segments",
     loop_recommendations_table="dev.fda_510k_rwd.loop_recommendations",
     user_dates_table="dev.default.bddp_user_dates",
     user_gender_table="dev.default.user_gender",
