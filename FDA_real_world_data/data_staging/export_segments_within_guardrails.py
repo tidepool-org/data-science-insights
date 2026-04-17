@@ -14,7 +14,7 @@ from pyspark.sql.types import (
 )
 
 # =============================================================================
-# GUARDRAILS (arbitrary values for now - update as needed)
+# GUARDRAILS (FDA-confirmed values; workout range confirmed separately by team)
 # =============================================================================
 
 MMOL_TO_MGDL = 18.016
@@ -28,8 +28,8 @@ GUARDRAILS = {
     'bg_target_preprandial_max': 130.0,  # mg/dL
     'bg_target_preprandial_min': 67.0,   # mg/dL
 
-    # Blood Glucose Workout
-    'bg_target_workout_max': 180.0,      # mg/dL
+    # Blood Glucose Workout (bgTargetPhysicalActivity in BDDP)
+    'bg_target_workout_max': 250.0,      # mg/dL
     'bg_target_workout_min': 87.0,       # mg/dL
 
     # Blood Glucose Safety Limit
@@ -235,7 +235,7 @@ def check_bg_targets_preprandial(targets_json):
 def check_bg_targets_workout(targets_json):
     """Check all workout BG target values against guardrails."""
     return _check_bg_target_schedules(
-        targets_json, 'bg_target_workout_min', 'bg_target_workout_max', label="bgTargetWorkout")
+        targets_json, 'bg_target_workout_min', 'bg_target_workout_max', label="bgTargetPhysicalActivity")
 
 
 def check_glucose_safety_limit(value):
@@ -386,7 +386,7 @@ def validate_pump_settings_row(row):
         schedules_check = check_basal_schedules(row.get('basalSchedules'))
         targets_check = check_bg_targets(row.get('bgTargets'))
         preprandial_check = check_bg_targets_preprandial(row.get('bgTargetPreprandial'))
-        workout_check = check_bg_targets_workout(row.get('bgTargetWorkout'))
+        workout_check = check_bg_targets_workout(row.get('bgTargetPhysicalActivity'))
         safety_check = check_glucose_safety_limit(row.get('bgSafetyLimit'))
         sensitivity_check = check_insulin_sensitivity(row.get('insulinSensitivities'))
         bolus_check = check_bolus(row.get('bolus'))
