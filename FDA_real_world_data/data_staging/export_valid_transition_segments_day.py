@@ -2,8 +2,17 @@
 
 Same 14-day sliding window approach as export_valid_transition_segments.py,
 but counts autobolus vs temp_basal days (from loop_recommendations)
-instead of per-row recommendation counts. Also tracks the max Loop
-version observed in each segment.
+instead of per-row recommendation counts.
+
+Classification is applied inline from the per-method count columns
+(dd_/hk_autobolus_count, dd_/hk_temp_basal_count):
+  - AB day: GREATEST(dd_autobolus_count, hk_autobolus_count) >= min_autobolus_count
+  - TB day: AB threshold not met AND any temp_basal_count > 0
+The `min_autobolus_count` threshold (default 3) biases toward fewer
+false-positive AB days from coincidental correction boluses.
+
+Also tracks the max Loop version observed in each segment and the
+min/median/max daily autobolus count among AB-classified days in seg2.
 """
 
 
@@ -13,6 +22,7 @@ def run(
     loop_recommendations_table="dev.fda_510k_rwd.loop_recommendations",
     user_dates_table="dev.default.bddp_user_dates",
     user_gender_table="dev.default.user_gender",
+    min_autobolus_count=3,
 ):
     spark.sql(f"""
 CREATE OR REPLACE TABLE {output_table} AS
@@ -29,8 +39,26 @@ daily_flags AS (
   SELECT
     _userId,
     day,
-    CASE WHEN day_type = 'autobolus' THEN 1 ELSE 0 END AS is_autobolus,
-    CASE WHEN day_type = 'temp_basal' THEN 1 ELSE 0 END AS is_temp_basal,
+    GREATEST(
+      COALESCE(dd_autobolus_count, 0),
+      COALESCE(hk_autobolus_count, 0)
+    ) AS autobolus_count,
+    CASE
+      WHEN GREATEST(
+        COALESCE(dd_autobolus_count, 0),
+        COALESCE(hk_autobolus_count, 0)
+      ) >= {min_autobolus_count}
+      THEN 1 ELSE 0
+    END AS is_autobolus,
+    CASE
+      WHEN GREATEST(
+        COALESCE(dd_autobolus_count, 0),
+        COALESCE(hk_autobolus_count, 0)
+      ) < {min_autobolus_count}
+        AND (COALESCE(dd_temp_basal_count, 0) > 0
+             OR COALESCE(hk_temp_basal_count, 0) > 0)
+      THEN 1 ELSE 0
+    END AS is_temp_basal,
     -- version_int first so struct ordering compares versions numerically (3.10 > 3.9)
     STRUCT(version_int, loop_version) AS version_struct
   FROM {loop_recommendations_table}
@@ -65,7 +93,10 @@ sliding_window AS (
     SUM(is_autobolus) OVER seg2 AS autobolus_days_seg2,
     SUM(is_temp_basal) OVER seg2 AS temp_basal_days_seg2,
     COUNT(*) OVER seg2 AS total_days_seg2,
-    MAX(version_struct) OVER seg2 AS max_version_struct_seg2
+    MAX(version_struct) OVER seg2 AS max_version_struct_seg2,
+    MIN(CASE WHEN is_autobolus = 1 THEN autobolus_count END) OVER seg2 AS min_autobolus_count_seg2,
+    MAX(CASE WHEN is_autobolus = 1 THEN autobolus_count END) OVER seg2 AS max_autobolus_count_seg2,
+    PERCENTILE_APPROX(CASE WHEN is_autobolus = 1 THEN autobolus_count END, 0.5) OVER seg2 AS median_autobolus_count_seg2
 
   FROM daily_with_bounds
   WINDOW
@@ -106,6 +137,10 @@ scored AS (
 
     s.max_version_struct_seg1.loop_version AS max_loop_version_seg1,
     s.max_version_struct_seg2.loop_version AS max_loop_version_seg2,
+
+    s.min_autobolus_count_seg2,
+    s.median_autobolus_count_seg2,
+    s.max_autobolus_count_seg2,
 
     s.first_day,
 
@@ -150,7 +185,10 @@ valid_user_table AS (
     MAX(CASE WHEN rn_tb_to_ab = 1 THEN total_days_seg2 END) AS tb_to_ab_days_seg2,
     MAX(CASE WHEN rn_tb_to_ab = 1 THEN segment_score END) AS tb_to_ab_segment_score,
     MAX(CASE WHEN rn_tb_to_ab = 1 THEN max_loop_version_seg1 END) AS tb_to_ab_max_loop_version_seg1,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN max_loop_version_seg2 END) AS tb_to_ab_max_loop_version_seg2
+    MAX(CASE WHEN rn_tb_to_ab = 1 THEN max_loop_version_seg2 END) AS tb_to_ab_max_loop_version_seg2,
+    MAX(CASE WHEN rn_tb_to_ab = 1 THEN min_autobolus_count_seg2 END) AS tb_to_ab_min_autobolus_count_seg2,
+    MAX(CASE WHEN rn_tb_to_ab = 1 THEN median_autobolus_count_seg2 END) AS tb_to_ab_median_autobolus_count_seg2,
+    MAX(CASE WHEN rn_tb_to_ab = 1 THEN max_autobolus_count_seg2 END) AS tb_to_ab_max_autobolus_count_seg2
 
   FROM ranked
   GROUP BY _userId

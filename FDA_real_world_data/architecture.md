@@ -11,7 +11,7 @@ FDA_real_world_data/
 │   ├── export_loop_recommendation_healthkit.py — Classify user-days as autobolus/temp_basal (HealthKit metadata only)
 │   ├── export_cbg_from_loop.py                 — Extract + deduplicate CBG readings
 │   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window, row-level)
-│   ├── export_valid_transition_segments_day.py  — Identify TB→AB transitions (day-level counts from loop_recommendations; tracks max Loop version per segment)
+│   ├── export_valid_transition_segments_day.py  — Identify TB→AB transitions (day-level counts from loop_recommendations; tunable min_autobolus_count threshold, default 3; tracks max Loop version and min/median/max daily AB count per segment)
 │   ├── export_stable_autobolus_segments.py      — Identify 14-day stable AB periods
 │   ├── export_segments_within_guardrails.py     — Validate pump settings against FDA guardrails
 │   ├── export_autobolus_durability.py           — Track adoption + discontinuation
@@ -66,7 +66,7 @@ Phase 1: Base Tables
 
 Phase 2: Segment Extraction
   export_valid_transition_segments       → valid_transition_segments (from loop_recommendations, row-level)
-  export_valid_transition_segments_day   → valid_transition_segments_day (from loop_recommendations, day-level, with max Loop version per seg1/seg2)
+  export_valid_transition_segments_day   → valid_transition_segments_day (from loop_recommendations, day-level, with max Loop version per seg1/seg2 and min/median/max daily AB count in seg2)
   export_stable_autobolus_segments   → stable_autobolus_segments
   export_autobolus_durability        → autobolus_durability
     → export_autobolus_event_times   → autobolus_event_times

@@ -133,6 +133,8 @@ Classification is **not** performed in this query — downstream consumers apply
 - **temp_basal day**: `autobolus_count = 0 AND temp_basal_count > 0` from either method
 - **tighter threshold**: require `dd_autobolus_count >= 3` to reduce false positives from coincidental correction boluses
 
+`export_valid_transition_segments_day.py` is a concrete consumer using the tighter-threshold pattern: it exposes a `min_autobolus_count` parameter (default 3) and classifies a day as AB when `GREATEST(dd_autobolus_count, hk_autobolus_count) >= min_autobolus_count`.
+
 The `loop_version` column reports the highest version observed across both methods for each user-day, using numeric comparison (`MAX_BY` on a version integer) so that `3.10` correctly sorts above `3.9`.
 
 ---

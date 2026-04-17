@@ -4,6 +4,32 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-04-17: `export_valid_transition_segments_day.py` — inline classification + AB-count stats
+
+### Migrated off removed `day_type` column
+- Upstream `loop_recommendations` no longer emits `day_type` (see 2026-04-16 entry). Replaced the `daily_flags` CTE to classify days directly from the per-method count columns:
+  - AB day: `GREATEST(COALESCE(dd_autobolus_count, 0), COALESCE(hk_autobolus_count, 0)) >= min_autobolus_count`
+  - TB day: AB threshold not met AND `(dd_temp_basal_count > 0 OR hk_temp_basal_count > 0)`
+- `GREATEST` (rather than SUM) chosen to avoid double-counting the same underlying event detected by both methods.
+
+### Tunable AB threshold
+- Added `min_autobolus_count` parameter to `run()` with default `3`, matching the tighter-threshold example in `docs/dosing_strategy_classification.md`. Days with 1–2 autoboluses are neither AB nor TB; they still contribute to `total_days_seg*` coverage.
+- Previously (with `day_type`) AB won over TB whenever both signals were present; the new rule preserves that precedence via the temp-basal CASE.
+
+### Per-seg2 AB-count stats
+- New per-day `autobolus_count` column in `daily_flags` = `GREATEST(dd, hk)` coalesced to 0.
+- Sliding-window seg2 now computes `min_autobolus_count_seg2`, `median_autobolus_count_seg2` (via `PERCENTILE_APPROX(..., 0.5)`), and `max_autobolus_count_seg2`, restricted to AB-classified days.
+- Surfaced on the best-scoring window as `tb_to_ab_min_autobolus_count_seg2`, `tb_to_ab_median_autobolus_count_seg2`, `tb_to_ab_max_autobolus_count_seg2`.
+
+### Docs
+- File docstring rewritten to describe the inline classification and new stats.
+- `architecture.md`: extended the file description and DAG line to mention the threshold + new stat columns.
+- `docs/dosing_strategy_classification.md`: cross-referenced this script as the tighter-threshold consumer.
+
+**Commit:** _not yet committed_
+
+---
+
 ## 2026-04-16: `export_loop_recommendations.py` — emit counts, defer classification
 
 ### Dropped `day_type` column
