@@ -41,6 +41,7 @@ segments_rows = [
         "tb_to_ab_seg1_end": date(2025, 1, 14),
         "tb_to_ab_seg2_start": date(2025, 1, 15),
         "tb_to_ab_seg2_end": date(2025, 1, 28),
+        "segment_rank": 1,
     },
 ]
 
@@ -117,10 +118,17 @@ try:
     print("PASS: basal rate violation detected")
 
     # 4. Output has expected columns
-    expected_cols = ["_userId", "all_valid", "violation_count", "basal_rate_max", "basal_valid"]
+    expected_cols = [
+        "_userId", "all_valid", "violation_count", "basal_rate_max", "basal_valid",
+        "segment_start", "segment_rank",
+    ]
     for col in expected_cols:
         assert col in result.columns, f"missing column: {col}"
     print("PASS: output schema correct")
+
+    # 5. segment_rank propagated on every row
+    assert (result["segment_rank"] == 1).all(), "segment_rank should be 1 on every row"
+    print("PASS: segment_rank propagated")
 
     print("\nAll tests passed.")
 

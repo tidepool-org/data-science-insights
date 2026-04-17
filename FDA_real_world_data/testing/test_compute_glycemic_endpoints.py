@@ -8,7 +8,7 @@ Run on Databricks.
 """
 
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 from pyspark.sql import SparkSession  # type: ignore
@@ -46,6 +46,8 @@ def _cbg_rows(user_id, segment, values):
     for i, val in enumerate(values):
         rows.append({
             "_userId": user_id,
+            "tb_to_ab_seg1_start": date(2025, 1, 1),
+            "segment_rank": 1,
             "segment": segment,
             "cbg_mg_dl": float(val),
             "cbg_timestamp": BASE_TIME + timedelta(minutes=5 * i),

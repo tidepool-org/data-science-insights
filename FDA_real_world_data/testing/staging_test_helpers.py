@@ -3,7 +3,7 @@ Reusable test helpers for FDA 510(k) data staging query tests.
 Run on Databricks with access to dev.fda_510k_rwd.
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pandas as pd
 
@@ -50,25 +50,38 @@ def assert_column_values(df, column, expected_values, label=""):
     print(f"PASS: {label}")
 
 
-def make_loop_recs(user_id, start_date, n_days, rows_per_day, is_autobolus):
-    """Generate rows in the loop_recommendations table format.
+def make_loop_recs(user_id, start_date, n_days, is_autobolus,
+                   autobolus_count=10, temp_basal_count=10, loop_version="3.2.0"):
+    """Generate per-day rows matching the loop_recommendations schema.
+
+    One row per (user, day) with the four method-specific counts. For each day,
+    either the autobolus or temp_basal counts are populated (never both) based
+    on `is_autobolus`. `hk_*` counts are left NULL to keep the fixture focused
+    on dosingDecision-derived signals.
 
     Args:
         user_id: _userId value
         start_date: first day (date object)
         n_days: number of days to generate
-        rows_per_day: number of rows per day (288 = 5-min intervals)
-        is_autobolus: constant value (0 or 1) for all rows
+        is_autobolus: 1 → autobolus day, 0 → temp_basal day
+        autobolus_count: dd_autobolus_count when is_autobolus=1
+        temp_basal_count: dd_temp_basal_count when is_autobolus=0
+        loop_version: string like "3.2.0"
     """
+    parts = (loop_version.split(".") + ["0", "0", "0"])[:3]
+    version_int = int(parts[0]) * 1_000_000 + int(parts[1]) * 1_000 + int(parts[2])
+
     rows = []
     for d in range(n_days):
         day = start_date + timedelta(days=d)
-        for i in range(rows_per_day):
-            ts = datetime.combine(day, datetime.min.time()) + timedelta(minutes=5 * i)
-            rows.append({
-                "_userId": user_id,
-                "settings_time": ts,
-                "day": day,
-                "is_autobolus": is_autobolus,
-            })
+        rows.append({
+            "_userId": user_id,
+            "day": day,
+            "dd_autobolus_count": autobolus_count if is_autobolus else None,
+            "hk_autobolus_count": None,
+            "dd_temp_basal_count": None if is_autobolus else temp_basal_count,
+            "hk_temp_basal_count": None,
+            "loop_version": loop_version,
+            "version_int": version_int,
+        })
     return rows

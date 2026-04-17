@@ -426,6 +426,7 @@ def validate_pump_settings_row(row):
         'settings_time': _parse_timestamp(row.get('time_string')),
         'segment_start': str(row.get('segment_start')) if row.get('segment_start') is not None else None,
         'segment_end': str(row.get('segment_end')) if row.get('segment_end') is not None else None,
+        'segment_rank': int(row['segment_rank']) if row.get('segment_rank') is not None else None,
 
         'basal_rate_max': basal_check['rate_maximum'],
         'basal_valid': basal_check['valid'],
@@ -491,7 +492,7 @@ def validate_pump_settings_partition(pdf):
 
 
 RESULTS_COLUMNS = [
-    "_userId", "settings_time", "segment_start", "segment_end",
+    "_userId", "settings_time", "segment_start", "segment_end", "segment_rank",
     "basal_rate_max", "basal_valid",
     "basal_schedule_count", "basal_schedule_rate_min", "basal_schedule_rate_max", "basal_schedules_valid",
     "bg_target_schedule_count", "bg_target_min", "bg_target_max", "bg_targets_valid",
@@ -509,6 +510,7 @@ RESULTS_SCHEMA = StructType([
     StructField("settings_time", TimestampType(), True),
     StructField("segment_start", StringType(), True),
     StructField("segment_end", StringType(), True),
+    StructField("segment_rank", LongType(), True),
     StructField("basal_rate_max", DoubleType(), True),
     StructField("basal_valid", BooleanType(), True),
     StructField("basal_schedule_count", LongType(), True),
@@ -554,7 +556,7 @@ MODE_CONFIG = {
     "transition": {
         "sql_template": """
             WITH segments AS (
-                SELECT _userId, tb_to_ab_seg1_start, tb_to_ab_seg2_end
+                SELECT _userId, tb_to_ab_seg1_start, tb_to_ab_seg2_end, segment_rank
                 FROM {segments_table}
             ),
             pump_settings AS (
@@ -562,7 +564,11 @@ MODE_CONFIG = {
                 FROM {input_table}
                 WHERE type = 'pumpSettings'
             )
-            SELECT ps.*, seg.tb_to_ab_seg1_start AS segment_start, seg.tb_to_ab_seg2_end AS segment_end
+            SELECT
+                ps.*,
+                seg.tb_to_ab_seg1_start AS segment_start,
+                seg.tb_to_ab_seg2_end AS segment_end,
+                seg.segment_rank AS segment_rank
             FROM pump_settings ps
             INNER JOIN segments seg
                 ON ps._userId = seg._userId

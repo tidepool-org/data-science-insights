@@ -41,6 +41,7 @@ segments_rows = [
         "tb_to_ab_seg1_end": date(2025, 1, 14),
         "tb_to_ab_seg2_start": date(2025, 1, 15),
         "tb_to_ab_seg2_end": date(2025, 1, 28),
+        "segment_rank": 1,
     },
 ]
 
@@ -105,6 +106,16 @@ try:
     seg2 = result[result["segment"] == "tb_to_ab_seg2"]
     assert seg2.iloc[0]["cbg_mg_dl"] == 140.0, "seg2 should have 140 mg/dL"
     print("PASS: glucose values correctly assigned to segments")
+
+    # 5. Segment identifier and rank carried through
+    assert_column_values(
+        result, "tb_to_ab_seg1_start",
+        [date(2025, 1, 1), date(2025, 1, 1)],
+        "tb_to_ab_seg1_start propagated",
+    )
+    assert_column_values(
+        result, "segment_rank", [1, 1], "segment_rank propagated",
+    )
 
     print("\nAll tests passed.")
 

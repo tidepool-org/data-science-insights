@@ -36,18 +36,18 @@ ALL_TABLES = [LOOP_RECS_TABLE, USER_DATES_TABLE, USER_GENDER_TABLE, OUTPUT_TABLE
 
 # --- Test data ---
 
-# User A: clean transition at day 15 (14 days TB → 14 days AB, 288 rows/day = 100% coverage)
+# User A: clean transition at day 15 (14 days TB → 14 days AB, each day with counts
+# well above the min_autobolus_count=3 threshold)
 START = date(2025, 1, 1)
-ROWS_PER_DAY = 288
 
 loop_recs_rows = (
-    make_loop_recs("user_transition", START, n_days=14, rows_per_day=ROWS_PER_DAY, is_autobolus=0)
-    + make_loop_recs("user_transition", date(2025, 1, 15), n_days=14, rows_per_day=ROWS_PER_DAY, is_autobolus=1)
+    make_loop_recs("user_transition", START, n_days=14, is_autobolus=0)
+    + make_loop_recs("user_transition", date(2025, 1, 15), n_days=14, is_autobolus=1)
     # User B: 28 days all temp basal — no transition, should be excluded
-    + make_loop_recs("user_no_transition", START, n_days=28, rows_per_day=ROWS_PER_DAY, is_autobolus=0)
+    + make_loop_recs("user_no_transition", START, n_days=28, is_autobolus=0)
     # User C: transition but under 6 years old — should be excluded by age filter
-    + make_loop_recs("user_child", START, n_days=14, rows_per_day=ROWS_PER_DAY, is_autobolus=0)
-    + make_loop_recs("user_child", date(2025, 1, 15), n_days=14, rows_per_day=ROWS_PER_DAY, is_autobolus=1)
+    + make_loop_recs("user_child", START, n_days=14, is_autobolus=0)
+    + make_loop_recs("user_child", date(2025, 1, 15), n_days=14, is_autobolus=1)
 )
 
 user_dates_rows = [
@@ -108,6 +108,12 @@ try:
     assert result.iloc[0]["gender"] == "female", "gender should be female"
     assert result.iloc[0]["tb_to_ab_age_years"] > 6, "age should be > 6"
     print("PASS: demographics joined correctly")
+
+    # 7. Exactly one segment per user, ranked 1
+    assert result.iloc[0]["segment_rank"] == 1, (
+        f"expected segment_rank=1, got {result.iloc[0]['segment_rank']}"
+    )
+    print("PASS: segment_rank = 1")
 
     print("\nAll tests passed.")
 

@@ -11,8 +11,8 @@ Classification is applied inline from the per-method count columns
 The `min_autobolus_count` threshold (default 3) biases toward fewer
 false-positive AB days from coincidental correction boluses.
 
-Also tracks the max Loop version observed in each segment and the
-min/median/max daily autobolus count among AB-classified days in seg2.
+Also tracks the max Loop version observed across the full 28-day window
+and the min/median/max daily autobolus count among AB-classified days in seg2.
 """
 
 
@@ -88,15 +88,15 @@ sliding_window AS (
     SUM(is_autobolus) OVER seg1 AS autobolus_days_seg1,
     SUM(is_temp_basal) OVER seg1 AS temp_basal_days_seg1,
     COUNT(*) OVER seg1 AS total_days_seg1,
-    MAX(version_struct) OVER seg1 AS max_version_struct_seg1,
 
     SUM(is_autobolus) OVER seg2 AS autobolus_days_seg2,
     SUM(is_temp_basal) OVER seg2 AS temp_basal_days_seg2,
     COUNT(*) OVER seg2 AS total_days_seg2,
-    MAX(version_struct) OVER seg2 AS max_version_struct_seg2,
     MIN(CASE WHEN is_autobolus = 1 THEN autobolus_count END) OVER seg2 AS min_autobolus_count_seg2,
     MAX(CASE WHEN is_autobolus = 1 THEN autobolus_count END) OVER seg2 AS max_autobolus_count_seg2,
-    PERCENTILE_APPROX(CASE WHEN is_autobolus = 1 THEN autobolus_count END, 0.5) OVER seg2 AS median_autobolus_count_seg2
+    PERCENTILE_APPROX(CASE WHEN is_autobolus = 1 THEN autobolus_count END, 0.5) OVER seg2 AS median_autobolus_count_seg2,
+
+    MAX(version_struct) OVER full_window AS max_version_struct
 
   FROM daily_with_bounds
   WINDOW
@@ -109,6 +109,11 @@ sliding_window AS (
       PARTITION BY _userId
       ORDER BY day
       RANGE BETWEEN INTERVAL 13 DAYS PRECEDING AND CURRENT ROW
+    ),
+    full_window AS (
+      PARTITION BY _userId
+      ORDER BY day
+      RANGE BETWEEN INTERVAL 27 DAYS PRECEDING AND CURRENT ROW
     )
 ),
 
@@ -135,8 +140,8 @@ scored AS (
       s.autobolus_days_seg2 * 1.0 / s.total_days_seg2
     ) AS segment_score,
 
-    s.max_version_struct_seg1.loop_version AS max_loop_version_seg1,
-    s.max_version_struct_seg2.loop_version AS max_loop_version_seg2,
+    s.max_version_struct.loop_version AS max_loop_version,
+    s.max_version_struct.version_int AS max_loop_version_int,
 
     s.min_autobolus_count_seg2,
     s.median_autobolus_count_seg2,
@@ -162,7 +167,7 @@ ranked AS (
     r.*,
     p.autobolus_low,
     p.autobolus_high,
-    ROW_NUMBER() OVER (PARTITION BY r._userId ORDER BY r.segment_score DESC) AS rn_tb_to_ab
+    ROW_NUMBER() OVER (PARTITION BY r._userId ORDER BY r.segment_score DESC) AS segment_rank
   FROM scored r
   CROSS JOIN params p
   WHERE
@@ -172,26 +177,24 @@ ranked AS (
 valid_user_table AS (
   SELECT
     _userId,
-
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN seg1_start END) AS tb_to_ab_seg1_start,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN seg1_end END) AS tb_to_ab_seg1_end,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN seg2_start END) AS tb_to_ab_seg2_start,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN seg2_end END) AS tb_to_ab_seg2_end,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN temp_basal_pct_seg1 END) AS tb_to_ab_pct_seg1,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN autobolus_pct_seg2 END) AS tb_to_ab_pct_seg2,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN coverage_seg1 END) AS tb_to_ab_coverage_seg1,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN coverage_seg2 END) AS tb_to_ab_coverage_seg2,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN total_days_seg1 END) AS tb_to_ab_days_seg1,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN total_days_seg2 END) AS tb_to_ab_days_seg2,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN segment_score END) AS tb_to_ab_segment_score,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN max_loop_version_seg1 END) AS tb_to_ab_max_loop_version_seg1,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN max_loop_version_seg2 END) AS tb_to_ab_max_loop_version_seg2,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN min_autobolus_count_seg2 END) AS tb_to_ab_min_autobolus_count_seg2,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN median_autobolus_count_seg2 END) AS tb_to_ab_median_autobolus_count_seg2,
-    MAX(CASE WHEN rn_tb_to_ab = 1 THEN max_autobolus_count_seg2 END) AS tb_to_ab_max_autobolus_count_seg2
-
+    seg1_start AS tb_to_ab_seg1_start,
+    seg1_end AS tb_to_ab_seg1_end,
+    seg2_start AS tb_to_ab_seg2_start,
+    seg2_end AS tb_to_ab_seg2_end,
+    temp_basal_pct_seg1 AS tb_to_ab_pct_seg1,
+    autobolus_pct_seg2 AS tb_to_ab_pct_seg2,
+    coverage_seg1 AS tb_to_ab_coverage_seg1,
+    coverage_seg2 AS tb_to_ab_coverage_seg2,
+    total_days_seg1 AS tb_to_ab_days_seg1,
+    total_days_seg2 AS tb_to_ab_days_seg2,
+    segment_score AS tb_to_ab_segment_score,
+    max_loop_version AS tb_to_ab_max_loop_version,
+    max_loop_version_int AS tb_to_ab_max_loop_version_int,
+    min_autobolus_count_seg2 AS tb_to_ab_min_autobolus_count_seg2,
+    median_autobolus_count_seg2 AS tb_to_ab_median_autobolus_count_seg2,
+    max_autobolus_count_seg2 AS tb_to_ab_max_autobolus_count_seg2,
+    segment_rank
   FROM ranked
-  GROUP BY _userId
 )
 
 SELECT
@@ -206,7 +209,7 @@ FROM valid_user_table t
 LEFT JOIN {user_dates_table} d ON t._userId = d.userid
 LEFT JOIN {user_gender_table} g ON t._userId = g.userid
 WHERE ROUND(DATEDIFF(t.tb_to_ab_seg1_start, d.dob) / 365.25, 1) > 6 OR d.dob IS NULL
-ORDER BY t._userId
+ORDER BY t._userId, t.segment_rank
 """)
 
 

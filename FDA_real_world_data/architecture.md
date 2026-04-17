@@ -8,13 +8,12 @@ FDA_real_world_data/
 ├── data_staging/                      — SQL-based data transformation scripts
 │   ├── export_loop_recommendations.py          — Count automated bolus/basal events per user-day (dosingDecision match + HealthKit metadata, both methods combined); downstream applies classification thresholds
 │   ├── export_cbg_from_loop.py                 — Extract + deduplicate CBG readings
-│   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window, row-level)
-│   ├── export_valid_transition_segments_day.py  — Identify TB→AB transitions (day-level counts from loop_recommendations; tunable min_autobolus_count threshold, default 3; tracks max Loop version and min/median/max daily AB count per segment)
-│   ├── export_stable_autobolus_segments.py      — Identify 14-day stable AB periods
-│   ├── export_segments_within_guardrails.py     — Validate pump settings against FDA guardrails
-│   ├── export_autobolus_durability.py           — Track adoption + discontinuation
-│   ├── export_autobolus_event_times.py          — Weekly autobolus retention rates
-│   ├── export_cbg_from_transitions.py           — Filter CBG by transition segments
+│   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window, day-level counts; emits ALL valid segments per user with segment_rank; tunable min_autobolus_count threshold, default 3; tracks max Loop version and min/median/max daily AB count per seg2)
+│   ├── export_stable_autobolus_segments.py      — Identify 14-day stable AB periods (still consumes legacy `is_autobolus`; needs migration)
+│   ├── export_segments_within_guardrails.py     — Validate pump settings against FDA guardrails (transition mode carries segment_rank)
+│   ├── export_autobolus_durability.py           — Track adoption + discontinuation (still consumes legacy `is_autobolus`; needs migration)
+│   ├── export_autobolus_event_times.py          — Weekly autobolus retention rates (still consumes legacy `is_autobolus`; needs migration)
+│   ├── export_cbg_from_transitions.py           — Filter CBG by transition segments (carries tb_to_ab_seg1_start + segment_rank)
 │   ├── export_cbg_from_stable.py                — Filter CBG by stable AB segments
 │   ├── export_cbg_from_overrides.py             — Filter CBG by preset override periods
 │   ├── export_carbohydrates_from_transitions.py — Extract food entries in transition segments
@@ -33,7 +32,7 @@ FDA_real_world_data/
 │   ├── plot_stable_ab_sample_size.py — CONSORT chart, sample size heatmap, AB% distribution
 │   └── utils/
 │       ├── constants.py    — Font sizes, color schemes
-│       ├── data_loading.py — load_transition_endpoints() with coverage + guardrail filtering
+│       ├── data_loading.py — load_transition_endpoints() with per-segment coverage + guardrail filtering, cohort filter (MAX_LOOP_VERSION_INT / MAX_SEG2_END_DATE), and best-surviving-segment selection per user
 │       └── statistics.py   — Paired t-test, Wilcoxon, ANOVA, Tukey, Dunn's, p-value formatting
 │
 ├── testing/
@@ -61,15 +60,14 @@ Phase 1: Base Tables
   export_loop_recommendations     → loop_recommendations (per-day counts from both methods; classification applied downstream)
 
 Phase 2: Segment Extraction
-  export_valid_transition_segments       → valid_transition_segments (from loop_recommendations, row-level)
-  export_valid_transition_segments_day   → valid_transition_segments_day (from loop_recommendations, day-level, with max Loop version per seg1/seg2 and min/median/max daily AB count in seg2)
+  export_valid_transition_segments       → valid_transition_segments (day-level counts from loop_recommendations, ALL valid segments per user keyed on (_userId, tb_to_ab_seg1_start) with segment_rank; tracks max Loop version + min/median/max daily AB count in seg2)
   export_stable_autobolus_segments   → stable_autobolus_segments
   export_autobolus_durability        → autobolus_durability
     → export_autobolus_event_times   → autobolus_event_times
 
 Phase 3A: Transition Analyses
-  export_cbg_from_transitions        → valid_transition_cbg
-    → compute_glycemic_endpoints (mode=transition) → glycemic_endpoints_transition
+  export_cbg_from_transitions        → valid_transition_cbg (per-segment, with tb_to_ab_seg1_start + segment_rank)
+    → compute_glycemic_endpoints (mode=transition, group by (_userId, tb_to_ab_seg1_start, segment_rank, segment)) → glycemic_endpoints_transition
       → Analysis 8-1, 8-5, 8-8
   export_carbohydrates_from_transitions → valid_transition_carbs → Analysis 8-8
   export_overrides_from_transitions    → overrides_by_segment
@@ -162,8 +160,7 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 | Day-level AB/TB classification (both methods combined) | `export_loop_recommendations.py` |
 | AB/TB classification logic docs | `docs/dosing_strategy_classification.md` |
 | CBG extraction + dedup | `export_cbg_from_loop.py` |
-| TB→AB transition detection (row-level) | `export_valid_transition_segments.py` |
-| TB→AB transition detection (day-level) | `export_valid_transition_segments_day.py` |
+| TB→AB transition detection (all valid segments per user) | `export_valid_transition_segments.py` |
 | Stable AB period detection | `export_stable_autobolus_segments.py` |
 | Adoption + discontinuation | `export_autobolus_durability.py` + `export_autobolus_event_times.py` |
 | Pump settings validation | `export_segments_within_guardrails.py` |

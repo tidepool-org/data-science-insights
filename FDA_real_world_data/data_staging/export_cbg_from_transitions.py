@@ -11,6 +11,8 @@ SELECT
     c._userId,
     c.cbg_mg_dl,
     c.cbg_timestamp,
+    t.tb_to_ab_seg1_start,
+    t.segment_rank,
     CASE
         WHEN CAST(c.cbg_timestamp AS DATE) BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg1_end THEN 'tb_to_ab_seg1'
         WHEN CAST(c.cbg_timestamp AS DATE) BETWEEN t.tb_to_ab_seg2_start AND t.tb_to_ab_seg2_end THEN 'tb_to_ab_seg2'

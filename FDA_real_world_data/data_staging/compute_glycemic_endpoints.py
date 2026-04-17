@@ -113,7 +113,7 @@ MODE_CONFIG = {
     "transition": {
         "default_input_table": f"{CATALOG}.valid_transition_cbg",
         "default_output_table": f"{CATALOG}.glycemic_endpoints_transition",
-        "group_cols": ["_userId", "segment"],
+        "group_cols": ["_userId", "tb_to_ab_seg1_start", "segment_rank", "segment"],
     },
     "override": {
         "default_input_table": f"{CATALOG}.valid_override_cbg",
@@ -142,7 +142,7 @@ def run(spark, mode="transition", input_table=None, output_table=None):
 
     cbg_df = spark.table(input_table)
     endpoints = compute_glycemic_endpoints(spark, cbg_df, group_cols=cfg["group_cols"])
-    endpoints.write.mode("overwrite").saveAsTable(output_table)
+    endpoints.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
 
 
 if __name__ == "__main__":
