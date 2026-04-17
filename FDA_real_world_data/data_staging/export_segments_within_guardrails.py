@@ -229,13 +229,13 @@ def check_bg_targets(targets_json):
 def check_bg_targets_preprandial(targets_json):
     """Check all preprandial BG target values against guardrails."""
     return _check_bg_target_schedules(
-        targets_json, 'bg_target_preprandial_min', 'bg_target_preprandial_max', label="bgTargetsPreprandial")
+        targets_json, 'bg_target_preprandial_min', 'bg_target_preprandial_max', label="bgTargetPreprandial")
 
 
 def check_bg_targets_workout(targets_json):
     """Check all workout BG target values against guardrails."""
     return _check_bg_target_schedules(
-        targets_json, 'bg_target_workout_min', 'bg_target_workout_max', label="bgTargetsWorkout")
+        targets_json, 'bg_target_workout_min', 'bg_target_workout_max', label="bgTargetWorkout")
 
 
 def check_glucose_safety_limit(value):
@@ -385,8 +385,8 @@ def validate_pump_settings_row(row):
         basal_check = check_basal(row.get('basal'))
         schedules_check = check_basal_schedules(row.get('basalSchedules'))
         targets_check = check_bg_targets(row.get('bgTargets'))
-        preprandial_check = check_bg_targets_preprandial(row.get('bgTargetsPreprandial'))
-        workout_check = check_bg_targets_workout(row.get('bgTargetsWorkout'))
+        preprandial_check = check_bg_targets_preprandial(row.get('bgTargetPreprandial'))
+        workout_check = check_bg_targets_workout(row.get('bgTargetWorkout'))
         safety_check = check_glucose_safety_limit(row.get('bgSafetyLimit'))
         sensitivity_check = check_insulin_sensitivity(row.get('insulinSensitivities'))
         bolus_check = check_bolus(row.get('bolus'))

@@ -50,8 +50,8 @@ VALID_SETTINGS = {
     "basal": json.dumps({"rateMaximum": {"value": 5.0}}),
     "basalSchedules": json.dumps({"default": [{"rate": 1.0, "start": 0}]}),
     "bgTargets": json.dumps({"default": [{"low": 5.0, "high": 6.1, "start": 0}]}),
-    "bgTargetsPreprandial": "{}",
-    "bgTargetsWorkout": "{}",
+    "bgTargetPreprandial": "{}",
+    "bgTargetWorkout": "{}",
     "bgSafetyLimit": 4.2,  # mmol/L → ~75.6 mg/dL, within 67-110
     "insulinSensitivities": json.dumps({"default": [{"amount": 2.8, "start": 0}]}),
     "bolus": json.dumps({"amountMaximum": {"value": 10.0}}),
