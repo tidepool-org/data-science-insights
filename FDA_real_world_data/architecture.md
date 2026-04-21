@@ -36,10 +36,16 @@ FDA_real_world_data/
 │       └── statistics.py   — Paired t-test, Wilcoxon, ANOVA, Tukey, Dunn's, p-value formatting
 │
 ├── testing/
-│   ├── run_all_tests.py           — Glob + execute all test_*.py, report pass/fail
+│   ├── run_all_tests.py           — Recursive glob (**/test_*.py), report pass/fail
 │   ├── staging_test_helpers.py    — setup_test_table(), read_test_output(), assert_row_count(), make_loop_recs()
 │   ├── create_test_loop_data.py   — Synthetic loop data generator
-│   └── test_export_*.py           — One test file per staging script (13 total)
+│   ├── data_staging/              — Paired tests for every data_staging/ script (13 files)
+│   └── simulation/                — Tests for simulation/export/ (2 files; build_scenario_json pure-Python + export_single_user_day unit + Spark TZ-shift)
+│
+├── simulation/
+│   └── export/
+│       ├── export_single_user_day.py     — Databricks task: pull CGM/carbs/boluses/pump-settings for one target day per user; shifts events to user-local via BDDP timezoneOffset; emits 4 CSVs to simulation/data/
+│       └── build_scenario_json.py        — Local Python: turn the CSVs into one anonymized simulator-scenario JSON per user at simulation/data/scenarios/ (rwd_user_NNNN_day_01.json + user_id_mapping.csv)
 │
 ├── docs/
 │   └── dosing_strategy_classification.md  — AB/TB classification logic, false positive mitigations, both methods
@@ -172,3 +178,5 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 | Pipeline orchestration | `fda_analysis_pipeline.yml` |
 | Test runner | `testing/run_all_tests.py` |
 | Test helpers | `testing/staging_test_helpers.py` |
+| FDA RWD → T1-simulator scenario CSVs | `simulation/export/export_single_user_day.py` |
+| CSVs → anonymized scenario JSONs | `simulation/export/build_scenario_json.py` |

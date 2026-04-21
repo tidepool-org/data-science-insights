@@ -13,8 +13,10 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 from pyspark.sql import SparkSession  # type: ignore
 
-sys.path.insert(0, "../data_staging")
-
+import os
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
+sys.path.insert(0, os.path.join(_here, ".."))
 from compute_glycemic_endpoints import run  # type: ignore # noqa: E402
 from staging_test_helpers import (  # noqa: E402
     TEST_SCHEMA,

@@ -1,5 +1,6 @@
 """
-Run all test_*.py files in this directory.
+Run every test_*.py under this directory (recurses into subdirectories,
+e.g. data_staging/ and simulation/).
 
 Run on Databricks.
 """
@@ -13,7 +14,7 @@ import time
 test_dir = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing"
 sys.path.insert(0, test_dir)
 
-test_files = sorted(glob.glob(os.path.join(test_dir, "test_*.py")))
+test_files = sorted(glob.glob(os.path.join(test_dir, "**", "test_*.py"), recursive=True))
 
 passed = []
 failed = []
