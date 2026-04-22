@@ -23,9 +23,10 @@ except ImportError:
 
 def test_normality(data: pd.Series, alpha: float = 0.05) -> Tuple[bool, float]:
     """Shapiro-Wilk normality test. Returns (is_normal, p_value)."""
-    if len(data.dropna()) < 3:
+    clean = data.dropna()
+    if len(clean) < 3 or clean.nunique() < 2:
         return False, np.nan
-    _, p = stats.shapiro(data.dropna())
+    _, p = stats.shapiro(clean)
     return p > alpha, p
 
 
@@ -59,7 +60,7 @@ def compute_paired_statistics(seg1: pd.Series, seg2: pd.Series) -> Dict:
         _, p_ttest = stats.ttest_rel(s1, s2)
 
     p_wsrt = np.nan
-    if len(diff) >= 3:
+    if len(diff) >= 3 and diff.nunique() >= 2:
         try:
             _, p_wsrt = stats.wilcoxon(s1, s2)
         except ValueError:
@@ -120,10 +121,11 @@ def compute_within_subgroup_stats(delta: pd.Series) -> Dict:
 
     _, p_ttest = stats.ttest_1samp(d, 0)
     p_wsrt = np.nan
-    try:
-        _, p_wsrt = stats.wilcoxon(d)
-    except ValueError:
-        pass
+    if d.nunique() >= 2:
+        try:
+            _, p_wsrt = stats.wilcoxon(d)
+        except ValueError:
+            pass
 
     return {
         "n": n, "mean": mean, "sd": sd,

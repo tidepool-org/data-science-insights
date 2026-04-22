@@ -16,7 +16,7 @@ FDA_real_world_data/
 │   ├── export_cbg_from_transitions.py           — Filter CBG by transition segments (carries tb_to_ab_seg1_start + segment_rank)
 │   ├── export_cbg_from_stable.py                — Filter CBG by stable AB segments
 │   ├── export_cbg_from_overrides.py             — Filter CBG by preset override periods
-│   ├── export_carbohydrates_from_transitions.py — Extract food entries in transition segments
+│   ├── export_carbohydrates_from_transitions.py — Extract food entries in transition segments; dedupes BDDP re-ingests via latest `created_timestamp`; carries `tb_to_ab_seg1_start` + `segment_rank` (per-segment attribution, matching CBG exporter)
 │   ├── export_overrides_from_transitions.py     — Extract + validate preset override events
 │   └── compute_glycemic_endpoints.py            — Compute TIR/TBR/TAR/CV/hypo events
 │
@@ -33,7 +33,7 @@ FDA_real_world_data/
 │   └── utils/
 │       ├── constants.py    — Font sizes, color schemes
 │       ├── data_loading.py — load_transition_endpoints() with per-segment coverage + guardrail filtering, cohort filter (MAX_LOOP_VERSION_INT / MAX_SEG2_END_DATE), and best-surviving-segment selection per user
-│       └── statistics.py   — Paired t-test, Wilcoxon, ANOVA, Tukey, Dunn's, p-value formatting
+│       └── statistics.py   — Paired t-test, Wilcoxon, ANOVA, Tukey, Dunn's, p-value formatting; shapiro + wilcoxon short-circuit to NaN when input has <2 distinct values (avoids scipy zero-range warnings)
 │
 ├── testing/
 │   ├── run_all_tests.py           — Recursive glob (**/test_*.py), report pass/fail
@@ -75,7 +75,7 @@ Phase 3A: Transition Analyses
   export_cbg_from_transitions        → valid_transition_cbg (per-segment, with tb_to_ab_seg1_start + segment_rank)
     → compute_glycemic_endpoints (mode=transition, group by (_userId, tb_to_ab_seg1_start, segment_rank, segment)) → glycemic_endpoints_transition
       → Analysis 8-1, 8-5, 8-8
-  export_carbohydrates_from_transitions → valid_transition_carbs → Analysis 8-8
+  export_carbohydrates_from_transitions → valid_transition_carbs (per-segment, with tb_to_ab_seg1_start + segment_rank, deduped) → Analysis 8-8
   export_overrides_from_transitions    → overrides_by_segment
     → export_cbg_from_overrides        → valid_override_cbg
       → compute_glycemic_endpoints (mode=override) → glycemic_endpoints_override

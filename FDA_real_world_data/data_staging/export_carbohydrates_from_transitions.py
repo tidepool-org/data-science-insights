@@ -13,23 +13,45 @@ def run(
     spark.sql(f"""
     CREATE OR REPLACE TABLE {output_table} AS
 
-    WITH carb_entries AS (
+    WITH raw_carbs AS (
       SELECT
         _userId,
         TRY_CAST(time_string AS TIMESTAMP) AS carb_timestamp,
         TRY_CAST(
           get_json_object(nutrition, '$.carbohydrate.net') AS DOUBLE
-        ) AS carb_grams
+        ) AS carb_grams,
+        created_timestamp
       FROM {bddp_table}
       WHERE type = 'food'
         AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
         AND nutrition IS NOT NULL
+    ),
+
+    ranked_carbs AS (
+      SELECT
+        _userId,
+        carb_timestamp,
+        carb_grams,
+        ROW_NUMBER() OVER (
+          PARTITION BY _userId, carb_timestamp, carb_grams
+          ORDER BY created_timestamp DESC
+        ) AS rn
+      FROM raw_carbs
+      WHERE carb_grams IS NOT NULL
+    ),
+
+    carb_entries AS (
+      SELECT _userId, carb_timestamp, carb_grams
+      FROM ranked_carbs
+      WHERE rn = 1
     )
 
     SELECT
         c._userId,
         c.carb_grams,
         c.carb_timestamp,
+        t.tb_to_ab_seg1_start,
+        t.segment_rank,
         CASE
             WHEN CAST(c.carb_timestamp AS DATE) BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg1_end THEN 'tb_to_ab_seg1'
             WHEN CAST(c.carb_timestamp AS DATE) BETWEEN t.tb_to_ab_seg2_start AND t.tb_to_ab_seg2_end THEN 'tb_to_ab_seg2'

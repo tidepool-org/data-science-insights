@@ -93,12 +93,18 @@ def load_data(spark) -> pd.DataFrame:
     # --- Carbohydrate data ---
     carbs = spark.table("dev.fda_510k_rwd.valid_transition_carbs").toPandas()
     carbs["carb_grams"] = pd.to_numeric(carbs["carb_grams"], errors="coerce")
-    # Drop rows with missing or zero carb grams
-    carbs = carbs.loc[carbs["carb_grams"].notna() & (carbs["carb_grams"] > 0)]
+    carbs = carbs.loc[
+        carbs["carb_grams"].notna()
+        & (carbs["carb_grams"] >= 1)
+        & (carbs["carb_grams"] <= 150)
+    ]
 
-    # Summarize carb data per user per segment
+    # Summarize carb data per (user, segment_key, half).
+    # valid_transition_carbs carries every eligible segment per user; keying on
+    # tb_to_ab_seg1_start attributes each carb entry to a specific segment,
+    # matching how load_transition_endpoints picks one segment per user.
     carb_summary = (
-        carbs.groupby(["_userId", "segment"])
+        carbs.groupby(["_userId", "tb_to_ab_seg1_start", "segment"])
         .agg(
             total_cho=("carb_grams", "sum"),
             carb_entries=("carb_grams", "count"),
@@ -108,15 +114,16 @@ def load_data(spark) -> pd.DataFrame:
     carb_summary["daily_cho"] = carb_summary["total_cho"] / SEGMENT_DAYS
     carb_summary["entries_per_day"] = carb_summary["carb_entries"] / SEGMENT_DAYS
 
-    # Pivot carb summary to wide
+    # Pivot carb summary to wide, keyed on (user, tb_to_ab_seg1_start).
+    carb_key = ["_userId", "tb_to_ab_seg1_start"]
     carb_seg1 = (
         carb_summary[carb_summary["segment"] == SEG1]
-        .set_index("_userId")
+        .set_index(carb_key)
         .add_suffix("_seg1")
     )
     carb_seg2 = (
         carb_summary[carb_summary["segment"] == SEG2]
-        .set_index("_userId")
+        .set_index(carb_key)
         .add_suffix("_seg2")
     )
     carb_wide = carb_seg1.join(carb_seg2, how="inner").reset_index()
@@ -151,15 +158,20 @@ def load_data(spark) -> pd.DataFrame:
     )
 
     # --- Merge with glycemic endpoints ---
-    # Only keep users who have both carb data in both segments AND glycemic data
-    merged = wide.merge(carb_wide, on="_userId", how="inner")
+    # Only keep users who have both carb data in both segments AND glycemic data,
+    # matched to the same segment that load_transition_endpoints selected.
+    merged = wide.merge(carb_wide, on=["_userId", "tb_to_ab_seg1_start"], how="inner")
 
     n_glyc = len(wide)
-    n_carb = len(carb_wide)
+    n_carb_segments = len(carb_wide)
+    n_carb_users = carb_wide["_userId"].nunique()
     n_merged = len(merged)
-    print(f"  Users with paired glycemic data: {n_glyc}")
-    print(f"  Users with carb data in both segments: {n_carb}")
-    print(f"  Users in final analysis (glycemic + carb): {n_merged}")
+    print(f"  Users with paired glycemic data (best segment per user): {n_glyc}")
+    print(
+        f"  Segment-pairs with carb data in both halves: {n_carb_segments} "
+        f"across {n_carb_users} distinct users (pre-cohort, all ranks)"
+    )
+    print(f"  Users in final analysis (glycemic + carb, best segment only): {n_merged}")
     print(
         f"  Consistent CHO: {merged['cho_consistent'].sum()} "
         f"({100 * merged['cho_consistent'].mean():.1f}%)"
@@ -168,6 +180,7 @@ def load_data(spark) -> pd.DataFrame:
         f"  Inconsistent CHO: {(~merged['cho_consistent']).sum()} "
         f"({100 * (~merged['cho_consistent']).mean():.1f}%)"
     )
+    print(merged["segment_rank_seg1"].value_counts().to_string())
 
     return merged
 

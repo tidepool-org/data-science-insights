@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 from scipy import stats
 from typing import Dict, Optional, Tuple
 import os
+import re
 
 
 NORMALITY_ALPHA = 0.05
@@ -29,6 +30,11 @@ OUTPUT_DIR = "outputs/analysis_8_2"
 
 from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT, COLORS_STACKED_BAR
 from utils.statistics import test_normality, compute_paired_statistics, format_p
+
+
+def _safe_filename(name: str) -> str:
+    """Replace characters in `name` that aren't filename-safe with underscores."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", name)
 
 SEG1 = "temp_basal"
 SEG2 = "autobolus"
@@ -203,7 +209,9 @@ def create_figure_8_2a(datasets: Dict[str, pd.DataFrame], output_dir: str):
                          fontsize=FONT["suptitle"], fontweight="bold", y=1.02)
             plt.tight_layout()
 
-            path = f"{output_dir}/figure_8_2a_{otype}_{part_label}.png"
+            subdir = output_dir if otype == "_all" else f"{output_dir}/by_preset"
+            os.makedirs(subdir, exist_ok=True)
+            path = f"{subdir}/figure_8_2a_{_safe_filename(otype)}_{part_label}.png"
             plt.savefig(path, dpi=300, bbox_inches="tight")
             plt.close()
             print(f"Saved: {path}")
@@ -263,7 +271,9 @@ def create_figure_8_2b(datasets: Dict[str, pd.DataFrame], output_dir: str):
                          fontsize=FONT["suptitle"], fontweight="bold", y=1.02)
             plt.tight_layout()
 
-            path = f"{output_dir}/figure_8_2b_{otype}_{part_label}.png"
+            subdir = output_dir if otype == "_all" else f"{output_dir}/by_preset"
+            os.makedirs(subdir, exist_ok=True)
+            path = f"{subdir}/figure_8_2b_{_safe_filename(otype)}_{part_label}.png"
             plt.savefig(path, dpi=300, bbox_inches="tight")
             plt.close()
             print(f"Saved: {path}")
