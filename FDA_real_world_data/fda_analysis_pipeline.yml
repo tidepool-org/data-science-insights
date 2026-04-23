@@ -4,6 +4,8 @@ resources:
       name: FDA Pipeline
       tasks:
         - task_key: Export_CBG_From_Loop
+          depends_on:
+            - task_key: Export_Loop_Recommendations
           spark_python_task:
             python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_cbg_from_loop.py
           environment_key: Default

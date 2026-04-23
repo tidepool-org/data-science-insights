@@ -13,7 +13,11 @@ from datetime import date
 from pyspark.sql import SparkSession  # type: ignore
 
 import os
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/data_staging"
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
 from export_carbohydrates_from_transitions import run  # type: ignore # noqa: E402
@@ -43,6 +47,7 @@ segments_rows = [
         "tb_to_ab_seg1_end": date(2025, 1, 14),
         "tb_to_ab_seg2_start": date(2025, 1, 15),
         "tb_to_ab_seg2_end": date(2025, 1, 28),
+        "segment_rank": 1,
     },
 ]
 
@@ -52,42 +57,49 @@ bddp_rows = [
         "time_string": "2025-01-05 12:00:00",
         "type": "food",
         "nutrition": '{"carbohydrate": {"net": 45.0}}',
+        "created_timestamp": "2025-01-05 12:00:01",
     },
     {  # Row 2: food in seg2 — included
         "_userId": "user_a",
         "time_string": "2025-01-20 12:00:00",
         "type": "food",
         "nutrition": '{"carbohydrate": {"net": 30.0}}',
+        "created_timestamp": "2025-01-20 12:00:01",
     },
     {  # Row 3: food before seg1 — excluded
         "_userId": "user_a",
         "time_string": "2024-12-31 12:00:00",
         "type": "food",
         "nutrition": '{"carbohydrate": {"net": 20.0}}',
+        "created_timestamp": "2024-12-31 12:00:01",
     },
     {  # Row 4: food after seg2 — excluded
         "_userId": "user_a",
         "time_string": "2025-01-29 12:00:00",
         "type": "food",
         "nutrition": '{"carbohydrate": {"net": 25.0}}',
+        "created_timestamp": "2025-01-29 12:00:01",
     },
     {  # Row 5: non-food type — excluded
         "_userId": "user_a",
         "time_string": "2025-01-05 13:00:00",
         "type": "cbg",
         "nutrition": '{"carbohydrate": {"net": 10.0}}',
+        "created_timestamp": "2025-01-05 13:00:01",
     },
     {  # Row 6: food with null nutrition — excluded
         "_userId": "user_a",
         "time_string": "2025-01-05 14:00:00",
         "type": "food",
         "nutrition": None,
+        "created_timestamp": "2025-01-05 14:00:01",
     },
     {  # Row 7: wrong user — excluded
         "_userId": "user_b",
         "time_string": "2025-01-05 12:00:00",
         "type": "food",
         "nutrition": '{"carbohydrate": {"net": 50.0}}',
+        "created_timestamp": "2025-01-05 12:00:01",
     },
 ]
 

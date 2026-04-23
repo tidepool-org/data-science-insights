@@ -2,6 +2,7 @@ def run(
     spark,
     input_table="dev.default.bddp_sample_all_2",
     output_table="dev.fda_510k_rwd.loop_cbg",
+    loop_recommendations_table="dev.fda_510k_rwd.loop_recommendations",
 ):
     spark.sql(f"""
 CREATE OR REPLACE TABLE {output_table} AS
@@ -9,8 +10,7 @@ CREATE OR REPLACE TABLE {output_table} AS
 WITH
 loop_users AS (
   SELECT DISTINCT _userId
-  FROM {input_table}
-  WHERE reason = 'loop'
+  FROM {loop_recommendations_table}
 ),
 
 cbg_raw AS (

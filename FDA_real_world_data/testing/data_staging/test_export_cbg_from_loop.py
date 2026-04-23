@@ -28,9 +28,10 @@ spark = SparkSession.builder.getOrCreate()
 
 # --- Table names ---
 INPUT_TABLE = f"{TEST_SCHEMA}._test_cbg_input"
+LOOP_RECS_TABLE = f"{TEST_SCHEMA}._test_cbg_loop_recs"
 OUTPUT_TABLE = f"{TEST_SCHEMA}._test_cbg_output"
 
-ALL_TABLES = [INPUT_TABLE, OUTPUT_TABLE]
+ALL_TABLES = [INPUT_TABLE, LOOP_RECS_TABLE, OUTPUT_TABLE]
 
 # --- Constants ---
 MMOL_PER_MGDL = 1 / 18.018
@@ -52,7 +53,7 @@ TEST_ROWS = [
         "reason": None,
         "value": 130.0 * MMOL_PER_MGDL,
     },
-    {  # Row 3: Loop recommendation row (makes loop_user a "Loop user")
+    {  # Row 3: non-cbg row on loop_user — excluded by type filter
         "_userId": "loop_user",
         "time_string": "2025-01-15 12:00:00",
         "type": None,
@@ -104,10 +105,21 @@ TEST_ROWS = [
 ]
 
 
+# Cohort source: loop_cbg now derives its Loop-user gate from loop_recommendations.
+# Fixture lists loop_user only; non_loop_user is absent and so gets filtered out.
+LOOP_RECS_ROWS = [{"_userId": "loop_user"}]
+
+
 # --- Run test ---
 try:
     setup_test_table(spark, INPUT_TABLE, TEST_ROWS)
-    run(spark, input_table=INPUT_TABLE, output_table=OUTPUT_TABLE)
+    setup_test_table(spark, LOOP_RECS_TABLE, LOOP_RECS_ROWS)
+    run(
+        spark,
+        input_table=INPUT_TABLE,
+        output_table=OUTPUT_TABLE,
+        loop_recommendations_table=LOOP_RECS_TABLE,
+    )
     result = read_test_output(spark, OUTPUT_TABLE)
 
     # 1. 4 rows survive: row 2 wins dedup over row 1 in 12:00 bucket,

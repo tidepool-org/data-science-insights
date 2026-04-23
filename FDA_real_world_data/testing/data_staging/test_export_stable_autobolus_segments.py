@@ -15,7 +15,11 @@ from datetime import date
 from pyspark.sql import SparkSession  # type: ignore
 
 import os
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/data_staging"
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
 from export_stable_autobolus_segments import run  # type: ignore # noqa: E402
@@ -38,14 +42,21 @@ OUTPUT_TABLE = f"{TEST_SCHEMA}._test_sas_output"
 ALL_TABLES = [RECS_TABLE, DATES_TABLE, GENDER_TABLE, OUTPUT_TABLE]
 
 # --- Test data ---
-# user_qualifies: 45 days all-autobolus, 288 rows/day. High coverage, AB%=100%.
-# user_low_coverage: 45 days all-autobolus, 100 rows/day. Coverage ~35% < 70%.
-# user_no_ab: 45 days temp basal, 288 rows/day. No first_ab_day, AB%=0%.
+# user_qualifies: 45 consecutive AB days. Later windows reach full coverage (14/14).
+# user_low_coverage: 5 consecutive AB days. Max coverage 5/14 ≈ 0.357, never hits 0.70.
+# user_no_ab: 45 consecutive temp-basal days. No first_ab_day, AB%=0.
 recs_rows = (
-    make_loop_recs("user_qualifies", date(2025, 1, 1), 45, 288, 1)
-    + make_loop_recs("user_low_coverage", date(2025, 1, 1), 45, 100, 1)
-    + make_loop_recs("user_no_ab", date(2025, 1, 1), 45, 288, 0)
+    make_loop_recs("user_qualifies", date(2025, 1, 1), n_days=45, is_autobolus=1)
+    + make_loop_recs("user_low_coverage", date(2025, 1, 1), n_days=5, is_autobolus=1)
+    + make_loop_recs("user_no_ab", date(2025, 1, 1), n_days=45, is_autobolus=0)
 )
+# Databricks Connect drops all-None columns during pandas→Arrow conversion.
+# Replace None with 0 on hk_* cols; SQL uses COALESCE(hk_*, 0) so behavior is identical.
+for r in recs_rows:
+    if r["hk_autobolus_count"] is None:
+        r["hk_autobolus_count"] = 0
+    if r["hk_temp_basal_count"] is None:
+        r["hk_temp_basal_count"] = 0
 
 dates_rows = [
     {"userid": "user_qualifies", "dob": date(1990, 6, 15), "diagnosis_date": date(2005, 3, 1)},
@@ -75,57 +86,42 @@ try:
 
     result = read_test_output(spark, OUTPUT_TABLE)
 
-    # 1. All three users appear (no filtering)
+    # 1. Only user_qualifies survives filters (autobolus_pct=1.0, days_since_first_ab>=28).
+    #    user_low_coverage: only 5 AB days, so days_since_first_ab never reaches 28.
+    #    user_no_ab: autobolus_pct=0 fails filter.
     user_ids = set(result["_userId"].tolist())
-    assert user_ids == {"user_qualifies", "user_low_coverage", "user_no_ab"}, (
-        f"expected all 3 users, got {user_ids}"
+    assert user_ids == {"user_qualifies"}, (
+        f"expected only user_qualifies, got {user_ids}"
     )
-    print(f"PASS: all 3 users in results ({len(result)} total windows)")
+    print(f"PASS: only user_qualifies after filters ({len(result)} row(s))")
 
-    # 2. rn column present and starts at 1 per user
-    assert "rn" in result.columns, "missing rn column"
-    for uid in user_ids:
-        user_rn = result[result["_userId"] == uid]["rn"]
-        assert int(user_rn.min()) == 1, f"rn should start at 1 for {uid}, got {user_rn.min()}"
-    print("PASS: rn column present, starts at 1 per user")
-
-    # 3. user_qualifies: coverage range spans low (early) to high (later)
+    # 2. Exactly one row per user (QUALIFY rn <= 1).
     uq = result[result["_userId"] == "user_qualifies"]
-    uq_cov = uq["coverage"].astype(float)
-    assert uq_cov.min() < 0.70, f"min coverage should be < 0.70, got {uq_cov.min()}"
-    assert uq_cov.max() >= 0.70, f"max coverage should be >= 0.70, got {uq_cov.max()}"
-    uq_full = uq[uq_cov >= 0.70]
-    uq_high = uq_full.iloc[0]
-    assert float(uq_high["autobolus_pct"]) == 1.0, (
-        f"autobolus_pct {uq_high['autobolus_pct']} != 1.0"
+    assert len(uq) == 1, f"expected 1 row for user_qualifies, got {len(uq)}"
+    row = uq.iloc[0]
+    assert int(row["rn"]) == 1, f"rn should be 1, got {row['rn']}"
+    print("PASS: one row per user with rn=1")
+
+    # 3. Earliest qualifying window: first_ab_day=2025-01-01, so segment_start must be
+    #    >= 2025-01-29 (28 days later). The earliest sliding window ending on a day where
+    #    segment_start crosses that boundary is day 2025-02-11 (window 2025-01-29..2025-02-11).
+    assert str(row["segment_start"]) == "2025-01-29", (
+        f"expected segment_start 2025-01-29, got {row['segment_start']}"
     )
-    print(f"PASS: user_qualifies — coverage [{uq_cov.min():.3f}, {uq_cov.max():.3f}], {len(uq_full)} windows >= 0.70")
-
-    # 4. user_low_coverage: low coverage visible in output
-    ulc = result[result["_userId"] == "user_low_coverage"]
-    assert all(ulc["coverage"].astype(float) < 0.70), (
-        f"user_low_coverage should have coverage < 0.70, got {ulc['coverage'].tolist()}"
+    assert int(row["days_since_first_ab"]) == 28, (
+        f"expected days_since_first_ab=28, got {row['days_since_first_ab']}"
     )
-    print(f"PASS: user_low_coverage — all {len(ulc)} windows have coverage < 0.70")
+    print(f"PASS: earliest window after 28-day gap — segment_start={row['segment_start']}")
 
-    # 5. user_no_ab: no first_ab_day, autobolus_pct = 0, days_since_first_ab is NULL
-    una = result[result["_userId"] == "user_no_ab"]
-    assert all(una["first_ab_day"].isna()), "user_no_ab should have NULL first_ab_day"
-    assert all(una["autobolus_pct"].astype(float) == 0.0), (
-        f"user_no_ab should have autobolus_pct = 0, got {una['autobolus_pct'].tolist()}"
-    )
-    assert all(una["days_since_first_ab"].isna()), "user_no_ab should have NULL days_since_first_ab"
-    print(f"PASS: user_no_ab — {len(una)} windows, NULL first_ab_day, autobolus_pct=0")
+    # 4. Full 14/14 coverage and 100% autobolus.
+    assert float(row["coverage"]) == 1.0, f"coverage {row['coverage']} != 1.0"
+    assert float(row["autobolus_pct"]) == 1.0, f"autobolus_pct {row['autobolus_pct']} != 1.0"
+    print("PASS: coverage=1.0, autobolus_pct=1.0")
 
-    # 6. days_since_first_ab increases over windows for user_qualifies
-    dsfa = uq.sort_values("rn")["days_since_first_ab"].astype(int)
-    assert dsfa.iloc[-1] > dsfa.iloc[0], "days_since_first_ab should increase across windows"
-    print(f"PASS: days_since_first_ab ranges from {dsfa.iloc[0]} to {dsfa.iloc[-1]}")
-
-    # 7. Demographics joined correctly
-    assert uq_high["gender"] == "F", f"expected gender F, got {uq_high['gender']}"
-    assert uq_high["dob"] is not None, "dob should be populated"
-    assert float(uq_high["age_years"]) > 30, f"age_years {uq_high['age_years']} should be > 30"
+    # 5. Demographics joined correctly.
+    assert row["gender"] == "F", f"expected gender F, got {row['gender']}"
+    assert row["dob"] is not None, "dob should be populated"
+    assert float(row["age_years"]) > 30, f"age_years {row['age_years']} should be > 30"
     print("PASS: demographics joined correctly")
 
     print("\nAll tests passed.")

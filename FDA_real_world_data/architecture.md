@@ -7,12 +7,12 @@ FDA_real_world_data/
 ├── fda_analysis_pipeline.yml          — Databricks job DAG (task dependencies)
 ├── data_staging/                      — SQL-based data transformation scripts
 │   ├── export_loop_recommendations.py          — Count automated bolus/basal events per user-day (dosingDecision match + HealthKit metadata, both methods combined); downstream applies classification thresholds
-│   ├── export_cbg_from_loop.py                 — Extract + deduplicate CBG readings
+│   ├── export_cbg_from_loop.py                 — Extract + deduplicate CBG readings. Cohort (`loop_users`) derives from `loop_recommendations` — single source of truth for Loop-user eligibility
 │   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window, day-level counts; emits ALL valid segments per user with segment_rank; tunable min_autobolus_count threshold, default 3; tracks max Loop version and min/median/max daily AB count per seg2)
-│   ├── export_stable_autobolus_segments.py      — Identify 14-day stable AB periods (still consumes legacy `is_autobolus`; needs migration)
+│   ├── export_stable_autobolus_segments.py      — Identify 14-day stable AB periods using day-level counts from `loop_recommendations`. Emits ONE segment per user (earliest fully-AB 14-day window starting ≥28 days post-first-AB); min_autobolus_count threshold, default 3
 │   ├── export_segments_within_guardrails.py     — Validate pump settings against FDA guardrails (transition mode carries segment_rank)
-│   ├── export_autobolus_durability.py           — Track adoption + discontinuation (still consumes legacy `is_autobolus`; needs migration)
-│   ├── export_autobolus_event_times.py          — Weekly autobolus retention rates (still consumes legacy `is_autobolus`; needs migration)
+│   ├── export_autobolus_durability.py           — Track adoption + discontinuation (still consumes legacy `is_autobolus`; needs migration — blocks 8-7)
+│   ├── export_autobolus_event_times.py          — Weekly autobolus retention rates (still consumes legacy `is_autobolus`; needs migration — blocks 8-7)
 │   ├── export_cbg_from_transitions.py           — Filter CBG by transition segments (carries tb_to_ab_seg1_start + segment_rank)
 │   ├── export_cbg_from_stable.py                — Filter CBG by stable AB segments
 │   ├── export_cbg_from_overrides.py             — Filter CBG by preset override periods
@@ -62,12 +62,12 @@ FDA_real_world_data/
 
 ```
 Phase 1: Base Tables
-  export_cbg_from_loop            → loop_cbg
   export_loop_recommendations     → loop_recommendations (per-day counts from both methods; classification applied downstream)
+    → export_cbg_from_loop        → loop_cbg (cohort gated on distinct users in loop_recommendations)
 
 Phase 2: Segment Extraction
   export_valid_transition_segments       → valid_transition_segments (day-level counts from loop_recommendations, ALL valid segments per user keyed on (_userId, tb_to_ab_seg1_start) with segment_rank; tracks max Loop version + min/median/max daily AB count in seg2)
-  export_stable_autobolus_segments   → stable_autobolus_segments
+  export_stable_autobolus_segments   → stable_autobolus_segments (one 14-day fully-AB segment per user, earliest after 28-day gap post-first-AB)
   export_autobolus_durability        → autobolus_durability
     → export_autobolus_event_times   → autobolus_event_times
 
@@ -103,7 +103,7 @@ Phase 4: Adoption
 
 ### Segments
 - **Transition (TB→AB):** `seg1` = 14-day temp-basal period (<30% AB), `seg2` = 14-day autobolus period (>70% AB). Best transition per user selected by segment score = `min(1 - ab%_seg1, ab%_seg2)`.
-- **Stable AB:** 14-day periods of ≥70% autobolus usage. No transition required.
+- **Stable AB:** 14-day period of 100% autobolus days starting ≥28 days after the user's first AB day. One segment per user (earliest qualifying window).
 
 ### Autobolus vs Temp Basal
 Two dosing modes in Loop: temp basal modulates basal rate; autobolus recommends bolus. A recommendation is one or the other, never both.
