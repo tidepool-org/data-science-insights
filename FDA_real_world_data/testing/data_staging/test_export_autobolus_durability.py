@@ -14,7 +14,11 @@ from datetime import date
 from pyspark.sql import SparkSession  # type: ignore
 
 import os
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/data_staging"
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
 from export_autobolus_durability import run  # type: ignore # noqa: E402
@@ -38,20 +42,27 @@ OUTPUT_TABLE = f"{TEST_SCHEMA}._test_dur_output"
 ALL_TABLES = [RECS_TABLE, DATES_TABLE, GENDER_TABLE, OUTPUT_TABLE]
 
 # --- Test data ---
-# user_continues (age 30): 60 days all-AB, 288/day.
+# user_continues (age 30): 60 days all-AB.
 #   Adoption triggers on day 2 (3 consecutive days >=80% AB), adoption_date = day 0.
 #   last_day = day 59, days_post_adoption = 59 >= 56. Final 28 days all AB -> not discontinued.
-# user_discontinues (age 30): 3 days AB + 57 days TB, 288/day.
+# user_discontinues (age 30): 3 days AB + 57 days TB.
 #   Adoption triggers, then all temp basal. Final 28-day period AB% ~ 0 -> discontinued.
 # user_short_followup (age 30): 30 days all-AB. days_post_adoption < 56.
 # user_child (age 5): same data as user_continues, but dob makes age <= 6.
 recs_rows = (
-    make_loop_recs("user_continues", date(2025, 1, 1), 60, 288, 1)
-    + make_loop_recs("user_discontinues", date(2025, 1, 1), 3, 288, 1)
-    + make_loop_recs("user_discontinues", date(2025, 1, 4), 57, 288, 0)
-    + make_loop_recs("user_short_followup", date(2025, 1, 1), 30, 288, 1)
-    + make_loop_recs("user_child", date(2025, 1, 1), 60, 288, 1)
+    make_loop_recs("user_continues", date(2025, 1, 1), n_days=60, is_autobolus=1)
+    + make_loop_recs("user_discontinues", date(2025, 1, 1), n_days=3, is_autobolus=1)
+    + make_loop_recs("user_discontinues", date(2025, 1, 4), n_days=57, is_autobolus=0)
+    + make_loop_recs("user_short_followup", date(2025, 1, 1), n_days=30, is_autobolus=1)
+    + make_loop_recs("user_child", date(2025, 1, 1), n_days=60, is_autobolus=1)
 )
+# Databricks Connect drops all-None columns during pandas→Arrow conversion.
+# Replace None with 0 on hk_* cols; SQL uses COALESCE(hk_*, 0) so behavior is identical.
+for r in recs_rows:
+    if r["hk_autobolus_count"] is None:
+        r["hk_autobolus_count"] = 0
+    if r["hk_temp_basal_count"] is None:
+        r["hk_temp_basal_count"] = 0
 
 dates_rows = [
     {"userid": "user_continues", "dob": date(1995, 1, 1), "diagnosis_date": date(2010, 1, 1)},

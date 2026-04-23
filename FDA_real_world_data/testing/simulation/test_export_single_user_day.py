@@ -311,6 +311,14 @@ def test_spark_tz_shift(spark):
             "carbRatio": None,
         },
     ]
+    # Databricks Connect drops all-None columns during pandas→Arrow conversion.
+    # Fill with empty strings so the columns survive. No row is type='food' and the
+    # singular *Target/Sensitivity/Ratio columns are only consulted on pumpSettings
+    # rows, so empty-string placeholders don't change query behavior.
+    for r in bddp_rows:
+        for col in ("nutrition", "bgTarget", "insulinSensitivity", "carbRatio"):
+            if r[col] is None:
+                r[col] = ""
 
     # loop_cbg: one cbg at UTC 20:00 (user-local 12:00 — should become sim_start anchor)
     cbg_rows = [{

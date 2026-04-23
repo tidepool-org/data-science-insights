@@ -10,6 +10,7 @@ def run(
     loop_recommendations_table=f"{CATALOG}.loop_recommendations",
     user_dates_table="dev.default.bddp_user_dates",
     user_gender_table="dev.default.user_gender",
+    min_autobolus_count=3,
 ):
     spark.sql(f"""
     CREATE OR REPLACE TABLE {output_table} AS
@@ -22,20 +23,21 @@ def run(
         56 AS min_followup_days,
         28 AS final_period_days,
         0.80 AS discontinuation_threshold,
-        0.70 AS min_coverage,
-        288 AS samples_per_day,
-        288 * 28 AS samples_per_final_period
+        0.70 AS min_coverage
     ),
 
-    daily_agg AS (
+    daily_flags AS (
       SELECT
         _userId,
         day,
-        SUM(is_autobolus) AS autobolus_rows,
-        COUNT(is_autobolus) AS recommendation_rows,
-        COUNT(*) AS total_rows
+        CASE
+          WHEN GREATEST(
+            COALESCE(dd_autobolus_count, 0),
+            COALESCE(hk_autobolus_count, 0)
+          ) >= {min_autobolus_count}
+          THEN 1 ELSE 0
+        END AS is_autobolus
       FROM {loop_recommendations_table}
-      GROUP BY _userId, day
     ),
 
     user_bounds AS (
@@ -43,25 +45,24 @@ def run(
         _userId,
         MIN(day) AS first_day,
         MAX(day) AS last_day
-      FROM daily_agg
+      FROM daily_flags
       GROUP BY _userId
     ),
 
     rolling_adoption AS (
       SELECT
-        d._userId,
-        d.day,
+        df._userId,
+        df.day,
         u.last_day,
 
-        SUM(d.autobolus_rows) OVER w AS ab_in_window,
-        SUM(d.recommendation_rows) OVER w AS rec_in_window,
+        SUM(df.is_autobolus) OVER w AS ab_days_in_window,
         COUNT(*) OVER w AS days_with_data
 
-      FROM daily_agg d
-      JOIN user_bounds u ON d._userId = u._userId
+      FROM daily_flags df
+      JOIN user_bounds u ON df._userId = u._userId
       WINDOW w AS (
-        PARTITION BY d._userId
-        ORDER BY d.day
+        PARTITION BY df._userId
+        ORDER BY df.day
         RANGE BETWEEN INTERVAL 2 DAYS PRECEDING AND CURRENT ROW
       )
     ),
@@ -75,40 +76,30 @@ def run(
       CROSS JOIN params p
       WHERE
         days_with_data = 3
-        AND rec_in_window > 0
-        AND ab_in_window * 1.0 / rec_in_window >= p.adoption_threshold
+        AND ab_days_in_window * 1.0 / days_with_data >= p.adoption_threshold
       GROUP BY _userId, last_day
     ),
 
     post_adoption_usage AS (
       SELECT
         a._userId,
-        SUM(
-          CASE
-            WHEN d.recommendation_rows > 0
-             AND d.autobolus_rows * 1.0 / d.recommendation_rows > 0.50
-            THEN 1
-            ELSE 0
-          END
-        ) AS autobolus_days
+        SUM(df.is_autobolus) AS autobolus_days
       FROM adoption a
-      JOIN daily_agg d
-        ON a._userId = d._userId
-        AND d.day BETWEEN a.adoption_date AND a.last_day
+      JOIN daily_flags df
+        ON a._userId = df._userId
+        AND df.day BETWEEN a.adoption_date AND a.last_day
       GROUP BY a._userId
     ),
 
     final_period AS (
       SELECT
         a._userId,
-        SUM(d.autobolus_rows) AS final_autobolus_rows,
-        SUM(d.recommendation_rows) AS final_rec_rows,
-        SUM(d.total_rows) AS final_total_rows,
+        SUM(df.is_autobolus) AS final_autobolus_days,
         COUNT(*) AS final_days_with_data
       FROM adoption a
-      JOIN daily_agg d
-        ON a._userId = d._userId
-        AND d.day BETWEEN DATE_SUB(a.last_day, 27) AND a.last_day
+      JOIN daily_flags df
+        ON a._userId = df._userId
+        AND df.day BETWEEN DATE_SUB(a.last_day, 27) AND a.last_day
       GROUP BY a._userId
     )
 
@@ -125,16 +116,15 @@ def run(
       DATEDIFF(u.last_day, a.adoption_date) >= p.min_followup_days AS has_min_followup,
 
       f.final_days_with_data,
-      ROUND(f.final_total_rows * 1.0 / p.samples_per_final_period, 3) AS final_period_coverage,
-      f.final_rec_rows > 0
-        AND f.final_total_rows * 1.0 / p.samples_per_final_period >= p.min_coverage
+      ROUND(f.final_days_with_data * 1.0 / p.final_period_days, 3) AS final_period_coverage,
+      f.final_days_with_data * 1.0 / p.final_period_days >= p.min_coverage
         AS has_final_coverage,
-      ROUND(f.final_autobolus_rows * 1.0 / NULLIF(f.final_rec_rows, 0), 4) AS final_autobolus_pct,
+      ROUND(f.final_autobolus_days * 1.0 / NULLIF(f.final_days_with_data, 0), 4) AS final_autobolus_pct,
       CASE
-        WHEN f.final_rec_rows > 0
-         AND f.final_autobolus_rows * 1.0 / NULLIF(f.final_rec_rows, 0) <= (1 - p.discontinuation_threshold)
+        WHEN f.final_days_with_data > 0
+         AND f.final_autobolus_days * 1.0 / f.final_days_with_data <= (1 - p.discontinuation_threshold)
         THEN 1
-        WHEN f.final_rec_rows > 0
+        WHEN f.final_days_with_data > 0
         THEN 0
         ELSE NULL
       END AS is_discontinued,

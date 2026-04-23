@@ -95,12 +95,11 @@ try:
     )
     print(f"PASS: only user_qualifies after filters ({len(result)} row(s))")
 
-    # 2. Exactly one row per user (QUALIFY rn <= 1).
+    # 2. Exactly one row per user (QUALIFY picks earliest qualifying segment).
     uq = result[result["_userId"] == "user_qualifies"]
     assert len(uq) == 1, f"expected 1 row for user_qualifies, got {len(uq)}"
     row = uq.iloc[0]
-    assert int(row["rn"]) == 1, f"rn should be 1, got {row['rn']}"
-    print("PASS: one row per user with rn=1")
+    print("PASS: one row per user")
 
     # 3. Earliest qualifying window: first_ab_day=2025-01-01, so segment_start must be
     #    >= 2025-01-29 (28 days later). The earliest sliding window ending on a day where

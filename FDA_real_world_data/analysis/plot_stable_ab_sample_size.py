@@ -123,7 +123,7 @@ plt.show()
 # --- Compute sample size grid ---
 # For each (ab_threshold, days_threshold), count unique users who have
 # at least one window with autobolus_pct >= ab_threshold AND
-# days_since_first_ab >= days_threshold. Use rn=1 (first qualifying window).
+# days_since_first_ab >= days_threshold. Take the earliest qualifying window per user.
 results = []
 for ab_thresh, days_thresh in itertools.product(AB_THRESHOLDS, DAYS_AFTER_FIRST_AB):
     qualifying = segments_jaeb[

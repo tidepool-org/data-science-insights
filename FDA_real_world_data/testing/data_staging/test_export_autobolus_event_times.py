@@ -13,7 +13,11 @@ from datetime import date
 from pyspark.sql import SparkSession  # type: ignore
 
 import os
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/data_staging"
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
 from export_autobolus_event_times import run  # type: ignore # noqa: E402
@@ -46,11 +50,18 @@ durability_rows = [
 #   Weeks 0-5: ~100% AB. Weeks 6-12: 0% AB.
 #   4-week trailing avg drops permanently -> event detected
 recs_rows = (
-    make_loop_recs("user_event", date(2025, 1, 1), 42, 288, 1)
-    + make_loop_recs("user_event", date(2025, 2, 12), 49, 288, 0)
+    make_loop_recs("user_event", date(2025, 1, 1), n_days=42, is_autobolus=1)
+    + make_loop_recs("user_event", date(2025, 2, 12), n_days=49, is_autobolus=0)
     # user_censored: 91 days all-AB. Trailing avg stays ~100% -> no event
-    + make_loop_recs("user_censored", date(2025, 1, 1), 91, 288, 1)
+    + make_loop_recs("user_censored", date(2025, 1, 1), n_days=91, is_autobolus=1)
 )
+# Databricks Connect drops all-None columns during pandas→Arrow conversion.
+# Replace None with 0 on hk_* cols; SQL uses COALESCE(hk_*, 0) so behavior is identical.
+for r in recs_rows:
+    if r["hk_autobolus_count"] is None:
+        r["hk_autobolus_count"] = 0
+    if r["hk_temp_basal_count"] is None:
+        r["hk_temp_basal_count"] = 0
 
 # --- Run test ---
 try:

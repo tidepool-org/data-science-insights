@@ -69,8 +69,7 @@ def run(
         s.days_with_data,
         ROUND(s.days_with_data * 1.0 / p.segment_days, 3) AS coverage,
         ROUND(s.autobolus_days * 1.0 / s.days_with_data, 4) AS autobolus_pct,
-        DATEDIFF(s.segment_start, s.first_ab_day) AS days_since_first_ab,
-        ROW_NUMBER() OVER (PARTITION BY s._userId ORDER BY s.segment_start ASC) AS rn
+        DATEDIFF(s.segment_start, s.first_ab_day) AS days_since_first_ab
 
       FROM sliding_window s
       CROSS JOIN params p
@@ -85,7 +84,6 @@ def run(
       sc.coverage,
       sc.autobolus_pct,
       sc.days_with_data,
-      sc.rn,
 
       d.dob,
       d.diagnosis_date,

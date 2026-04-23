@@ -11,8 +11,8 @@ FDA_real_world_data/
 │   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window, day-level counts; emits ALL valid segments per user with segment_rank; tunable min_autobolus_count threshold, default 3; tracks max Loop version and min/median/max daily AB count per seg2)
 │   ├── export_stable_autobolus_segments.py      — Identify 14-day stable AB periods using day-level counts from `loop_recommendations`. Emits ONE segment per user (earliest fully-AB 14-day window starting ≥28 days post-first-AB); min_autobolus_count threshold, default 3
 │   ├── export_segments_within_guardrails.py     — Validate pump settings against FDA guardrails (transition mode carries segment_rank)
-│   ├── export_autobolus_durability.py           — Track adoption + discontinuation (still consumes legacy `is_autobolus`; needs migration — blocks 8-7)
-│   ├── export_autobolus_event_times.py          — Weekly autobolus retention rates (still consumes legacy `is_autobolus`; needs migration — blocks 8-7)
+│   ├── export_autobolus_durability.py           — Track adoption + discontinuation using day-level counts from `loop_recommendations` (3-day rolling window for adoption; final 28-day window for discontinuation); min_autobolus_count threshold, default 3
+│   ├── export_autobolus_event_times.py          — Weekly autobolus retention rates from day-level counts; 4-week trailing average; min_autobolus_count threshold, default 3
 │   ├── export_cbg_from_transitions.py           — Filter CBG by transition segments (carries tb_to_ab_seg1_start + segment_rank)
 │   ├── export_cbg_from_stable.py                — Filter CBG by stable AB segments
 │   ├── export_cbg_from_overrides.py             — Filter CBG by preset override periods

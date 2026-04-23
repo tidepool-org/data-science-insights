@@ -13,7 +13,11 @@ from datetime import date
 from pyspark.sql import SparkSession  # type: ignore
 
 import os
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/data_staging"
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
 from export_valid_transition_segments import run  # type: ignore # noqa: E402
@@ -51,6 +55,13 @@ loop_recs_rows = (
     + make_loop_recs("user_child", START, n_days=14, is_autobolus=0)
     + make_loop_recs("user_child", date(2025, 1, 15), n_days=14, is_autobolus=1)
 )
+# Databricks Connect drops all-None columns during pandas→Arrow conversion.
+# Replace None with 0 on hk_* cols; SQL uses COALESCE(hk_*, 0) so behavior is identical.
+for r in loop_recs_rows:
+    if r["hk_autobolus_count"] is None:
+        r["hk_autobolus_count"] = 0
+    if r["hk_temp_basal_count"] is None:
+        r["hk_temp_basal_count"] = 0
 
 user_dates_rows = [
     {"userid": "user_transition", "dob": "1990-01-01", "diagnosis_date": "2000-01-01"},
@@ -89,12 +100,12 @@ try:
     )
     print("PASS: correct user selected")
 
-    # 3. Segment 1 had low autobolus (< 0.30)
+    # 3. Segment 1 was TB-heavy (tb_to_ab_pct_seg1 is the TB fraction of seg1; > 0.70)
     pct_seg1 = result.iloc[0]["tb_to_ab_pct_seg1"]
-    assert pct_seg1 < 0.30, f"seg1 autobolus_pct should be < 0.30, got {pct_seg1}"
-    print(f"PASS: seg1 autobolus_pct = {pct_seg1} (< 0.30)")
+    assert pct_seg1 > 0.70, f"seg1 temp_basal_pct should be > 0.70, got {pct_seg1}"
+    print(f"PASS: seg1 temp_basal_pct = {pct_seg1} (> 0.70)")
 
-    # 4. Segment 2 had high autobolus (> 0.70)
+    # 4. Segment 2 was AB-heavy (tb_to_ab_pct_seg2 is the AB fraction of seg2; > 0.70)
     pct_seg2 = result.iloc[0]["tb_to_ab_pct_seg2"]
     assert pct_seg2 > 0.70, f"seg2 autobolus_pct should be > 0.70, got {pct_seg2}"
     print(f"PASS: seg2 autobolus_pct = {pct_seg2} (> 0.70)")

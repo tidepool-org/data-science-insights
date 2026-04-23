@@ -9,6 +9,7 @@ def run(
     output_table=f"{CATALOG}.autobolus_event_times",
     durability_table=f"{CATALOG}.autobolus_durability",
     loop_recommendations_table=f"{CATALOG}.loop_recommendations",
+    min_autobolus_count=3,
 ):
     spark.sql(f"""
     CREATE OR REPLACE TABLE {output_table} AS
@@ -20,20 +21,33 @@ def run(
         4 AS trailing_weeks
     ),
 
+    daily_flags AS (
+      SELECT
+        _userId,
+        day,
+        CASE
+          WHEN GREATEST(
+            COALESCE(dd_autobolus_count, 0),
+            COALESCE(hk_autobolus_count, 0)
+          ) >= {min_autobolus_count}
+          THEN 1 ELSE 0
+        END AS is_autobolus
+      FROM {loop_recommendations_table}
+    ),
+
     weekly_usage AS (
       SELECT
         d._userId,
-        CAST(FLOOR(DATEDIFF(r.day, d.adoption_date) / 7) AS INT)
+        CAST(FLOOR(DATEDIFF(df.day, d.adoption_date) / 7) AS INT)
             AS week_post_adoption,
-        SUM(r.is_autobolus) * 1.0 / NULLIF(COUNT(r.is_autobolus), 0)
+        SUM(df.is_autobolus) * 1.0 / NULLIF(COUNT(*), 0)
             AS autobolus_pct
       FROM {durability_table} d
-      JOIN {loop_recommendations_table} r
-        ON d._userId = r._userId
-        AND r.day >= d.adoption_date
-      WHERE r.is_autobolus IS NOT NULL
+      JOIN daily_flags df
+        ON d._userId = df._userId
+        AND df.day >= d.adoption_date
       GROUP BY d._userId,
-               CAST(FLOOR(DATEDIFF(r.day, d.adoption_date) / 7) AS INT)
+               CAST(FLOOR(DATEDIFF(df.day, d.adoption_date) / 7) AS INT)
     ),
 
     trailing_avg AS (
