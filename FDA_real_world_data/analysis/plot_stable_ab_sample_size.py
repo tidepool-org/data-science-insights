@@ -30,7 +30,7 @@ print(f"Unique users: {segments['_userId'].nunique()}")
 # --- Jaeb linkage ---
 jaeb_users = spark.sql("""
     SELECT DISTINCT b._userId
-    FROM dev.default.bddp_sample_all b
+    FROM dev.default.bddp_sample_all_2 b
     INNER JOIN dev.default.jaeb_upload_to_userid j ON b._userId = j.userid
     WHERE j.reason = 'loop'
 """).toPandas()

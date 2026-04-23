@@ -14,7 +14,7 @@ have linked JAEB demographic data.
 Inputs:
 - dev.fda_510k_rwd.glycemic_endpoints_stable_autobolus  (_userId, segment, metrics)
 - dev.default.jaeb_upload_to_userid                      (userid, PtID, uploadID)
-- dev.default.bddp_sample_all                            (_userId, uploadID)
+- dev.default.bddp_sample_all_2                          (_userId, uploadID)
 
 Outputs:
 - CSV: outputs/analysis_8_6/glycemic_endpoints_by_jaeb_id.csv
@@ -55,7 +55,7 @@ def load_data(spark) -> pd.DataFrame:
     jaeb_map = spark.sql("""
         SELECT DISTINCT j.PtID, b._userId
         FROM dev.default.jaeb_upload_to_userid j
-        INNER JOIN dev.default.bddp_sample_all b
+        INNER JOIN dev.default.bddp_sample_all_2 b
             ON j.uploadID = b.uploadID
     """).toPandas()
 

@@ -14,10 +14,13 @@ as >=80% temp basal in the final 4 consecutive weeks of available data.
 Inputs:
 - dev.fda_510k_rwd.autobolus_durability  (export_autobolus_durability.sql)
 - dev.fda_510k_rwd.autobolus_event_times (export_autobolus_event_times.sql)
+- dev.default.jaeb_upload_to_userid      (PtID ↔ userid linkage)
+- dev.default.bddp_sample_all_2          (uploadID → userid)
 Outputs:
 - Table  8.7a: Overall durability (sustained vs. discontinued)
 - Figure 8.7a: Stacked bar chart of sustained vs. discontinued
 - Figure 8.7b: Kaplan-Meier-style autobolus retention curve
+- CSV:   autobolus_durability_by_jaeb_id.csv (per-user, keyed by PtID)
 =============================================================================
 """
 
@@ -56,6 +59,18 @@ def load_durability(spark) -> pd.DataFrame:
 
     print(f"  Loaded {len(df)} qualified users (from {n_total} total)")
     return df
+
+
+def load_jaeb_map(spark) -> pd.DataFrame:
+    """Load PtID ↔ _userId linkage via uploadID join."""
+    jaeb_map = spark.sql("""
+        SELECT DISTINCT j.PtID, b._userId
+        FROM dev.default.jaeb_upload_to_userid j
+        INNER JOIN dev.default.bddp_sample_all_2 b
+            ON j.uploadID = b.uploadID
+    """).toPandas()
+    print(f"  JAEB-linked users in mapping table: {jaeb_map['_userId'].nunique()}")
+    return jaeb_map
 
 
 def load_event_times(spark) -> pd.DataFrame:
@@ -327,6 +342,37 @@ def create_figure_8_7b(events: pd.DataFrame, filepath: str):
 
 
 # =============================================================================
+# Per-user JAEB export
+# =============================================================================
+
+
+def export_by_jaeb_id(durability: pd.DataFrame, jaeb_map: pd.DataFrame, output_dir: str) -> pd.DataFrame:
+    """Per-user durability metrics keyed by JAEB PtID. Inner-joins qualified users
+    with the JAEB mapping; one row per PtID."""
+    out_cols = [
+        "PtID",
+        "is_discontinued",
+        "days_post_adoption",
+        "weeks_post_adoption",
+        "autobolus_days",
+        "final_autobolus_pct",
+        "final_days_with_data",
+        "final_period_coverage",
+        "adoption_date",
+    ]
+
+    merged = durability.merge(jaeb_map, on="_userId", how="inner")
+    merged = merged.drop_duplicates(subset="PtID")
+    print(f"  Users after JAEB linkage: {len(merged)}")
+
+    out_df = merged[out_cols].sort_values("PtID").reset_index(drop=True)
+    out_path = f"{output_dir}/autobolus_durability_by_jaeb_id.csv"
+    out_df.to_csv(out_path, index=False)
+    print(f"  Saved: {out_path}")
+    return out_df
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -362,8 +408,13 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     create_figure_8_7b(event_times, fig_b_path)
     print(f"  Saved: {fig_b_path}")
 
+    # --- Per-user JAEB export (additive; does not affect cohort for tables/figures above) ---
+    print("\n6. Exporting per-user durability keyed by JAEB PtID...")
+    jaeb_map = load_jaeb_map(spark)
+    export_by_jaeb_id(durability, jaeb_map, output_dir)
+
     # --- Summary statistics ---
-    print("\n6. Summary statistics:")
+    print("\n7. Summary statistics:")
     print(f"  Mean follow-up:     {durability['days_post_adoption'].mean():.0f} days "
           f"({durability['weeks_post_adoption'].mean():.1f} weeks)")
     print(f"  Median follow-up:   {durability['days_post_adoption'].median():.0f} days")
