@@ -11,6 +11,7 @@ def run(
     transition_segments_table=f"{CATALOG}.valid_transition_segments",
 ):
     spark.sql(f"""
+    --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
 
     WITH
@@ -149,6 +150,7 @@ def run(
       AND o.crsf = v.crsf
       AND o.issf = v.issf
     ORDER BY o._userId, o.override_time
+    ;
     """)
 
 

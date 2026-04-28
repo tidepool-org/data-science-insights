@@ -3,7 +3,8 @@
 For every user with a valid TB->AB transition segment, picks the first day of
 the rank-1 temp-basal segment (tb_to_ab_seg1_start) and emits four CSVs:
 
-  - carbs.csv              : all food entries on the target day
+  - carbs.csv              : all food entries on the target day, with the
+                             user-set absorption duration (when present)
   - correction_boluses.csv : all normal-subType bolus records on the target day
   - cgm.csv                : all cbg readings on the target day, deduped to
                              5-minute buckets and converted to mg/dL
@@ -121,7 +122,7 @@ def _flatten_pump_settings(raw_df):
         isf = [
             {
                 "start_time": _ms_to_hms(s.get("start", 0)),
-                "value": round(s["amount"] * MMOL_TO_MGDL, 1),
+                "value": round(s["amount"], 1),
             }
             for s in isf_segs if s.get("amount") is not None
         ]
@@ -171,6 +172,7 @@ def run(
     # below each join a trivially-sized table rather than re-scanning BDDP.
     # CACHE TABLE would be simpler but is not supported on serverless compute.
     tz_pdf = spark.sql(f"""
+    --begin-sql
     SELECT
       b._userId,
       MAX_BY(b.timezoneOffset, TRY_CAST(b.time_string AS TIMESTAMP)) AS tz_offset_min
@@ -182,6 +184,7 @@ def run(
       AND TRY_CAST(b.time_string AS TIMESTAMP)
             <= CAST(t.tb_to_ab_seg1_start AS TIMESTAMP) + INTERVAL 36 HOURS
     GROUP BY b._userId
+    ;
     """).toPandas()
     spark.createDataFrame(tz_pdf).createOrReplaceTempView("_sim_user_tz")
 
@@ -190,6 +193,7 @@ def run(
     # BDDP food/bolus rows, so all three event queries use the per-user
     # offset from _sim_user_tz rather than the per-row value.
     carbs_sql = f"""
+    --begin-sql
     WITH target_days AS (
       SELECT _userId, tb_to_ab_seg1_start AS target_day
       FROM {segments_table}
@@ -199,7 +203,12 @@ def run(
       SELECT
         _userId,
         TRY_CAST(time_string AS TIMESTAMP) AS carb_utc_ts,
-        TRY_CAST(get_json_object(nutrition, '$.carbohydrate.net') AS DOUBLE) AS carb_grams
+        TRY_CAST(get_json_object(nutrition, '$.carbohydrate.net') AS DOUBLE) AS carb_grams,
+        -- BDDP stores estimatedAbsorptionDuration in seconds; convert to
+        -- minutes here to match the simulator's Carb.duration_minutes.
+        -- NULL when the user did not set an absorption time on this entry.
+        TRY_CAST(get_json_object(nutrition, '$.estimatedAbsorptionDuration') AS DOUBLE) / 60.0
+          AS carb_duration_minutes
       FROM {bddp_table}
       WHERE type = 'food'
         AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
@@ -209,7 +218,8 @@ def run(
       c._userId,
       t.target_day,
       TIMESTAMPADD(MINUTE, u.tz_offset_min, c.carb_utc_ts) AS carb_timestamp,
-      c.carb_grams
+      c.carb_grams,
+      c.carb_duration_minutes
     FROM carb_entries c
     INNER JOIN target_days t ON c._userId = t._userId
     INNER JOIN _sim_user_tz u ON c._userId = u._userId
@@ -217,16 +227,21 @@ def run(
             >= CAST(t.target_day AS TIMESTAMP) + INTERVAL 12 HOURS
       AND TIMESTAMPADD(MINUTE, u.tz_offset_min, c.carb_utc_ts)
             <  CAST(t.target_day AS TIMESTAMP) + INTERVAL 36 HOURS
-    ORDER BY c._userId, carb_timestamp
+    ORDER BY c._userId, carb_timestamp;
     """
 
     # Only keep boluses with a nearby (±15s) dosingDecision with
     # reason='normalBolus' — these are user-initiated. Autoboluses (no nearby
     # normalBolus DD) are excluded so the sim can regenerate them itself.
     # Mirrors the directional-match used in export_loop_recommendations.py.
+    # SELECT DISTINCT collapses BDDP re-ingests of the same physical bolus
+    # (e.g., HealthKit-Loop + pump telemetry rows with identical time_string
+    # and normal value) — without it, build_scenario_json sums them on the
+    # 5-min tick and the scenario delivers 2× the real dose.
     # TODO: swap this raw BDDP match for a clean "user_boluses" table once
     # one exists in dev.fda_510k_rwd.
     correction_boluses_sql = f"""
+    --begin-sql
     WITH target_days AS (
       SELECT _userId, tb_to_ab_seg1_start AS target_day
       FROM {segments_table}
@@ -241,7 +256,7 @@ def run(
         AND reason = 'normalBolus'
         AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
     )
-    SELECT
+    SELECT DISTINCT
       b._userId,
       t.target_day,
       TIMESTAMPADD(MINUTE, u.tz_offset_min, TRY_CAST(b.time_string AS TIMESTAMP))
@@ -267,6 +282,7 @@ def run(
           AND ABS(TIMESTAMPDIFF(SECOND, nb.nb_ts, TRY_CAST(b.time_string AS TIMESTAMP))) <= 15
       )
     ORDER BY b._userId, bolus_timestamp
+    ;
     """
 
     # CGM spans target_day 00:00 -> target_day+1 12:00 so build_scenario_json
@@ -275,6 +291,7 @@ def run(
     # upstream, so we join _sim_user_tz (precomputed above) to shift cbg UTC
     # timestamps into user-local.
     cgm_sql = f"""
+    --begin-sql
     WITH target_days AS (
       SELECT _userId, tb_to_ab_seg1_start AS target_day
       FROM {segments_table}
@@ -294,9 +311,11 @@ def run(
       AND TIMESTAMPADD(MINUTE, u.tz_offset_min, c.cbg_timestamp)
             <  CAST(t.target_day AS TIMESTAMP) + INTERVAL 36 HOURS
     ORDER BY c._userId, cbg_timestamp
+    ;
     """
 
     pump_settings_sql = f"""
+    --begin-sql
     WITH target_days AS (
       SELECT _userId, tb_to_ab_seg1_start AS target_day
       FROM {segments_table}
@@ -339,6 +358,7 @@ def run(
     FROM settings_before_target
     GROUP BY _userId
     ORDER BY _userId
+    ;
     """
 
     # Fire all four pulls in parallel — each .toPandas() is its own Spark

@@ -14,29 +14,34 @@ SOURCE_TABLE = "dev.default.bddp_sample_all_2"
 def get_automated_subtype_days(spark, input_table=SOURCE_TABLE):
     """User-days with at least one bolus where subType = 'automated'."""
     return spark.sql(f"""
+        --begin-sql
         SELECT DISTINCT
             `_userId`,
             LEFT(time_string, 10) AS day
         FROM {input_table}
         WHERE type = 'bolus'
           AND subType = 'automated'
+    ;
     """)
 
 
 def get_recommended_bolus_days(spark, input_table=SOURCE_TABLE):
     """User-days with at least one record where recommendedBolus IS NOT NULL."""
     return spark.sql(f"""
+        --begin-sql
         SELECT DISTINCT
             `_userId`,
             LEFT(time_string, 10) AS day
         FROM {input_table}
         WHERE recommendedBolus IS NOT NULL
+    ;
     """)
 
 
 def get_loop_decision_matched_days(spark, input_table=SOURCE_TABLE):
     """User-days with a bolus matched to a dosingDecision with reason='loop' within 30s."""
     return spark.sql(f"""
+        --begin-sql
         WITH boluses AS (
             SELECT
                 `_userId`,
@@ -60,6 +65,7 @@ def get_loop_decision_matched_days(spark, input_table=SOURCE_TABLE):
         INNER JOIN loop_decisions dd
             ON b.`_userId` = dd.`_userId`
             AND TIMESTAMPDIFF(SECOND, dd.dd_ts, b.bolus_ts) BETWEEN 0 AND 30
+    ;
     """)
 
 
@@ -73,6 +79,7 @@ def compare_methods(spark, input_table=SOURCE_TABLE):
     loop_matched.createOrReplaceTempView("method_loop_matched")
 
     comparison = spark.sql("""
+        --begin-sql
         SELECT
             COALESCE(a._userId, r._userId, l._userId) AS _userId,
             COALESCE(a.day, r.day, l.day) AS day,
@@ -85,6 +92,7 @@ def compare_methods(spark, input_table=SOURCE_TABLE):
         FULL OUTER JOIN method_loop_matched l
             ON COALESCE(a._userId, r._userId) = l._userId
             AND COALESCE(a.day, r.day) = l.day
+    ;
     """).toPandas()
 
     print_report(comparison)

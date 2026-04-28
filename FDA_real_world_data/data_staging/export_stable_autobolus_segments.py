@@ -10,6 +10,7 @@ def run(
     min_autobolus_count=3,
 ):
     spark.sql(f"""
+    --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
 
     WITH params AS (
@@ -98,6 +99,7 @@ def run(
       AND sc.days_since_first_ab >= 28
     QUALIFY ROW_NUMBER() OVER (PARTITION BY sc._userId ORDER BY sc.segment_start ASC) <= 1 
     ORDER BY sc._userId, sc.segment_start
+    ;
     """) 
 
 

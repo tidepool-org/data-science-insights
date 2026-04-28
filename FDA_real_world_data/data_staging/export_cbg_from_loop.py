@@ -5,6 +5,7 @@ def run(
     loop_recommendations_table="dev.fda_510k_rwd.loop_recommendations",
 ):
     spark.sql(f"""
+--begin-sql
 CREATE OR REPLACE TABLE {output_table} AS
 
 WITH
@@ -49,6 +50,7 @@ cbg_deduped AS (
 
 SELECT _userId, cbg_timestamp, cbg_mg_dl, is_plausible
 FROM cbg_deduped
+;
 """)
 
 

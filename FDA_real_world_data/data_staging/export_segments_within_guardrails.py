@@ -555,6 +555,7 @@ CATALOG = "dev.fda_510k_rwd"
 MODE_CONFIG = {
     "transition": {
         "sql_template": """
+            --begin-sql
             WITH segments AS (
                 SELECT _userId, tb_to_ab_seg1_start, tb_to_ab_seg2_end, segment_rank
                 FROM {segments_table}
@@ -574,6 +575,7 @@ MODE_CONFIG = {
                 ON ps._userId = seg._userId
                 AND TRY_CAST(ps.time_string AS DATE)
                     BETWEEN seg.tb_to_ab_seg1_start AND seg.tb_to_ab_seg2_end
+        ;
         """,
         "default_input_table": "dev.default.bddp_sample_all_2",
         "default_segments_table": f"{CATALOG}.valid_transition_segments",
@@ -581,6 +583,7 @@ MODE_CONFIG = {
     },
     "stable": {
         "sql_template": """
+            --begin-sql
             WITH all_segments AS (
                 SELECT _userId, segment_start, segment_end
                 FROM {segments_table}
@@ -596,6 +599,7 @@ MODE_CONFIG = {
                 ON ps._userId = sa._userId
                 AND TRY_CAST(ps.time_string AS DATE)
                     BETWEEN sa.segment_start AND sa.segment_end
+        ;
         """,
         "default_input_table": "dev.default.bddp_sample_all_2",
         "default_segments_table": f"{CATALOG}.stable_autobolus_segments",

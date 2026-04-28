@@ -11,6 +11,7 @@ def run(
     loop_cbg_table=f"{CATALOG}.loop_cbg",
 ):
     spark.sql(f"""
+    --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
 
     SELECT
@@ -31,6 +32,7 @@ def run(
         ON o._userId = c._userId
         AND c.cbg_timestamp >= o.override_time
         AND c.cbg_timestamp <= o.override_time + o.duration * INTERVAL '1' SECOND + INTERVAL '2' HOUR
+    ;
     """)
 
 

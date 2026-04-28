@@ -53,10 +53,12 @@ def load_data(spark) -> pd.DataFrame:
 
     # --- JAEB PtID linkage ---
     jaeb_map = spark.sql("""
+        --begin-sql
         SELECT DISTINCT j.PtID, b._userId
         FROM dev.default.jaeb_upload_to_userid j
         INNER JOIN dev.default.bddp_sample_all_2 b
             ON j.uploadID = b.uploadID
+    ;
     """).toPandas()
 
     print(f"  JAEB-linked users in mapping table: {jaeb_map['_userId'].nunique()}")

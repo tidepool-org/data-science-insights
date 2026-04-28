@@ -1,4 +1,5 @@
 """
+--begin-sql
 Create a test_loop_data table mimicking bddp_sample_all with two users:
   - user_transition: 14 days temp basal → 14 days autobolus
   - user_no_transition: 28 days temp basal only
@@ -6,6 +7,7 @@ Create a test_loop_data table mimicking bddp_sample_all with two users:
 Columns match the format consumed by:
   - export_loop_recommendations.sql  (reason='loop', time, origin, recommendedBasal, recommendedBolus)
   - export_cbg_from_loop.sql         (type='cbg', time, value)
+;
 """
 
 import json
@@ -37,10 +39,12 @@ def _time_json(ts):
 
 def _make_recommendation_rows(user_id, timestamps, is_autobolus_fn):
     """
+    --begin-sql
     Create Loop recommendation rows.
 
     is_autobolus_fn(ts) -> bool determines whether each timestamp
     gets a recommendedBolus (autobolus) or recommendedBasal only (temp basal).
+    ;
     """
     rows = []
     for ts in timestamps:

@@ -82,6 +82,7 @@ def compute_glycemic_endpoints(spark, cbg_df, group_cols=None):
     cbg_df.createOrReplaceTempView("_cbg_input")
 
     range_endpoints = spark.sql(f"""
+        --begin-sql
         SELECT
             {group_clause},
             COUNT(*) AS cbg_count,
@@ -94,6 +95,7 @@ def compute_glycemic_endpoints(spark, cbg_df, group_cols=None):
             STDDEV(cbg_mg_dl) * 100.0 / AVG(cbg_mg_dl) AS cv
         FROM _cbg_input
         GROUP BY {group_clause}
+    ;
     """)
 
     hypo_events = _compute_hypo_events(spark, cbg_df, group_cols)

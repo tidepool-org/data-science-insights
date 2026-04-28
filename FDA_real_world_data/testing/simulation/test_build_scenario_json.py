@@ -91,17 +91,44 @@ def test_carb_entries_sum_same_tick():
             pd.Timestamp("2024-05-28 13:10:00"),
         ],
         "carb_grams": [15.0, 10.0, 30.0],
+        # 15g @ 120min + 10g @ 240min -> weighted avg 168 min on the
+        # merged tick. Solo 30g @ 90min stays at 90.
+        "carb_duration_minutes": [120.0, 240.0, 90.0],
     })
     df["carb_timestamp"] = _snap_to_grid(df["carb_timestamp"], sim_start)
     entries = _carb_entries(df)
     _check(len(entries) == 2, "2 carb entries after same-tick merge")
     _check(entries[0]["value"] == 25.0, "same-tick carbs summed (15 + 10)")
     _check(entries[0]["start_time"] == "5/28/2024 13:00:00", "sum emitted on merged tick")
+    _check(entries[0]["duration"] == 168,
+           "duration is gram-weighted avg ((15*120 + 10*240)/25 = 168)")
     _check(entries[1]["value"] == 30.0, "non-colliding carb untouched")
+    _check(entries[1]["duration"] == 90, "non-colliding duration untouched")
+
+
+def test_carb_entries_null_duration_falls_back_to_default():
+    sim_start = pd.Timestamp("2024-05-28 12:00:00")
+    df = pd.DataFrame({
+        "carb_timestamp": [
+            pd.Timestamp("2024-05-28 13:00:00"),  # null duration -> 180
+            pd.Timestamp("2024-05-28 13:05:00"),  # null duration -> 180
+        ],
+        "carb_grams": [20.0, 10.0],
+        "carb_duration_minutes": [float("nan"), float("nan")],
+    })
+    df["carb_timestamp"] = _snap_to_grid(df["carb_timestamp"], sim_start)
+    entries = _carb_entries(df)
+    _check(len(entries) == 2, "2 entries when nothing collides")
+    _check(entries[0]["duration"] == 180,
+           "null duration falls back to simulator default 180 min")
+    _check(entries[1]["duration"] == 180,
+           "null duration falls back to simulator default 180 min")
 
 
 def test_carb_entries_empty_df():
-    df = pd.DataFrame(columns=["carb_timestamp", "carb_grams"])
+    df = pd.DataFrame(
+        columns=["carb_timestamp", "carb_grams", "carb_duration_minutes"]
+    )
     _check(_carb_entries(df) == [], "empty df returns []")
 
 
@@ -198,6 +225,7 @@ if __name__ == "__main__":
     test_bolus_entries_sum_same_tick()
     test_bolus_entries_empty_df()
     test_carb_entries_sum_same_tick()
+    test_carb_entries_null_duration_falls_back_to_default()
     test_carb_entries_empty_df()
     test_scalar_schedule()
     test_target_schedule_rounds_to_int()

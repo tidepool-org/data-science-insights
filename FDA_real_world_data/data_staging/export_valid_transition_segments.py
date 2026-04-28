@@ -25,6 +25,7 @@ def run(
     min_autobolus_count=3,
 ):
     spark.sql(f"""
+--begin-sql
 CREATE OR REPLACE TABLE {output_table} AS
 WITH
 params AS (
@@ -210,6 +211,7 @@ LEFT JOIN {user_dates_table} d ON t._userId = d.userid
 LEFT JOIN {user_gender_table} g ON t._userId = g.userid
 WHERE ROUND(DATEDIFF(t.tb_to_ab_seg1_start, d.dob) / 365.25, 1) > 6 OR d.dob IS NULL
 ORDER BY t._userId, t.segment_rank
+;
 """)
 
 

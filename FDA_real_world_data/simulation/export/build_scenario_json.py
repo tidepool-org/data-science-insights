@@ -3,7 +3,8 @@
 
 Inputs (one CSV each, in --input_dir):
   - cgm.csv                : _userId, target_day, cbg_timestamp, cbg_mg_dl
-  - carbs.csv              : _userId, target_day, carb_timestamp, carb_grams
+  - carbs.csv              : _userId, target_day, carb_timestamp, carb_grams,
+                             carb_duration_minutes (NaN when not set in BDDP)
   - correction_boluses.csv : _userId, target_day, bolus_timestamp, bolus_amount
   - pump_settings.csv      : _userId, basal_schedule, isf_schedule,
                              cir_schedule, target_schedule (JSON strings)
@@ -41,6 +42,9 @@ DEFAULT_OUTPUT_DIR = "FDA_real_world_data/simulation/data/scenarios"
 SIM_START_HOUR = 12
 DURATION_HOURS = 24.0
 SIM_ID = "controller-fda-rwd"
+# Matches scenario_json_parser_v2.carb_entries_to_timeline default: when a
+# food entry has no estimatedAbsorptionDuration, the simulator uses 180 min.
+DEFAULT_CARB_DURATION_MIN = 180
 
 CONTROLLER_ID = "swift"
 CONTROLLER_SETTINGS = {
@@ -146,13 +150,24 @@ def _bolus_entries(bolus_user_df):
 
 def _carb_entries(carb_user_df):
     # Same-tick-collision rule as _bolus_entries: sum carbs that snap to the
-    # same 5-min tick so total grams consumed is preserved.
+    # same 5-min tick so total grams consumed is preserved. Absorption
+    # duration is collapsed by gram-weighted average — a 250g/6h extended
+    # meal merged with a 10g/3h snack should still mostly absorb over 6h.
+    # BDDP-null durations fall back to DEFAULT_CARB_DURATION_MIN so the
+    # weighted average is always defined.
     if carb_user_df.empty:
         return []
+    df = carb_user_df.dropna(subset=["carb_grams"]).copy()
+    if df.empty:
+        return []
+    durations = df["carb_duration_minutes"].fillna(DEFAULT_CARB_DURATION_MIN)
+    df["_weighted_duration"] = df["carb_grams"] * durations
     grouped = (
-        carb_user_df.dropna(subset=["carb_grams"])
-        .groupby("carb_timestamp", as_index=False)["carb_grams"]
-        .sum()
+        df.groupby("carb_timestamp", as_index=False)
+        .agg(
+            carb_grams=("carb_grams", "sum"),
+            _weighted_duration=("_weighted_duration", "sum"),
+        )
         .sort_values("carb_timestamp")
     )
     return [
@@ -160,6 +175,7 @@ def _carb_entries(carb_user_df):
             "type": "carb",
             "start_time": _fmt_dt(r["carb_timestamp"]),
             "value": float(r["carb_grams"]),
+            "duration": int(round(r["_weighted_duration"] / r["carb_grams"])),
         }
         for _, r in grouped.iterrows()
     ]

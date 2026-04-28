@@ -11,6 +11,7 @@ def run(
     stable_segments_table=f"{CATALOG}.stable_autobolus_segments",
 ):
     spark.sql(f"""
+    --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
 
     SELECT
@@ -21,6 +22,7 @@ def run(
     FROM {loop_cbg_table} c
     INNER JOIN {stable_segments_table} s ON c._userId = s._userId
     WHERE CAST(c.cbg_timestamp AS DATE) BETWEEN s.segment_start AND s.segment_end
+    ;
     """)
 
 

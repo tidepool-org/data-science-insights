@@ -12,6 +12,7 @@ def run(
     min_autobolus_count=3,
 ):
     spark.sql(f"""
+    --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
 
     WITH
@@ -109,6 +110,7 @@ def run(
     FROM permanent_check pc
     LEFT JOIN events e ON pc._userId = e._userId
     ORDER BY pc._userId, pc.week_post_adoption
+    ;
     """)
 
 

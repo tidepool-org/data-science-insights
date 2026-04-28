@@ -24,6 +24,7 @@ def run(
     output_table="dev.fda_510k_rwd.loop_recommendations",
 ):
     spark.sql(f"""
+--begin-sql
 CREATE OR REPLACE TABLE {output_table} AS
 
 WITH
@@ -251,6 +252,7 @@ FROM day_counts c
 LEFT JOIN day_versions dv
   ON c._userId = dv._userId
   AND c.day = dv.day
+;
 """)
 
 

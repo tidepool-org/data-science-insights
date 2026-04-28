@@ -5,6 +5,7 @@ import pandas as pd
 
 def get_autobolus_counts(spark):
     return spark.sql("""
+    --begin-sql
     WITH recommendation_deduped AS (
         SELECT DISTINCT
             `_userId`,
@@ -68,11 +69,13 @@ def get_autobolus_counts(spark):
     SELECT 'direct' AS source, autobolus_count FROM direct_autobolus WHERE autobolus_count <= 288
     UNION ALL
     SELECT 'healthkit' AS source, autobolus_count FROM healthkit_autobolus WHERE autobolus_count <= 288
+    ;
     """).toPandas()
 
 
 def get_duplicate_counts(spark):
     return spark.sql("""
+    --begin-sql
     WITH direct_dups AS (
         SELECT
             `_userId`,
@@ -103,11 +106,13 @@ def get_duplicate_counts(spark):
     SELECT 'direct' AS source, COUNT(*) AS dup_timestamps, SUM(n) AS dup_rows FROM direct_dups
     UNION ALL
     SELECT 'healthkit' AS source, COUNT(*) AS dup_timestamps, SUM(n) AS dup_rows FROM healthkit_dups
+    ;
     """).toPandas()
 
 
 def get_users_per_day(spark):
     return spark.sql("""
+    --begin-sql
     WITH recommendation_deduped AS (
         SELECT DISTINCT
             `_userId`,
@@ -149,6 +154,7 @@ def get_users_per_day(spark):
     SELECT 'direct' AS source, day, n_users FROM direct_daily
     UNION ALL
     SELECT 'healthkit' AS source, day, n_users FROM healthkit_daily
+    ;
     """).toPandas()
 
 

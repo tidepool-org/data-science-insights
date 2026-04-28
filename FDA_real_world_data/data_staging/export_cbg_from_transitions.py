@@ -5,6 +5,7 @@ def run(
     transition_segments_table="dev.fda_510k_rwd.valid_transition_segments",
 ):
     spark.sql(f"""
+--begin-sql
 CREATE OR REPLACE TABLE {output_table} AS
 
 SELECT
@@ -24,6 +25,7 @@ WHERE CAST(c.cbg_timestamp AS DATE) BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab
         WHEN CAST(c.cbg_timestamp AS DATE) BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg1_end THEN 'tb_to_ab_seg1'
         WHEN CAST(c.cbg_timestamp AS DATE) BETWEEN t.tb_to_ab_seg2_start AND t.tb_to_ab_seg2_end THEN 'tb_to_ab_seg2'
       END IS NOT NULL
+;
 """)
 
 

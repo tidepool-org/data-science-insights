@@ -242,11 +242,29 @@ def test_spark_tz_shift(spark):
 
     # BDDP fixture:
     # - one bolus at UTC 2024-05-28 22:00 -> user-local 14:00 (inside sim window)
+    # - a DUPLICATE of that bolus (same _userId/time_string/normal value): a
+    #   single physical bolus often lands in BDDP twice (HK-Loop + pump
+    #   telemetry); SELECT DISTINCT must collapse them, otherwise the
+    #   downstream build_scenario_json groupby would sum the two and double
+    #   the dose.
     # - one bolus at UTC 2024-05-28 18:00 -> user-local 10:00 (before sim window; excluded)
     # - nearby normalBolus decisions (±15s) so both pass the directional match
     # - one pumpSettings record (to seed TZ lookup + schedule)
     bddp_rows = [
         {  # Bolus inside window
+            "_userId": "user_a",
+            "time_string": "2024-05-28T22:00:00.000Z",
+            "type": "bolus",
+            "subType": "normal",
+            "normal": json.dumps({"value": 2.0}),
+            "nutrition": None,
+            "reason": None,
+            "timezoneOffset": OFFSET_MIN,
+            "basalSchedules": None, "bgTargets": None, "bgTarget": None,
+            "insulinSensitivities": None, "insulinSensitivity": None,
+            "carbRatios": None, "carbRatio": None,
+        },
+        {  # Duplicate ingest of the bolus above — must be deduped
             "_userId": "user_a",
             "time_string": "2024-05-28T22:00:00.000Z",
             "type": "bolus",
@@ -347,12 +365,17 @@ def test_spark_tz_shift(spark):
             cbgs = pd.read_csv(os.path.join(tmpdir, "cgm.csv"),
                                parse_dates=["cbg_timestamp"])
 
-            # Only one bolus should survive (the 22:00-UTC one, shifted to 14:00 user-local)
+            # Only one bolus should survive: the 22:00-UTC one (shifted to
+            # 14:00 user-local). Its duplicate ingest must be deduped, and
+            # the 18:00-UTC bolus is excluded by the sim-window filter.
             _check(len(boluses) == 1,
-                   f"one bolus inside sim window (got {len(boluses)})")
+                   f"one bolus inside sim window after dedup (got {len(boluses)})")
             _check(str(boluses["bolus_timestamp"].iloc[0]) == "2024-05-28 14:00:00",
                    f"bolus shifted to user-local 14:00 "
                    f"(got {boluses['bolus_timestamp'].iloc[0]})")
+            _check(boluses["bolus_amount"].iloc[0] == 2.0,
+                   f"bolus value preserved (not summed) by dedup "
+                   f"(got {boluses['bolus_amount'].iloc[0]})")
 
             _check(len(cbgs) == 1, "one cbg in window")
             _check(str(cbgs["cbg_timestamp"].iloc[0]) == "2024-05-28 12:00:00",

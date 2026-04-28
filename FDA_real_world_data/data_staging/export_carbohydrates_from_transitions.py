@@ -11,6 +11,7 @@ def run(
     transition_segments_table=f"{CATALOG}.valid_transition_segments",
 ):
     spark.sql(f"""
+    --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
 
     WITH raw_carbs AS (
@@ -63,6 +64,7 @@ def run(
             WHEN CAST(c.carb_timestamp AS DATE) BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg1_end THEN 'tb_to_ab_seg1'
             WHEN CAST(c.carb_timestamp AS DATE) BETWEEN t.tb_to_ab_seg2_start AND t.tb_to_ab_seg2_end THEN 'tb_to_ab_seg2'
           END IS NOT NULL
+    ;
     """)
 
 

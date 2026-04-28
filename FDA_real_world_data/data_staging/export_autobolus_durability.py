@@ -13,6 +13,7 @@ def run(
     min_autobolus_count=3,
 ):
     spark.sql(f"""
+    --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
 
     WITH
@@ -146,6 +147,7 @@ def run(
     LEFT JOIN {user_dates_table} dd ON u._userId = dd.userid
     LEFT JOIN {user_gender_table} g ON u._userId = g.userid
     ORDER BY u._userId
+    ;
     """)
 
 
