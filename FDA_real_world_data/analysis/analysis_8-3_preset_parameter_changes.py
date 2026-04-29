@@ -53,10 +53,9 @@ from utils.statistics import test_normality, compute_paired_statistics, format_p
 # Parameter definitions: (display_name, seg1_col, seg2_col, unit)
 # =============================================================================
 PARAMETERS = [
-    ("Basal Rate Scale Factor",         "brsf_seg1",  "brsf_seg2",  "ratio"),
-    ("Carb Ratio Scale Factor",         "crsf_seg1",  "crsf_seg2",  "ratio"),
-    ("Insulin Sensitivity SF",          "issf_seg1",  "issf_seg2",  "ratio"),
-    ("Glucose Target Midpoint (mg/dL)", "gtm_seg1",   "gtm_seg2",   "mg/dL"),
+    ("Basal Rate Scale Factor",         "brsf_seg1",   "brsf_seg2",   "ratio"),
+    ("CR/ISF Scale Factor",             "crisf_seg1",  "crisf_seg2",  "ratio"),
+    ("Glucose Target Midpoint (mg/dL)", "gtm_seg1",    "gtm_seg2",    "mg/dL"),
 ]
 
 
@@ -136,14 +135,26 @@ def load_data(spark) -> pd.DataFrame:
 
     df["gtm"]  = (df["bg_target_low"] + df["bg_target_high"]) / 2.0
     df["brsf"] = df["basalRateScaleFactor"]
-    df["crsf"] = df["carbRatioScaleFactor"]
-    df["issf"] = df["insulinSensitivityScaleFactor"]
+
+    # Loop overrides tie CR and ISF scale factors to a single "insulin needs"
+    # multiplier in the UI; verify they agree, then collapse to one column.
+    both_present = df["carbRatioScaleFactor"].notna() & df["insulinSensitivityScaleFactor"].notna()
+    mismatches = both_present & ~np.isclose(
+        df["carbRatioScaleFactor"],
+        df["insulinSensitivityScaleFactor"],
+        rtol=1e-6, atol=1e-6,
+        equal_nan=True,
+    )
+    if mismatches.any():
+        print(f"  Warning: {mismatches.sum()}/{both_present.sum()} override events have "
+              f"carbRatioScaleFactor != insulinSensitivityScaleFactor; using carbRatioScaleFactor")
+    df["crisf"] = df["carbRatioScaleFactor"]
 
     # Duration weight — fall back to 1 if NULL or zero
     df["w"] = df["duration"].fillna(1.0).clip(lower=1.0)
 
     # ── Step 5: time-weighted aggregation per (user, preset, dosing_mode) ─────
-    param_cols = ["brsf", "crsf", "issf", "gtm"]
+    param_cols = ["brsf", "crisf", "gtm"]
     GROUP_COLS = ["_userId", "overridePreset", "dosing_mode"]
 
     agg_rows = []
@@ -229,7 +240,7 @@ def create_table_8_3a(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 # =============================================================================
 
 def create_figure_8_3a(df: pd.DataFrame, output_path: str):
-    fig, axes = plt.subplots(2, 2, figsize=(12, 12))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5.5))
     labels = [f"({chr(97 + i)})" for i in range(len(PARAMETERS))]
 
     for idx, (ax, (title, c1, c2, unit)) in enumerate(zip(axes.flatten(), PARAMETERS)):
@@ -287,7 +298,7 @@ def create_figure_8_3a(df: pd.DataFrame, output_path: str):
 def create_figure_8_3b(df: pd.DataFrame, output_path: str):
     labels = [f"({chr(97 + i)})" for i in range(len(PARAMETERS))]
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 12))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5.5))
 
     for idx, (ax, (title, c1, c2, _)) in enumerate(zip(axes.flatten(), PARAMETERS)):
         valid = df[c1].notna() & df[c2].notna()
@@ -350,7 +361,7 @@ def create_figure_8_3c(df: pd.DataFrame, output_path: str):
     # All 6 unique pairwise combinations
     pairs = [(i, j) for i in range(len(delta_cols)) for j in range(i + 1, len(delta_cols))]
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5.5))
     axes = axes.flatten()
 
     for ax, (i, j) in zip(axes, pairs):
