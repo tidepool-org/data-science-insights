@@ -14,7 +14,11 @@ from datetime import date
 from pyspark.sql import SparkSession  # type: ignore
 
 import os
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/data_staging"
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
 from export_segments_within_guardrails import run  # type: ignore # noqa: E402
@@ -109,13 +113,13 @@ try:
     # 2. Row with valid settings has no violations
     valid_row = result[result["violation_count"] == 0]
     assert len(valid_row) == 1, f"expected 1 valid row, got {len(valid_row)}"
-    assert valid_row.iloc[0]["all_valid"] == True, "valid row should have all_valid=True"  # noqa: E712
+    assert valid_row.iloc[0]["all_valid"], "valid row should have all_valid=True"
     print("PASS: valid settings have zero violations")
 
     # 3. Row with violation detected
     violation_row = result[result["violation_count"] > 0]
     assert len(violation_row) == 1, f"expected 1 violation row, got {len(violation_row)}"
-    assert violation_row.iloc[0]["basal_valid"] == False, "basal should be invalid"  # noqa: E712
+    assert not violation_row.iloc[0]["basal_valid"], "basal should be invalid"
     assert violation_row.iloc[0]["basal_rate_max"] == 35.0, "basal_rate_max should be 35.0"
     print("PASS: basal rate violation detected")
 

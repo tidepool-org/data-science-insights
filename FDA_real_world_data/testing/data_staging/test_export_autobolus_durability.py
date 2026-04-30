@@ -50,19 +50,12 @@ ALL_TABLES = [RECS_TABLE, DATES_TABLE, GENDER_TABLE, OUTPUT_TABLE]
 # user_short_followup (age 30): 30 days all-AB. days_post_adoption < 56.
 # user_child (age 5): same data as user_continues, but dob makes age <= 6.
 recs_rows = (
-    make_loop_recs("user_continues", date(2025, 1, 1), n_days=60, is_autobolus=1)
-    + make_loop_recs("user_discontinues", date(2025, 1, 1), n_days=3, is_autobolus=1)
-    + make_loop_recs("user_discontinues", date(2025, 1, 4), n_days=57, is_autobolus=0)
-    + make_loop_recs("user_short_followup", date(2025, 1, 1), n_days=30, is_autobolus=1)
-    + make_loop_recs("user_child", date(2025, 1, 1), n_days=60, is_autobolus=1)
+    make_loop_recs("user_continues", date(2025, 1, 1), n_days=60, dosing_mode="autobolus")
+    + make_loop_recs("user_discontinues", date(2025, 1, 1), n_days=3, dosing_mode="autobolus")
+    + make_loop_recs("user_discontinues", date(2025, 1, 4), n_days=57, dosing_mode="temp_basal")
+    + make_loop_recs("user_short_followup", date(2025, 1, 1), n_days=30, dosing_mode="autobolus")
+    + make_loop_recs("user_child", date(2025, 1, 1), n_days=60, dosing_mode="autobolus")
 )
-# Databricks Connect drops all-None columns during pandas→Arrow conversion.
-# Replace None with 0 on hk_* cols; SQL uses COALESCE(hk_*, 0) so behavior is identical.
-for r in recs_rows:
-    if r["hk_autobolus_count"] is None:
-        r["hk_autobolus_count"] = 0
-    if r["hk_temp_basal_count"] is None:
-        r["hk_temp_basal_count"] = 0
 
 dates_rows = [
     {"userid": "user_continues", "dob": date(1995, 1, 1), "diagnosis_date": date(2010, 1, 1)},
@@ -104,32 +97,32 @@ try:
 
     # 2. user_continues: adopted, sufficient followup, not discontinued
     cont = result[result["_userId"] == "user_continues"].iloc[0]
-    assert cont["is_adopted"] == True, f"user_continues should be adopted"  # noqa: E712
-    assert cont["has_min_followup"] == True, f"user_continues should have min followup"  # noqa: E712
-    assert cont["has_final_coverage"] == True, f"user_continues should have final coverage"  # noqa: E712
-    assert cont["is_age_eligible"] == True, f"user_continues should be age eligible"  # noqa: E712
-    assert int(cont["is_discontinued"]) == 0, f"user_continues should not be discontinued"
-    assert float(cont["final_autobolus_pct"]) > 0.9, f"final_autobolus_pct should be ~1.0"
+    assert cont["is_adopted"], "user_continues should be adopted"
+    assert cont["has_min_followup"], "user_continues should have min followup"
+    assert cont["has_final_coverage"], "user_continues should have final coverage"
+    assert cont["is_age_eligible"], "user_continues should be age eligible"
+    assert int(cont["is_discontinued"]) == 0, "user_continues should not be discontinued"
+    assert float(cont["final_autobolus_pct"]) > 0.9, "final_autobolus_pct should be ~1.0"
     print("PASS: user_continues — all flags TRUE, not discontinued")
 
     # 3. user_discontinues: adopted, sufficient followup, discontinued
     disc = result[result["_userId"] == "user_discontinues"].iloc[0]
-    assert disc["is_adopted"] == True  # noqa: E712
-    assert disc["has_min_followup"] == True  # noqa: E712
-    assert int(disc["is_discontinued"]) == 1, f"user_discontinues should be discontinued"
-    assert float(disc["final_autobolus_pct"]) < 0.1, f"final_autobolus_pct should be ~0.0"
+    assert disc["is_adopted"]
+    assert disc["has_min_followup"]
+    assert int(disc["is_discontinued"]) == 1, "user_discontinues should be discontinued"
+    assert float(disc["final_autobolus_pct"]) < 0.1, "final_autobolus_pct should be ~0.0"
     print("PASS: user_discontinues — adopted, discontinued, low final AB%")
 
     # 4. user_short_followup: adopted but insufficient followup
     short = result[result["_userId"] == "user_short_followup"].iloc[0]
-    assert short["is_adopted"] == True  # noqa: E712
-    assert short["has_min_followup"] == False, f"user_short_followup should not have min followup"  # noqa: E712
+    assert short["is_adopted"]
+    assert not short["has_min_followup"], "user_short_followup should not have min followup"
     print(f"PASS: user_short_followup — adopted, has_min_followup=False (days={short['days_post_adoption']})")
 
     # 5. user_child: adopted but not age eligible
     child = result[result["_userId"] == "user_child"].iloc[0]
-    assert child["is_adopted"] == True  # noqa: E712
-    assert child["is_age_eligible"] == False, f"user_child should not be age eligible"  # noqa: E712
+    assert child["is_adopted"]
+    assert not child["is_age_eligible"], "user_child should not be age eligible"
     assert float(child["age_at_adoption"]) <= 6, f"user_child age should be <= 6, got {child['age_at_adoption']}"
     print("PASS: user_child — adopted, is_age_eligible=False")
 

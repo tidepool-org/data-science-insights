@@ -14,7 +14,11 @@ from datetime import date
 from pyspark.sql import SparkSession  # type: ignore
 
 import os
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/data_staging"
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
 from export_overrides_from_transitions import run  # type: ignore # noqa: E402
@@ -43,6 +47,7 @@ segments_rows = [
         "tb_to_ab_seg1_end": date(2025, 1, 14),
         "tb_to_ab_seg2_start": date(2025, 1, 15),
         "tb_to_ab_seg2_end": date(2025, 1, 28),
+        "segment_rank": 1,
     },
 ]
 
@@ -68,21 +73,22 @@ SLEEP = {
 
 bddp_rows = [
     # Exercise in seg1 (×2)
-    {"_userId": "user_a", "time_string": "2025-01-03 10:00:00", **EXERCISE},
-    {"_userId": "user_a", "time_string": "2025-01-05 10:00:00", **EXERCISE},
+    {"_userId": "user_a", "time_string": "2025-01-03 10:00:00", "created_timestamp": "2025-01-03 10:00:01", **EXERCISE},
+    {"_userId": "user_a", "time_string": "2025-01-05 10:00:00", "created_timestamp": "2025-01-05 10:00:01", **EXERCISE},
     # Exercise in seg2 (×2)
-    {"_userId": "user_a", "time_string": "2025-01-17 10:00:00", **EXERCISE},
-    {"_userId": "user_a", "time_string": "2025-01-19 10:00:00", **EXERCISE},
+    {"_userId": "user_a", "time_string": "2025-01-17 10:00:00", "created_timestamp": "2025-01-17 10:00:01", **EXERCISE},
+    {"_userId": "user_a", "time_string": "2025-01-19 10:00:00", "created_timestamp": "2025-01-19 10:00:01", **EXERCISE},
     # Sleep in seg1 (×1)
-    {"_userId": "user_a", "time_string": "2025-01-04 22:00:00", **SLEEP},
+    {"_userId": "user_a", "time_string": "2025-01-04 22:00:00", "created_timestamp": "2025-01-04 22:00:01", **SLEEP},
     # Sleep in seg2 (×1)
-    {"_userId": "user_a", "time_string": "2025-01-16 22:00:00", **SLEEP},
+    {"_userId": "user_a", "time_string": "2025-01-16 22:00:00", "created_timestamp": "2025-01-16 22:00:01", **SLEEP},
     # Outside segments — excluded
-    {"_userId": "user_a", "time_string": "2025-01-30 10:00:00", **EXERCISE},
+    {"_userId": "user_a", "time_string": "2025-01-30 10:00:00", "created_timestamp": "2025-01-30 10:00:01", **EXERCISE},
     # Null preset — excluded by WHERE overridePreset IS NOT NULL
     {
         "_userId": "user_a",
         "time_string": "2025-01-05 14:00:00",
+        "created_timestamp": "2025-01-05 14:00:01",
         "overridePreset": None,
         "basalRateScaleFactor": None,
         "bgTarget": None,
@@ -130,11 +136,12 @@ try:
     assert all(seg2["dosing_mode"] == "autobolus"), "seg2 dosing_mode should be autobolus"
     print("PASS: correct dosing_mode per segment")
 
-    # 5. bg_target values converted to mg/dL (8.3 * 18.018 ≈ 149.5)
+    # 5. bg_target values converted to mg/dL (deterministic mmol → mg/dL conversion).
     ex_row = exercise.iloc[0]
     btl = float(ex_row["bg_target_low"])
-    assert abs(btl - 8.3 * 18.018) < 1.0, f"bg_target_low: expected ~149.5, got {btl}"
-    print(f"PASS: bg_target_low converted to mg/dL ({btl:.1f})")
+    expected_btl = 8.3 * 18.018
+    assert abs(btl - expected_btl) < 0.001, f"bg_target_low: expected {expected_btl}, got {btl}"
+    print(f"PASS: bg_target_low converted to mg/dL ({btl:.4f})")
 
     print("\nAll tests passed.")
 

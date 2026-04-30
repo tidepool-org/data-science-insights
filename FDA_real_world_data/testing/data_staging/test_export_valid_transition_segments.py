@@ -47,21 +47,14 @@ ALL_TABLES = [LOOP_RECS_TABLE, USER_DATES_TABLE, USER_GENDER_TABLE, OUTPUT_TABLE
 START = date(2025, 1, 1)
 
 loop_recs_rows = (
-    make_loop_recs("user_transition", START, n_days=14, is_autobolus=0)
-    + make_loop_recs("user_transition", date(2025, 1, 15), n_days=14, is_autobolus=1)
+    make_loop_recs("user_transition", START, n_days=14, dosing_mode="temp_basal")
+    + make_loop_recs("user_transition", date(2025, 1, 15), n_days=14, dosing_mode="autobolus")
     # User B: 28 days all temp basal — no transition, should be excluded
-    + make_loop_recs("user_no_transition", START, n_days=28, is_autobolus=0)
+    + make_loop_recs("user_no_transition", START, n_days=28, dosing_mode="temp_basal")
     # User C: transition but under 6 years old — should be excluded by age filter
-    + make_loop_recs("user_child", START, n_days=14, is_autobolus=0)
-    + make_loop_recs("user_child", date(2025, 1, 15), n_days=14, is_autobolus=1)
+    + make_loop_recs("user_child", START, n_days=14, dosing_mode="temp_basal")
+    + make_loop_recs("user_child", date(2025, 1, 15), n_days=14, dosing_mode="autobolus")
 )
-# Databricks Connect drops all-None columns during pandas→Arrow conversion.
-# Replace None with 0 on hk_* cols; SQL uses COALESCE(hk_*, 0) so behavior is identical.
-for r in loop_recs_rows:
-    if r["hk_autobolus_count"] is None:
-        r["hk_autobolus_count"] = 0
-    if r["hk_temp_basal_count"] is None:
-        r["hk_temp_basal_count"] = 0
 
 user_dates_rows = [
     {"userid": "user_transition", "dob": "1990-01-01", "diagnosis_date": "2000-01-01"},

@@ -14,7 +14,11 @@ import pandas as pd
 from pyspark.sql import SparkSession  # type: ignore
 
 import os
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/data_staging"
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
 from compute_glycemic_endpoints import run  # type: ignore # noqa: E402
@@ -69,9 +73,14 @@ seg1_values = [120.0] * 10
 # Expected: tbr_very_low=20%, tbr=40%, tir=40%, tar=20%, tar_very_high=10%
 seg2_values = [50.0, 50.0, 65.0, 65.0, 120.0, 120.0, 120.0, 120.0, 200.0, 300.0]
 
+# user_b seg1: 3 consecutive readings <54 (event starts) followed by 3 consecutive >70 (event ends).
+# Expected: hypo_events == 1.
+user_b_seg1_values = [50.0, 50.0, 50.0, 100.0, 100.0, 100.0]
+
 cbg_rows = (
     _cbg_rows("user_a", "tb_to_ab_seg1", seg1_values)
     + _cbg_rows("user_a", "tb_to_ab_seg2", seg2_values)
+    + _cbg_rows("user_b", "tb_to_ab_seg1", user_b_seg1_values)
 )
 
 
@@ -88,11 +97,11 @@ try:
         if col in result.columns:
             result[col] = result[col].astype(float)
 
-    # 1. Two rows: one per segment
-    assert_row_count(result, 2, "glycemic endpoint rows (1 per segment)")
+    # 1. Three rows: user_a × 2 segments + user_b × 1 segment
+    assert_row_count(result, 3, "glycemic endpoint rows (1 per (user, segment))")
 
     # 2. Seg1: 100% TIR, all zeros elsewhere
-    seg1 = result[result["segment"] == "tb_to_ab_seg1"].iloc[0]
+    seg1 = result[(result["_userId"] == "user_a") & (result["segment"] == "tb_to_ab_seg1")].iloc[0]
     assert seg1["cbg_count"] == 10, f"seg1 cbg_count: expected 10, got {seg1['cbg_count']}"
     assert abs(seg1["tir"] - 100.0) < 0.1, f"seg1 TIR: expected 100%, got {seg1['tir']}"
     assert abs(seg1["tbr"]) < 0.1, f"seg1 TBR: expected 0%, got {seg1['tbr']}"
@@ -101,7 +110,7 @@ try:
     print("PASS: seg1 — 100% TIR, mean=120")
 
     # 3. Seg2: verify range percentages
-    seg2 = result[result["segment"] == "tb_to_ab_seg2"].iloc[0]
+    seg2 = result[(result["_userId"] == "user_a") & (result["segment"] == "tb_to_ab_seg2")].iloc[0]
     assert seg2["cbg_count"] == 10, f"seg2 cbg_count: expected 10, got {seg2['cbg_count']}"
     assert abs(seg2["tbr_very_low"] - 20.0) < 0.1, f"seg2 TBR very low: expected 20%, got {seg2['tbr_very_low']}"
     assert abs(seg2["tbr"] - 40.0) < 0.1, f"seg2 TBR: expected 40%, got {seg2['tbr']}"
@@ -117,10 +126,17 @@ try:
     )
     print(f"PASS: seg2 mean glucose = {expected_mean}")
 
-    # 5. Hypo events: seg1 should have 0, seg2 has 0 (only 2 consecutive < 54, need 3)
+    # 5. user_a hypo events: seg1 has 0 (no <54 readings); seg2 has 0 (only 2 consecutive <54).
     assert seg1["hypo_events"] == 0, f"seg1 hypo_events: expected 0, got {seg1['hypo_events']}"
     assert seg2["hypo_events"] == 0, f"seg2 hypo_events: expected 0, got {seg2['hypo_events']}"
-    print("PASS: hypo events = 0 (< 3 consecutive readings below 54)")
+    print("PASS: user_a hypo events = 0 (< 3 consecutive readings below 54)")
+
+    # 6. user_b hypo events: 3 consecutive <54 → event starts; 3 consecutive >70 → event ends.
+    user_b_seg1 = result[(result["_userId"] == "user_b") & (result["segment"] == "tb_to_ab_seg1")].iloc[0]
+    assert user_b_seg1["hypo_events"] == 1, (
+        f"user_b seg1 hypo_events: expected 1, got {user_b_seg1['hypo_events']}"
+    )
+    print("PASS: user_b hypo events = 1 (3+ consecutive <54 then 3+ consecutive >70)")
 
     print("\nAll tests passed.")
 

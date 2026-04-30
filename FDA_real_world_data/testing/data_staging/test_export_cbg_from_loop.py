@@ -12,7 +12,11 @@ import sys
 from pyspark.sql import SparkSession  # type: ignore
 
 import os
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/data_staging"
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
 from export_cbg_from_loop import run  # type: ignore # noqa: E402
@@ -145,10 +149,10 @@ try:
     # 5. is_plausible flag correct
     assert "is_plausible" in result.columns, "missing is_plausible column"
     plausible = result.set_index(result["cbg_mg_dl"].round(0))["is_plausible"]
-    assert plausible[130.0] == True, "130 mg/dL should be plausible"  # noqa: E712
-    assert plausible[150.0] == True, "150 mg/dL should be plausible"  # noqa: E712
-    assert plausible[37.0] == False, "37 mg/dL should be implausible"  # noqa: E712
-    assert plausible[501.0] == False, "501 mg/dL should be implausible"  # noqa: E712
+    assert plausible[130.0], "130 mg/dL should be plausible"
+    assert plausible[150.0], "150 mg/dL should be plausible"
+    assert not plausible[37.0], "37 mg/dL should be implausible"
+    assert not plausible[501.0], "501 mg/dL should be implausible"
     print("PASS: is_plausible flag correct for in-range and out-of-range values")
 
     print("\nAll tests passed.")

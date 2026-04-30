@@ -50,18 +50,11 @@ durability_rows = [
 #   Weeks 0-5: ~100% AB. Weeks 6-12: 0% AB.
 #   4-week trailing avg drops permanently -> event detected
 recs_rows = (
-    make_loop_recs("user_event", date(2025, 1, 1), n_days=42, is_autobolus=1)
-    + make_loop_recs("user_event", date(2025, 2, 12), n_days=49, is_autobolus=0)
+    make_loop_recs("user_event", date(2025, 1, 1), n_days=42, dosing_mode="autobolus")
+    + make_loop_recs("user_event", date(2025, 2, 12), n_days=49, dosing_mode="temp_basal")
     # user_censored: 91 days all-AB. Trailing avg stays ~100% -> no event
-    + make_loop_recs("user_censored", date(2025, 1, 1), n_days=91, is_autobolus=1)
+    + make_loop_recs("user_censored", date(2025, 1, 1), n_days=91, dosing_mode="autobolus")
 )
-# Databricks Connect drops all-None columns during pandas→Arrow conversion.
-# Replace None with 0 on hk_* cols; SQL uses COALESCE(hk_*, 0) so behavior is identical.
-for r in recs_rows:
-    if r["hk_autobolus_count"] is None:
-        r["hk_autobolus_count"] = 0
-    if r["hk_temp_basal_count"] is None:
-        r["hk_temp_basal_count"] = 0
 
 # --- Run test ---
 try:
@@ -77,41 +70,39 @@ try:
 
     result = read_test_output(spark, OUTPUT_TABLE)
 
-    # 1. Multiple rows per user (one per week)
-    assert len(result) > 2, f"expected multiple weekly rows, got {len(result)}"
+    # 1. 26 weekly rows: 13 weeks (91 days / 7) × 2 users.
+    assert len(result) == 26, f"expected 26 weekly rows, got {len(result)}"
     users = set(result["_userId"].tolist())
     assert users == {"user_event", "user_censored"}, f"expected both users, got {users}"
     print(f"PASS: {len(result)} weekly rows for {len(users)} users")
 
-    # 2. Early weeks have is_window_complete=False (< 4 weeks of data)
+    # 2. Pin both sides of the 4-week-trailing-avg threshold:
+    #    week 2 incomplete (only 3 weeks of data); week 3 first complete window.
     event_weeks = result[result["_userId"] == "user_event"].sort_values("week_post_adoption")
-    first_week = event_weeks.iloc[0]
-    assert first_week["is_window_complete"] == False, (  # noqa: E712
-        f"first week should have is_window_complete=False"
+    week_2 = event_weeks[event_weeks["week_post_adoption"] == 2].iloc[0]
+    assert not week_2["is_window_complete"], (
+        f"week 2 should have is_window_complete=False (only 3 weeks of data)"
     )
-    print("PASS: early weeks have is_window_complete=False")
-
-    # 3. Later weeks have is_window_complete=True
     week_3 = event_weeks[event_weeks["week_post_adoption"] == 3].iloc[0]
-    assert week_3["is_window_complete"] == True, (  # noqa: E712
-        f"week 3 should have is_window_complete=True"
+    assert week_3["is_window_complete"], (
+        f"week 3 should have is_window_complete=True (4 weeks of data)"
     )
-    print("PASS: week 3+ has is_window_complete=True")
+    print("PASS: is_window_complete flips False→True between weeks 2 and 3")
 
     # 4. user_event: has_discontinuation=True, is_event_week marks the event
-    assert all(event_weeks["has_discontinuation"] == True), (  # noqa: E712
+    assert event_weeks["has_discontinuation"].all(), (
         "all user_event rows should have has_discontinuation=True"
     )
-    event_week_rows = event_weeks[event_weeks["is_event_week"] == True]  # noqa: E712
+    event_week_rows = event_weeks[event_weeks["is_event_week"].astype(bool)]
     assert len(event_week_rows) == 1, f"expected 1 event week, got {len(event_week_rows)}"
     print(f"PASS: user_event — has_discontinuation=True, event at week {event_week_rows.iloc[0]['week_post_adoption']}")
 
     # 5. user_censored: has_discontinuation=False, no event weeks
     censored_weeks = result[result["_userId"] == "user_censored"]
-    assert all(censored_weeks["has_discontinuation"] == False), (  # noqa: E712
+    assert not censored_weeks["has_discontinuation"].any(), (
         "all user_censored rows should have has_discontinuation=False"
     )
-    assert all(censored_weeks["is_event_week"] == False), (  # noqa: E712
+    assert not censored_weeks["is_event_week"].any(), (
         "user_censored should have no event weeks"
     )
     print(f"PASS: user_censored — has_discontinuation=False, {len(censored_weeks)} weeks")

@@ -14,7 +14,11 @@ from datetime import datetime
 from pyspark.sql import SparkSession  # type: ignore
 
 import os
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/data_staging"
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
 from export_cbg_from_overrides import run  # type: ignore # noqa: E402
@@ -128,8 +132,9 @@ try:
     print("PASS: both valid and invalid overrides included")
 
     # 3. is_valid_name_only flag distinguishes them
-    valid_rows = result[result["is_valid_name_only"] == True]  # noqa: E712
-    invalid_rows = result[result["is_valid_name_only"] == False]  # noqa: E712
+    valid_mask = result["is_valid_name_only"].astype(bool)
+    valid_rows = result[valid_mask]
+    invalid_rows = result[~valid_mask]
     assert len(valid_rows) == 2, f"expected 2 valid rows, got {len(valid_rows)}"
     assert len(invalid_rows) == 1, f"expected 1 invalid row, got {len(invalid_rows)}"
     assert invalid_rows.iloc[0]["overridePreset"] == "Sleep", "invalid row should be Sleep"

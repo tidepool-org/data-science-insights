@@ -11,7 +11,11 @@ import sys
 
 import pandas as pd
 
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/simulation"
 sys.path.insert(0, os.path.join(_here, "..", "..", "simulation", "export"))
 
 from build_scenario_json import (  # type: ignore # noqa: E402
@@ -36,9 +40,9 @@ def _check(cond, label):
 def test_snap_to_grid_basic():
     sim_start = pd.Timestamp("2024-05-28 12:00:00")
     series = pd.Series([
-        pd.Timestamp("2024-05-28 12:01:30"),  # -> 12:00 (<2.5m forward)
-        pd.Timestamp("2024-05-28 12:04:00"),  # -> 12:05 (=2.5m halfway; banker's rounds to even?)
-        pd.Timestamp("2024-05-28 12:07:00"),  # -> 12:05 (closest)
+        pd.Timestamp("2024-05-28 12:01:30"),  # -> 12:00 (1.5m back)
+        pd.Timestamp("2024-05-28 12:04:00"),  # -> 12:05 (1m forward)
+        pd.Timestamp("2024-05-28 12:07:00"),  # -> 12:05 (2m back)
         pd.Timestamp("2024-05-28 11:58:00"),  # -> 12:00 (negative delta, rounds to nearest)
     ])
     snapped = _snap_to_grid(series, sim_start)
@@ -48,9 +52,8 @@ def test_snap_to_grid_basic():
         pd.Timestamp("2024-05-28 12:05:00"),
         pd.Timestamp("2024-05-28 12:00:00"),
     ]
-    # 12:04:00 is exactly 4/5 of the way — round() makes it 12:05 (1.33 → 1)
-    # We only assert the unambiguous cases.
     _check(snapped.iloc[0] == expected[0], "snap 01:30 forward -> 00:00")
+    _check(snapped.iloc[1] == expected[1], "snap 04:00 forward -> 05:00")
     _check(snapped.iloc[2] == expected[2], "snap 07:00 -> 05:00")
     _check(snapped.iloc[3] == expected[3], "snap -2m -> 00:00")
 

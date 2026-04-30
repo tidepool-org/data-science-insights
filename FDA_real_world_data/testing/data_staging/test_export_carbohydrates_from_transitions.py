@@ -23,7 +23,6 @@ sys.path.insert(0, os.path.join(_here, ".."))
 from export_carbohydrates_from_transitions import run  # type: ignore # noqa: E402
 from staging_test_helpers import (  # noqa: E402
     TEST_SCHEMA,
-    assert_column_values,
     assert_row_count,
     read_test_output,
     setup_test_table,
@@ -52,19 +51,47 @@ segments_rows = [
 ]
 
 bddp_rows = [
-    {  # Row 1: food in seg1 — included
+    {  # Row 1: food mid-seg1 — included
         "_userId": "user_a",
         "time_string": "2025-01-05 12:00:00",
         "type": "food",
         "nutrition": '{"carbohydrate": {"net": 45.0}}',
         "created_timestamp": "2025-01-05 12:00:01",
     },
-    {  # Row 2: food in seg2 — included
+    {  # Row 1a: food on seg1_start (boundary, INCLUSIVE) — included in seg1
+        "_userId": "user_a",
+        "time_string": "2025-01-01 00:00:00",
+        "type": "food",
+        "nutrition": '{"carbohydrate": {"net": 11.0}}',
+        "created_timestamp": "2025-01-01 00:00:01",
+    },
+    {  # Row 1b: food on seg1_end at 23:30 (boundary, INCLUSIVE) — included in seg1
+        "_userId": "user_a",
+        "time_string": "2025-01-14 23:30:00",
+        "type": "food",
+        "nutrition": '{"carbohydrate": {"net": 14.0}}',
+        "created_timestamp": "2025-01-14 23:30:01",
+    },
+    {  # Row 1c: food on seg2_start at 00:30 (boundary, INCLUSIVE) — included in seg2
+        "_userId": "user_a",
+        "time_string": "2025-01-15 00:30:00",
+        "type": "food",
+        "nutrition": '{"carbohydrate": {"net": 15.0}}',
+        "created_timestamp": "2025-01-15 00:30:01",
+    },
+    {  # Row 2: food mid-seg2 — included
         "_userId": "user_a",
         "time_string": "2025-01-20 12:00:00",
         "type": "food",
         "nutrition": '{"carbohydrate": {"net": 30.0}}',
         "created_timestamp": "2025-01-20 12:00:01",
+    },
+    {  # Row 2a: food on seg2_end at 23:30 (boundary, INCLUSIVE) — included in seg2
+        "_userId": "user_a",
+        "time_string": "2025-01-28 23:30:00",
+        "type": "food",
+        "nutrition": '{"carbohydrate": {"net": 28.0}}',
+        "created_timestamp": "2025-01-28 23:30:01",
     },
     {  # Row 3: food before seg1 — excluded
         "_userId": "user_a",
@@ -117,18 +144,21 @@ try:
 
     result = read_test_output(spark, OUTPUT_TABLE)
 
-    # 1. Only 2 rows: seg1 and seg2 food entries for user_a
-    assert_row_count(result, 2, "carb entries within transition segments")
+    # 1. 6 rows survive: 3 in each segment (mid + start-boundary + end-boundary).
+    assert_row_count(result, 6, "carb entries within transition segments")
 
-    # 2. Correct segment assignment
-    assert_column_values(result, "segment", ["tb_to_ab_seg1", "tb_to_ab_seg2"], "segment labels")
+    # 2. Each segment has all three of its rows.
+    seg1_rows = result[result["segment"] == "tb_to_ab_seg1"]
+    seg2_rows = result[result["segment"] == "tb_to_ab_seg2"]
+    assert len(seg1_rows) == 3, f"expected 3 seg1 rows, got {len(seg1_rows)}"
+    assert len(seg2_rows) == 3, f"expected 3 seg2 rows, got {len(seg2_rows)}"
 
-    # 3. Correct carb values
-    seg1 = result[result["segment"] == "tb_to_ab_seg1"].iloc[0]
-    seg2 = result[result["segment"] == "tb_to_ab_seg2"].iloc[0]
-    assert float(seg1["carb_grams"]) == 45.0, f"seg1 carbs: expected 45.0, got {seg1['carb_grams']}"
-    assert float(seg2["carb_grams"]) == 30.0, f"seg2 carbs: expected 30.0, got {seg2['carb_grams']}"
-    print("PASS: correct carb_grams values per segment")
+    # 3. Boundary rows landed in the correct segment (inclusive BETWEEN on CAST(..AS DATE)).
+    seg1_carbs = sorted(float(c) for c in seg1_rows["carb_grams"])
+    seg2_carbs = sorted(float(c) for c in seg2_rows["carb_grams"])
+    assert seg1_carbs == [11.0, 14.0, 45.0], f"seg1 carb_grams: {seg1_carbs}"
+    assert seg2_carbs == [15.0, 28.0, 30.0], f"seg2 carb_grams: {seg2_carbs}"
+    print("PASS: boundary rows land in expected segments (inclusive BETWEEN on date)")
 
     # 4. Only user_a
     assert all(result["_userId"] == "user_a"), "expected only user_a"

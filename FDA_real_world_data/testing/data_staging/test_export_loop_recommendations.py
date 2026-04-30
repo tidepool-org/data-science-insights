@@ -26,7 +26,11 @@ def _isnull(v):
     return v is None or (isinstance(v, float) and math.isnan(v))
 
 import os
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/data_staging"
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
 from export_loop_recommendations import run  # type: ignore # noqa: E402
@@ -42,6 +46,8 @@ spark = SparkSession.builder.getOrCreate()
 
 INPUT_TABLE = f"{TEST_SCHEMA}._test_input_loop_recs"
 OUTPUT_TABLE = f"{TEST_SCHEMA}._test_output_loop_recs"
+
+ALL_TABLES = [INPUT_TABLE, OUTPUT_TABLE]
 
 
 def dd_origin(version):
@@ -114,6 +120,17 @@ TEST_ROWS = [
     row("user_b", "2025-01-23 07:00:02", "basal", origin=dd_origin("3.2.0")),
     row("user_b", "2025-01-23 20:00:00", "dosingDecision", reason="loop", origin=dd_origin("3.10.1")),
     row("user_b", "2025-01-23 20:00:02", "basal", origin=dd_origin("3.10.1")),
+
+    # --- Day 10 (2025-01-24, user_c): both DD and HK autoboluses; HK has higher numeric version ---
+    # Tests (a) per-day count >1 and (b) cross-source numeric version selection (HK 3.4.0 > DD 3.2.0).
+    row("user_c", "2025-01-24 06:00:00", "dosingDecision", reason="loop", origin=dd_origin("3.2.0")),
+    row("user_c", "2025-01-24 06:00:02", "bolus", subType="smb", origin=dd_origin("3.2.0")),
+    row("user_c", "2025-01-24 09:00:00", "bolus", subType="smb",
+        origin=hk_origin("3.4.0"), payload=AUTO_PAYLOAD),
+    row("user_c", "2025-01-24 12:00:00", "bolus", subType="smb",
+        origin=hk_origin("3.4.0"), payload=AUTO_PAYLOAD),
+    row("user_c", "2025-01-24 15:00:00", "bolus", subType="smb",
+        origin=hk_origin("3.4.0"), payload=AUTO_PAYLOAD),
 ]
 
 
@@ -122,8 +139,8 @@ try:
     run(spark, input_table=INPUT_TABLE, output_table=OUTPUT_TABLE)
     result = read_test_output(spark, OUTPUT_TABLE)
 
-    # 1. 5 user-days survive: days 1, 2, 3, 4, 9. Days 5, 6, 7, 8 drop out entirely.
-    assert_row_count(result, 5, "total user-days")
+    # 1. 6 user-days survive: days 1, 2, 3, 4, 9, 10. Days 5, 6, 7, 8 drop out entirely.
+    assert_row_count(result, 6, "total user-days")
 
     # 2. Per-day counts — NaN means NULL for that side
     by_day = {
@@ -161,6 +178,13 @@ try:
 
     # Day 9: user_b temp_basal only (2 basals across two DD matches)
     assert by_day[("user_b", date(2025, 1, 23))][2] == 2
+
+    # Day 10: user_c has 1 DD autobolus + 3 HK autoboluses (count >1 exercises the
+    # post-2026-04-16 count-based schema, where the prior boolean is_autobolus flag
+    # would have collapsed this to "1 AB day" without distinguishing intensity).
+    day10 = by_day[("user_c", date(2025, 1, 24))]
+    assert day10[0] == 1, f"day 10 dd_autobolus_count: {day10[0]}"
+    assert day10[1] == 3, f"day 10 hk_autobolus_count: {day10[1]}"
     print("PASS: per-day counts")
 
     # 3. Excluded days are absent: 19 (normalBolus), 20 (subType=normal),
@@ -172,12 +196,19 @@ try:
     )
     print("PASS: excluded days absent (normalBolus, subType=normal, non-loop, bad ts)")
 
-    # 4. loop_version uses numeric comparison (3.10.1 > 3.2.0)
+    # 4. loop_version uses numeric comparison (3.10.1 > 3.2.0) — within DD source.
     user_b_row = result[result["_userId"] == "user_b"].iloc[0]
     assert user_b_row["loop_version"] == "3.10.1", (
         f"expected loop_version=3.10.1, got {user_b_row['loop_version']}"
     )
-    print("PASS: loop_version uses numeric max (3.10.1 > 3.2.0)")
+    print("PASS: loop_version uses numeric max within DD source (3.10.1 > 3.2.0)")
+
+    # 4b. loop_version picks numeric max ACROSS sources (HK 3.4.0 > DD 3.2.0 on day 10).
+    user_c_row = result[result["_userId"] == "user_c"].iloc[0]
+    assert user_c_row["loop_version"] == "3.4.0", (
+        f"expected loop_version=3.4.0 (HK > DD), got {user_c_row['loop_version']}"
+    )
+    print("PASS: loop_version uses numeric max across DD+HK sources (3.4.0 > 3.2.0)")
 
     # 5. All surviving rows have a non-null loop_version
     assert result["loop_version"].notna().all(), "loop_version has unexpected NULLs"
@@ -186,4 +217,4 @@ try:
     print("\nAll tests passed.")
 
 finally:
-    teardown_test_tables(spark, INPUT_TABLE, OUTPUT_TABLE)
+    teardown_test_tables(spark, *ALL_TABLES)

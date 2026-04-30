@@ -13,7 +13,11 @@ import os
 import sys
 from datetime import date
 
-_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/simulation"
 sys.path.insert(0, os.path.join(_here, "..", "..", "simulation", "export"))
 sys.path.insert(0, os.path.join(_here, ".."))
 

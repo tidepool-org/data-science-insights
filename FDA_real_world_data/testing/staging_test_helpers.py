@@ -50,26 +50,32 @@ def assert_column_values(df, column, expected_values, label=""):
     print(f"PASS: {label}")
 
 
-def make_loop_recs(user_id, start_date, n_days, is_autobolus,
+def make_loop_recs(user_id, start_date, n_days, dosing_mode,
                    autobolus_count=10, temp_basal_count=10, loop_version="3.2.0"):
     """Generate per-day rows matching the loop_recommendations schema.
 
-    One row per (user, day) with the four method-specific counts. For each day,
-    either the autobolus or temp_basal counts are populated (never both) based
-    on `is_autobolus`. `hk_*` counts are left NULL to keep the fixture focused
-    on dosingDecision-derived signals.
+    One row per (user, day) with the four method-specific counts. The active
+    side (dd_autobolus_count or dd_temp_basal_count) gets the count; the other
+    three count columns are 0. Production SQL uses GREATEST(dd_*, hk_*) >= threshold,
+    so 0 is the identity and emitting 0 instead of NULL avoids the Databricks Connect
+    all-None-column-drop bug without changing semantics.
 
     Args:
         user_id: _userId value
         start_date: first day (date object)
         n_days: number of days to generate
-        is_autobolus: 1 → autobolus day, 0 → temp_basal day
-        autobolus_count: dd_autobolus_count when is_autobolus=1
-        temp_basal_count: dd_temp_basal_count when is_autobolus=0
+        dosing_mode: "autobolus" or "temp_basal"
+        autobolus_count: dd_autobolus_count when dosing_mode="autobolus"
+        temp_basal_count: dd_temp_basal_count when dosing_mode="temp_basal"
         loop_version: string like "3.2.0"
     """
+    if dosing_mode not in ("autobolus", "temp_basal"):
+        raise ValueError(f"dosing_mode must be 'autobolus' or 'temp_basal', got {dosing_mode!r}")
+
     parts = (loop_version.split(".") + ["0", "0", "0"])[:3]
     version_int = int(parts[0]) * 1_000_000 + int(parts[1]) * 1_000 + int(parts[2])
+
+    is_ab = dosing_mode == "autobolus"
 
     rows = []
     for d in range(n_days):
@@ -77,10 +83,10 @@ def make_loop_recs(user_id, start_date, n_days, is_autobolus,
         rows.append({
             "_userId": user_id,
             "day": day,
-            "dd_autobolus_count": autobolus_count if is_autobolus else None,
-            "hk_autobolus_count": None,
-            "dd_temp_basal_count": None if is_autobolus else temp_basal_count,
-            "hk_temp_basal_count": None,
+            "dd_autobolus_count": autobolus_count if is_ab else 0,
+            "hk_autobolus_count": 0,
+            "dd_temp_basal_count": 0 if is_ab else temp_basal_count,
+            "hk_temp_basal_count": 0,
             "loop_version": loop_version,
             "version_int": version_int,
         })

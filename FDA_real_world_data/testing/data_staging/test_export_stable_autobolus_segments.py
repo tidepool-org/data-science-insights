@@ -42,31 +42,37 @@ OUTPUT_TABLE = f"{TEST_SCHEMA}._test_sas_output"
 ALL_TABLES = [RECS_TABLE, DATES_TABLE, GENDER_TABLE, OUTPUT_TABLE]
 
 # --- Test data ---
-# user_qualifies: 45 consecutive AB days. Later windows reach full coverage (14/14).
-# user_low_coverage: 5 consecutive AB days. Max coverage 5/14 ≈ 0.357, never hits 0.70.
-# user_no_ab: 45 consecutive temp-basal days. No first_ab_day, AB%=0.
+# Production WHERE clause (export_stable_autobolus_segments.py:98-99) filters on:
+#   (a) autobolus_pct = 1.0 — every day in the 14-day window is AB
+#   (b) days_since_first_ab >= 28 — segment starts ≥28 days after the user's first AB day
+# Each negative-control user below targets exactly ONE of those gates so a regression
+# in either is attributable.
+#
+# user_qualifies:      45 consecutive AB days → passes both gates.
+# user_short_followup: 5 consecutive AB days → days_since_first_ab never reaches 28.
+# user_partial_ab:     1 AB day then 44 TB days → ≥28 days post-first-AB, but no 14-day
+#                      window is fully AB → autobolus_pct < 1.0.
+# user_no_ab:          45 consecutive TB days → no first_ab_day at all; safety net for
+#                      the LEFT JOIN path.
 recs_rows = (
-    make_loop_recs("user_qualifies", date(2025, 1, 1), n_days=45, is_autobolus=1)
-    + make_loop_recs("user_low_coverage", date(2025, 1, 1), n_days=5, is_autobolus=1)
-    + make_loop_recs("user_no_ab", date(2025, 1, 1), n_days=45, is_autobolus=0)
+    make_loop_recs("user_qualifies", date(2025, 1, 1), n_days=45, dosing_mode="autobolus")
+    + make_loop_recs("user_short_followup", date(2025, 1, 1), n_days=5, dosing_mode="autobolus")
+    + make_loop_recs("user_partial_ab", date(2025, 1, 1), n_days=1, dosing_mode="autobolus")
+    + make_loop_recs("user_partial_ab", date(2025, 1, 2), n_days=44, dosing_mode="temp_basal")
+    + make_loop_recs("user_no_ab", date(2025, 1, 1), n_days=45, dosing_mode="temp_basal")
 )
-# Databricks Connect drops all-None columns during pandas→Arrow conversion.
-# Replace None with 0 on hk_* cols; SQL uses COALESCE(hk_*, 0) so behavior is identical.
-for r in recs_rows:
-    if r["hk_autobolus_count"] is None:
-        r["hk_autobolus_count"] = 0
-    if r["hk_temp_basal_count"] is None:
-        r["hk_temp_basal_count"] = 0
 
 dates_rows = [
     {"userid": "user_qualifies", "dob": date(1990, 6, 15), "diagnosis_date": date(2005, 3, 1)},
-    {"userid": "user_low_coverage", "dob": date(1985, 1, 1), "diagnosis_date": date(2000, 1, 1)},
+    {"userid": "user_short_followup", "dob": date(1985, 1, 1), "diagnosis_date": date(2000, 1, 1)},
+    {"userid": "user_partial_ab", "dob": date(1988, 1, 1), "diagnosis_date": date(2003, 1, 1)},
     {"userid": "user_no_ab", "dob": date(1992, 1, 1), "diagnosis_date": date(2010, 1, 1)},
 ]
 
 gender_rows = [
     {"userid": "user_qualifies", "gender": "F"},
-    {"userid": "user_low_coverage", "gender": "M"},
+    {"userid": "user_short_followup", "gender": "M"},
+    {"userid": "user_partial_ab", "gender": "M"},
     {"userid": "user_no_ab", "gender": "F"},
 ]
 
@@ -86,9 +92,7 @@ try:
 
     result = read_test_output(spark, OUTPUT_TABLE)
 
-    # 1. Only user_qualifies survives filters (autobolus_pct=1.0, days_since_first_ab>=28).
-    #    user_low_coverage: only 5 AB days, so days_since_first_ab never reaches 28.
-    #    user_no_ab: autobolus_pct=0 fails filter.
+    # 1. Only user_qualifies survives both filter gates.
     user_ids = set(result["_userId"].tolist())
     assert user_ids == {"user_qualifies"}, (
         f"expected only user_qualifies, got {user_ids}"
