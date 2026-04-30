@@ -16,7 +16,7 @@ def run(
 
     WITH
 
-    overrides AS (
+    raw_overrides AS (
       SELECT
         _userId,
         TRY_CAST(time_string AS TIMESTAMP) AS override_time,
@@ -27,9 +27,65 @@ def run(
         bgTarget:high * 18.018 AS bg_target_high,
         carbRatioScaleFactor,
         insulinSensitivityScaleFactor,
-        duration
+        TRY_CAST(duration AS BIGINT) AS duration,
+        created_timestamp
       FROM {bddp_table}
       WHERE overridePreset IS NOT NULL
+        AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
+    ),
+
+    ranked_overrides AS (
+      SELECT
+        *,
+        ROW_NUMBER() OVER (
+          PARTITION BY _userId, override_time
+          ORDER BY created_timestamp DESC
+        ) AS rn
+      FROM raw_overrides
+    ),
+
+    deduped_overrides AS (
+      SELECT
+        _userId,
+        override_time,
+        override_day,
+        overridePreset,
+        basalRateScaleFactor,
+        bg_target_low,
+        bg_target_high,
+        carbRatioScaleFactor,
+        insulinSensitivityScaleFactor,
+        duration
+      FROM ranked_overrides
+      WHERE rn = 1
+    ),
+
+    -- Truncate stated duration to the gap until the next override for the same user.
+    -- If the user starts another override before this one's stated duration elapses,
+    -- the effective duration is the gap; otherwise the stated duration stands.
+    overrides AS (
+      SELECT
+        _userId,
+        override_time,
+        override_day,
+        overridePreset,
+        basalRateScaleFactor,
+        bg_target_low,
+        bg_target_high,
+        carbRatioScaleFactor,
+        insulinSensitivityScaleFactor,
+        LEAST(
+          duration,
+          COALESCE(
+            UNIX_TIMESTAMP(
+              LEAD(override_time) OVER (
+                PARTITION BY _userId ORDER BY override_time
+              )
+            ) - UNIX_TIMESTAMP(override_time),
+            duration
+          )
+        ) AS duration
+      FROM deduped_overrides
     ),
 
     overrides_with_segments AS (
@@ -42,7 +98,22 @@ def run(
         o.bg_target_high,
         o.carbRatioScaleFactor,
         o.insulinSensitivityScaleFactor,
-        o.duration,
+
+        -- Clip the override's duration to the end of its tagged segment.
+        -- Combined with the gap-to-next truncation upstream, this bounds
+        -- per-override duration by min(stated, gap_to_next, time_to_segment_end),
+        -- so total preset time per user-segment cannot exceed 14 days × 86400s.
+        LEAST(
+          o.duration,
+          CASE
+            WHEN o.override_day BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg1_end THEN
+              UNIX_TIMESTAMP(CAST(DATE_ADD(t.tb_to_ab_seg1_end, 1) AS TIMESTAMP))
+                - UNIX_TIMESTAMP(o.override_time)
+            WHEN o.override_day BETWEEN t.tb_to_ab_seg2_start AND t.tb_to_ab_seg2_end THEN
+              UNIX_TIMESTAMP(CAST(DATE_ADD(t.tb_to_ab_seg2_end, 1) AS TIMESTAMP))
+                - UNIX_TIMESTAMP(o.override_time)
+          END
+        ) AS duration,
 
         CASE
           WHEN o.override_day BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg1_end THEN 'tb_to_ab_seg1'
@@ -61,7 +132,8 @@ def run(
 
       FROM {transition_segments_table} t
       INNER JOIN overrides o ON t._userId = o._userId
-      WHERE o.override_day BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg2_end
+      WHERE t.segment_rank = 1
+        AND o.override_day BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg2_end
     ),
 
     overrides_clean AS (

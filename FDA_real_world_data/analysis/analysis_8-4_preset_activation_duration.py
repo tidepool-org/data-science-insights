@@ -39,6 +39,17 @@ S_PER_HOUR = 3_600   # override duration is stored in seconds
 
 from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT
 from utils.statistics import test_normality, compute_paired_statistics, format_p
+from utils.data_loading import MAX_LOOP_VERSION_INT, MAX_SEG2_END_DATE
+
+# Cohort filter: matches load_transition_endpoints in utils/data_loading.py.
+# Keep segments on Loop versions below MAX_LOOP_VERSION_INT; if version is
+# unknown, fall back to segments ending before MAX_SEG2_END_DATE.
+COHORT_WHERE = (
+    f"(tb_to_ab_max_loop_version_int IS NOT NULL "
+    f" AND tb_to_ab_max_loop_version_int < {MAX_LOOP_VERSION_INT}) "
+    f"OR (tb_to_ab_max_loop_version_int IS NULL "
+    f" AND tb_to_ab_seg2_end < DATE '{MAX_SEG2_END_DATE}')"
+)
 
 
 # =============================================================================
@@ -51,16 +62,28 @@ def load_data(spark) -> pd.DataFrame:
     per 14-day segment. Users with no activations in a segment receive 0
     for duration and frequency so they are included in paired comparisons.
     """
-    # All eligible transition users (provides the complete user list)
-    users_df = (
-        spark.table("dev.fda_510k_rwd.valid_transition_segments")
-        .select("_userId")
-        .toPandas()
-    )
+    # Cohort: Loop-version filter + guardrail-violation exclusion. Mirrors the
+    # filter in load_transition_endpoints (utils/data_loading.py).
+    allowed_segments = spark.sql(f"""
+        SELECT s._userId, s.tb_to_ab_seg1_start
+        FROM dev.fda_510k_rwd.valid_transition_segments s
+        LEFT ANTI JOIN (
+            SELECT _userId, CAST(segment_start AS DATE) AS tb_to_ab_seg1_start
+            FROM dev.fda_510k_rwd.valid_transition_guardrails
+            GROUP BY _userId, CAST(segment_start AS DATE)
+            HAVING SUM(COALESCE(TRY_CAST(violation_count AS DOUBLE), 0)) > 0
+        ) g
+          ON s._userId = g._userId
+         AND s.tb_to_ab_seg1_start = g.tb_to_ab_seg1_start
+        WHERE {COHORT_WHERE}
+    """)
+
+    users_df = allowed_segments.select("_userId").distinct().toPandas()
 
     # All override events — no is_valid filter; we want total preset activity
     overrides_df = (
         spark.table("dev.fda_510k_rwd.overrides_by_segment")
+        .join(allowed_segments, on=["_userId", "tb_to_ab_seg1_start"], how="inner")
         .select("_userId", "dosing_mode", "duration")
         .toPandas()
     )
