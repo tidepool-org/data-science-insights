@@ -45,7 +45,8 @@ FDA_real_world_data/
 ├── simulation/
 │   └── export/
 │       ├── export_single_user_day.py     — Databricks task: pull CGM/carbs/boluses/pump-settings for one target day per user; shifts events to user-local via BDDP timezoneOffset; emits 4 CSVs to simulation/data/
-│       └── build_scenario_json.py        — Local Python: turn the CSVs into one anonymized simulator-scenario JSON per user at simulation/data/scenarios/ (rwd_user_NNNN_day_01.json + user_id_mapping.csv)
+│       ├── build_scenario_json.py        — Local Python: turn the CSVs into one anonymized simulator-scenario JSON per user at simulation/data/scenarios/ (rwd_user_NNNN_day_01.json + user_id_mapping.csv); reads any prior user_id_mapping.csv before wiping so rwd_user_NNNN ↔ _userId stays stable across reruns
+│       └── export_scenario_tir.py        — Databricks task: join user_id_mapping.csv to glycemic_endpoints_transition; emit one row per scenario with tir_seg1/tir_seg2 + cbg_count to simulation/data/scenarios/scenario_tir.csv
 │
 ├── docs/
 │   └── dosing_strategy_classification.md  — AB/TB classification logic, false positive mitigations, both methods
@@ -55,7 +56,8 @@ FDA_real_world_data/
     ├── autobolus_matching.sql              — Match bolus to loop dosingDecision within ±5s
     ├── autobolus_false_positives.sql       — Boluses with multiple DDs within 5 seconds
     ├── autobolus_labeling_comparison.py   — Compare 3 autobolus labeling methods (subType, recommendedBolus, dosingDecision match)
-    └── autobolus_healthkit.sql            — Exploratory: parse HealthKit metadata for AB/TB classification
+    ├── autobolus_healthkit.sql            — Exploratory: parse HealthKit metadata for AB/TB classification
+    └── isf_for_valid_transition.py        — Histogram of ISF (mg/dL/U) across all pump-settings schedule entries during valid TB→AB transitions
 ```
 
 ## Pipeline DAG
@@ -180,3 +182,5 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 | Test helpers | `testing/staging_test_helpers.py` |
 | FDA RWD → T1-simulator scenario CSVs | `simulation/export/export_single_user_day.py` |
 | CSVs → anonymized scenario JSONs | `simulation/export/build_scenario_json.py` |
+| Per-scenario TIR (seg1/seg2) keyed on rwd_user_id | `simulation/export/export_scenario_tir.py` |
+| ISF distribution across valid-transition pump settings | `exploratory/isf_for_valid_transition.py` |

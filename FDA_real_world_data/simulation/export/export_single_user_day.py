@@ -122,7 +122,7 @@ def _flatten_pump_settings(raw_df):
         isf = [
             {
                 "start_time": _ms_to_hms(s.get("start", 0)),
-                "value": round(s["amount"], 1),
+                "value": round(s["amount"] * MMOL_TO_MGDL, 1),
             }
             for s in isf_segs if s.get("amount") is not None
         ]

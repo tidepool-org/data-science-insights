@@ -267,30 +267,56 @@ def _required_fields_present(settings_row):
     return True
 
 
+def _load_existing_mapping(output_dir):
+    """Read prior rwd_user_NNNN <-> _userId mapping from output_dir.
+
+    Returns (userid_to_rwd_id, max_index_seen). Empty/{} when no prior
+    mapping exists. Used to keep anonymized IDs stable across reruns —
+    a returning _userId reuses its old rwd_user_NNNN, a new _userId gets
+    max_index_seen + 1.
+    """
+    path = os.path.join(output_dir, "user_id_mapping.csv")
+    if not os.path.exists(path):
+        return {}, 0
+    prior = pd.read_csv(path, dtype={"_userId": str, "rwd_user_id": str})
+    mapping = dict(zip(prior["_userId"], prior["rwd_user_id"]))
+    nums = [int(rid.rsplit("_", 1)[-1]) for rid in prior["rwd_user_id"]]
+    return mapping, max(nums) if nums else 0
+
+
 def run(input_dir=DEFAULT_INPUT_DIR, output_dir=DEFAULT_OUTPUT_DIR):
-    pump_df = pd.read_csv(os.path.join(input_dir, "pump_settings.csv"))
+    pump_df = pd.read_csv(os.path.join(input_dir, "pump_settings.csv"), dtype={"_userId": str})
     carbs_df = pd.read_csv(
-        os.path.join(input_dir, "carbs.csv"), parse_dates=["carb_timestamp", "target_day"]
+        os.path.join(input_dir, "carbs.csv"),
+        parse_dates=["carb_timestamp", "target_day"],
+        dtype={"_userId": str},
     )
     bolus_df = pd.read_csv(
         os.path.join(input_dir, "correction_boluses.csv"),
         parse_dates=["bolus_timestamp", "target_day"],
+        dtype={"_userId": str},
     )
     cgm_df = pd.read_csv(
-        os.path.join(input_dir, "cgm.csv"), parse_dates=["cbg_timestamp", "target_day"]
+        os.path.join(input_dir, "cgm.csv"),
+        parse_dates=["cbg_timestamp", "target_day"],
+        dtype={"_userId": str},
     )
 
     os.makedirs(output_dir, exist_ok=True)
-    # Wipe any scenario files from previous runs so anonymized rwd_user_NN
-    # names stay in sync with the mapping CSV (and real user-ID filenames
-    # from older builds don't linger).
+
+    # Read prior mapping before wiping so rwd_user_NNNN <-> _userId stays
+    # stable across reruns. New users get indices past max_user_index;
+    # departed users simply leave gaps.
+    existing_mapping, max_user_index = _load_existing_mapping(output_dir)
+
+    # Wipe stale scenario files so departed users / older filename schemes
+    # don't linger alongside the freshly-written set.
     for stale in os.listdir(output_dir):
         if stale.endswith(".json") or stale == "user_id_mapping.csv":
             os.remove(os.path.join(output_dir, stale))
 
     skipped = 0
     written = 0
-    user_index = 0  # increments only on successful writes -> stable rwd_user_NN
     user_map = []   # rows for user_id_mapping.csv
 
     for _, settings_row in pump_df.iterrows():
@@ -323,8 +349,11 @@ def run(input_dir=DEFAULT_INPUT_DIR, output_dir=DEFAULT_OUTPUT_DIR):
         # valid_transition_segments.segment_rank = 1 (the only rank processed
         # today). If rank=2 days are added later, plumb segment_rank through
         # and format as f"day_{rank:02d}".
-        user_index += 1
-        rwd_user_id = f"rwd_user_{user_index:04d}"
+        if user_id in existing_mapping:
+            rwd_user_id = existing_mapping[user_id]
+        else:
+            max_user_index += 1
+            rwd_user_id = f"rwd_user_{max_user_index:04d}"
         scenario_id = f"{rwd_user_id}_day_01"
         # Override the per-run sim_id so the simulator's own TSVs / plots /
         # summary rows are keyed by scenario_id instead of the module-level
