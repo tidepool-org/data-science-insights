@@ -4,6 +4,26 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-05-01: Analysis 8-7 — cohort alignment, figure cleanup, naive retention curve
+
+Touched only [analysis_8-7_autobolus_adoption_durability.py](analysis/analysis_8-7_autobolus_adoption_durability.py); staging tables and outputs schema unchanged.
+
+### KM cohort aligned with Table 8.7a
+- `load_event_times(spark, qualified_user_ids)` now takes the qualified user set and filters `autobolus_event_times` to it. Previously the KM curve (Figure 8.7b) ran over every user in the event-times table, while Table 8.7a was restricted by `is_adopted + has_min_followup + has_final_coverage + is_age_eligible`. Caller in `run_analysis` passes `set(durability["_userId"])`.
+
+### Figure 8.7a — legend dropped, category names moved onto bars
+Bars had room; the legend was redundant. Annotations now read `Sustained\n{N}\n({pct}%)` and `Discontinued\n{N}\n({pct}%)`; legend block removed.
+
+### Figure 8.7b — at-risk table removed
+Dropped the manual at-risk-count row + week-tick row drawn below the curve via `ax.text(transform=ax.transAxes, ...)` and the `subplots_adjust(bottom=0.22)`. The curve's 95% CI band already conveys precision loss as the at-risk pool thins.
+
+### Figure 8.7c (new) — naive retention with fixed denominator
+Same event timing as 8.7b but denominator is held at the full qualified cohort (`N`), so each event drops the curve by `1/N` and censored users never leave the at-risk pool. Ends at the observed discontinuation rate (≈ Table 8.7a's discontinued share). Companion to the KM estimate: 8.7b answers "of users still observable, what fraction remain on AB?"; 8.7c answers "of the cohort we started with, what fraction have we *seen* discontinue?"
+
+**Commit:** _not yet committed_
+
+---
+
 ## 2026-04-30: simulation export — stable rwd_user_NNNN mapping; per-scenario TIR; ISF exploratory; ISF unit fix
 
 Three additions to the FDA RWD → T1-simulator side-harness, plus a unit-conversion bug fix on the ISF schedule.

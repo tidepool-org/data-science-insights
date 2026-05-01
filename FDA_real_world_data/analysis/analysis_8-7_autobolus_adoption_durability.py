@@ -75,9 +75,15 @@ def load_jaeb_map(spark) -> pd.DataFrame:
     return jaeb_map
 
 
-def load_event_times(spark) -> pd.DataFrame:
-    """Load weekly event times, reduce to one row per user for KM curve."""
+def load_event_times(spark, qualified_user_ids: set) -> pd.DataFrame:
+    """Load weekly event times, reduce to one row per user for KM curve.
+
+    Restricted to `qualified_user_ids` so the KM curve cohort matches the
+    Table 8.7a eligibility cohort (is_adopted + has_min_followup +
+    has_final_coverage + is_age_eligible).
+    """
     df = spark.table("dev.fda_510k_rwd.autobolus_event_times").toPandas()
+    df = df[df["_userId"].isin(qualified_user_ids)]
 
     # For users with a discontinuation event, take the event week.
     # For censored users, take the max observed week.
@@ -95,7 +101,7 @@ def load_event_times(spark) -> pd.DataFrame:
     result = result.rename(columns={"week_post_adoption": "time"})
     result["time"] = pd.to_numeric(result["time"], errors="coerce")
 
-    print(f"  Loaded {len(result)} users ({result['event'].sum()} events, "
+    print(f"  Loaded {len(result)} qualified users ({result['event'].sum()} events, "
           f"{(~result['event']).sum()} censored)")
     return result
 
@@ -234,26 +240,24 @@ def create_figure_8_7a(df: pd.DataFrame, filepath: str):
     ax.bar(
         0, pct_sustained,
         color=COLORS_PRIMARY, edgecolor="white", lw=0.5,
-        label=f"Sustained ({pct_sustained:.1f}%)",
     )
     ax.bar(
         0, pct_discontinued, bottom=pct_sustained,
         color=COLORS_SECONDARY, edgecolor="white", lw=0.5,
-        label=f"Discontinued ({pct_discontinued:.1f}%)",
     )
 
     # Annotations
     if pct_sustained > 5:
         ax.text(
             0, pct_sustained / 2,
-            f"{n_sustained}\n({pct_sustained:.1f}%)",
+            f"Sustained\n{n_sustained}\n({pct_sustained:.1f}%)",
             ha="center", va="center",
             fontsize=FONT["annotation"], color="white", fontweight="bold",
         )
     if pct_discontinued > 5:
         ax.text(
             0, pct_sustained + pct_discontinued / 2,
-            f"{n_discontinued}\n({pct_discontinued:.1f}%)",
+            f"Discontinued\n{n_discontinued}\n({pct_discontinued:.1f}%)",
             ha="center", va="center",
             fontsize=FONT["annotation"], color="white", fontweight="bold",
         )
@@ -264,9 +268,6 @@ def create_figure_8_7a(df: pd.DataFrame, filepath: str):
     ax.set_xticklabels(["All Users"], fontsize=FONT["tick"])
     ax.set_ylim(0, 105)
     ax.tick_params(axis="y", labelsize=FONT["tick"])
-
-    handles, labels = ax.get_legend_handles_labels()
-    ax.legend(handles[::-1], labels[::-1], fontsize=FONT["legend"], loc="upper right")
 
     fig.tight_layout()
     fig.savefig(filepath, dpi=300, bbox_inches="tight")
@@ -314,30 +315,43 @@ def create_figure_8_7b(events: pd.DataFrame, filepath: str):
     ax.axhline(50, color=COLORS_ACCENT, ls="--", lw=1, alpha=0.5, label="50%")
     ax.legend(fontsize=FONT["legend"], loc="lower left")
 
-    # At-risk table below the curve
-    max_week = int(km_times[-1]) if len(km_times) > 1 else 0
-    tick_weeks = list(range(0, max_week + 1, max(1, max_week // 6)))
-    at_risk_counts = []
-    for w in tick_weeks:
-        at_risk_counts.append(int((events["time"] >= w).sum()))
+    fig.tight_layout()
+    fig.savefig(filepath, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
-    at_risk_text = "  ".join(f"{c}" for c in at_risk_counts)
-    ax.text(
-        0.0, -0.15,
-        f"At risk:  {at_risk_text}",
-        transform=ax.transAxes, fontsize=FONT["tick"] - 1,
-        verticalalignment="top", fontfamily="monospace",
+
+def create_figure_8_7c(events: pd.DataFrame, filepath: str):
+    """
+    Naive cumulative-retention curve: same event timing as Figure 8.7b but with
+    a fixed denominator (the full qualified cohort), so censored users never
+    leave the at-risk pool. Each event drops the curve by 1/N. Ends at the
+    observed discontinuation rate (≈ Table 8.7a's discontinued share).
+    """
+    n_total = len(events)
+    event_weeks = np.sort(np.asarray(events.loc[events["event"], "time"], dtype=float))
+
+    # Step at week 0 + one step per event week (cumulative count of events).
+    times = np.concatenate([[0.0], event_weeks])
+    retention = 1.0 - np.arange(len(times)) / n_total
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.step(times, retention * 100, where="post", color=COLORS_PRIMARY, lw=2,
+            label=f"Naive retention (denominator = {n_total})")
+
+    ax.set_xlabel("Weeks Since Autobolus Adoption", fontsize=FONT["axis_label"])
+    ax.set_ylabel("Users Remaining on Autobolus (%)", fontsize=FONT["axis_label"])
+    ax.set_title(
+        "Autobolus Retention — Fixed Denominator (No Censoring Adjustment)",
+        fontsize=FONT["title"],
     )
-    week_text = "  ".join(f"W{w}" for w in tick_weeks)
-    ax.text(
-        0.0, -0.21,
-        f"         {week_text}",
-        transform=ax.transAxes, fontsize=FONT["tick"] - 1,
-        verticalalignment="top", fontfamily="monospace",
-    )
+    ax.set_ylim(0, 105)
+    ax.set_xlim(left=0)
+    ax.tick_params(axis="both", labelsize=FONT["tick"])
+
+    ax.axhline(50, color=COLORS_ACCENT, ls="--", lw=1, alpha=0.5, label="50%")
+    ax.legend(fontsize=FONT["legend"], loc="lower left")
 
     fig.tight_layout()
-    fig.subplots_adjust(bottom=0.22)
     fig.savefig(filepath, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -391,7 +405,7 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     durability = load_durability(spark)
 
     print("\n2. Loading event times for retention curve...")
-    event_times = load_event_times(spark)
+    event_times = load_event_times(spark, set(durability["_userId"]))
 
     # --- Table 8.7a ---
     print("\n3. Creating Table 8.7a (overall durability)...")
@@ -410,13 +424,19 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     create_figure_8_7b(event_times, fig_b_path)
     print(f"  Saved: {fig_b_path}")
 
+    # --- Figure 8.7c ---
+    print("\n6. Creating Figure 8.7c (per-user trajectories)...")
+    fig_c_path = f"{output_dir}/figure_8_7c_per_user_trajectories.png"
+    create_figure_8_7c(event_times, fig_c_path)
+    print(f"  Saved: {fig_c_path}")
+
     # --- Per-user JAEB export (additive; does not affect cohort for tables/figures above) ---
-    print("\n6. Exporting per-user durability keyed by JAEB PtID...")
+    print("\n7. Exporting per-user durability keyed by JAEB PtID...")
     jaeb_map = load_jaeb_map(spark)
     export_by_jaeb_id(durability, jaeb_map, output_dir)
 
     # --- Summary statistics ---
-    print("\n7. Summary statistics:")
+    print("\n8. Summary statistics:")
     print(f"  Mean follow-up:     {durability['days_post_adoption'].mean():.0f} days "
           f"({durability['weeks_post_adoption'].mean():.1f} weeks)")
     print(f"  Median follow-up:   {durability['days_post_adoption'].median():.0f} days")
