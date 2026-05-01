@@ -1,33 +1,16 @@
-# Data Science Insights
-This is one of the few data-science team repositories that will host many notebooks/projects, and will serve
-as a place to put miscellaneous or one-off insights, single page learnings, literature reviews, how stuff works, etc.
+# Tidepool Data Science Project Template
+## Creating a new repository from this template
+Manually create a new repo from this [template in github](https://github.com/tidepool-org/data-science-project-template/generate);
+github directions are [here](https://help.github.com/en/github/creating-cloning-and-archiving-repositories/creating-a-repository-from-a-template).
 
-#### Repository Status: Work in Progress (WIP)
-TODO: Change the status to active after the readme is fully filled in.
+# Data Science Insights
+This is one of the few data-science team repositories that will host many projects, and will serve
+as a place to put miscellaneous or one-off insights, single page learnings, literature reviews, how stuff works, etc.
+#### -- Project Status: Active
+#### -- Project Disclaimer: This work is for Exploration
 
 ## List of Active Projects
-TODO: put a link to the notebook or project subfolder here
-
-## Contributing Guide
-1. All are welcome to contribute to this repository. See [Getting Started Below](## Getting Started with the Conda Virtual Environment)
-2. Please keep in mind that this repository is for small one-off or miscellaneous projects 
-where most of the code is in one file.
-3. If you are going to contribute a notebook, put the notebook in the [notebooks folder](notebooks).
-4. If you are going to contribute code, start with the [template](template), and rename it according
-to the notebook naming rules. 
-
-### Notebook and Project Naming Convention
-1. The naming convention for notebooks and projects is as follows
-`[short-description]--[initials]--[date-created]--[version]`,
-e.g. `initial-data-exploration--jqp--2020-04-25--v-0-1-0.ipynb`.
-A short `-` delimited description, the creator's initials, date of creation, and a version number 
-separated by `--`.
-1. Naming convention for data files, figures, and tables is
-`[PHI (if applicable)]--[short_description]--[date created or downloaded]--[code_version]`,
-e.g. `raw-project-data-from-mnist--2020-04-25--v-0-1-0.csv`,
-or `project-data-figure--2020-04-25--v-0-1-0.png`.
-
-NOTE: PHI data is never stored in github and the .gitignore file includes this requirement as well.
+[]
 
 ### Technologies Used Across All Projects
 * Python 
@@ -69,6 +52,28 @@ load them in using `pip`, and export your environment using `pip-chill > require
 We take this approach to make our code compatible with people that prefer to use venv or virtualenv.
 This may also make it easier to convert existing packages into pypi packages. We only install packages directly
 in conda using the conda-environment.yml file when packages are not available via pip (e.g., R and plotly-orca).
+
+## Getting Started with this project
+1. Raw Data is being kept [here](Repo folder containing raw data) within this repo.
+(If using offline data mention that and how they may obtain the data from the froup)
+2. Data processing/transformation scripts are being kept [here](Repo folder containing data processing scripts/notebooks)
+3. (Finishing filling out this list)
+
+## Contributing Guide
+1. All are welcome to contribute to this project.
+1. Naming convention for notebooks is
+`[short_description]-[initials]-[date_created]-[version]`,
+e.g. `initial_data_exploration-jqp-2020-04-25-v-0-1-0.ipynb`.
+A short `_` delimited description, the creator's initials, date of creation, and a version number,
+1. Naming convention for data files, figures, and tables is
+`[PHI (if applicable)]-[short_description]-[date created or downloaded]-[code_version]`,
+e.g. `raw_project_data_from_mnist-2020-04-25-v-0-1-0.csv`,
+or `project_data_figure-2020-04-25-v-0-1-0.png`.
+
+NOTE: PHI data is never stored in github and the .gitignore file includes this requirement as well.
+
+## Featured Notebooks/Analysis/Deliverables
+* [Colab Notebook/Figures/Website](link)
 
 ## Tidepool Data Science Team
 |Name (with github link)    |  [Tidepool Slack](https://tidepoolorg.slack.com/)   |
