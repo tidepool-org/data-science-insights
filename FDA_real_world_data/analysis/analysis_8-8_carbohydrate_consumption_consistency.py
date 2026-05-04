@@ -16,7 +16,11 @@ treatment effect differs between users who maintained stable dietary patterns
 versus those who changed their eating habits.
 
 Population: Users with valid TB→AB transitions with reported carbohydrate data
-in both temporary basal and autobolus segments.
+in both temporary basal and autobolus halves of the user's best surviving
+segment. The transition backbone now emits multiple ranked segments per user
+(`segment_rank`); `load_transition_endpoints` picks the lowest-rank segment
+that survives cohort, CBG-coverage, and guardrail filters, and carb data is
+attributed to that same segment via `tb_to_ab_seg1_start`.
 
 Definitions:
 - Consistent carbohydrate consumption: ≤25% change in total reported
@@ -25,10 +29,15 @@ Definitions:
   carbohydrates between periods
 
 Inputs:
-- dev.fda_510k_rwd.glycemic_endpoints_transition  (long: _userId, segment, ...)
-- dev.fda_510k_rwd.valid_transition_guardrails     (_userId, violation_count)
+- dev.fda_510k_rwd.glycemic_endpoints_transition  (long: _userId,
+                                                   tb_to_ab_seg1_start,
+                                                   segment_rank, segment, ...)
+- dev.fda_510k_rwd.valid_transition_guardrails     (_userId, segment_start,
+                                                    violation_count)
 - dev.fda_510k_rwd.valid_transition_carbs           (_userId, carb_grams,
-                                                     carb_timestamp, segment)
+                                                     carb_timestamp,
+                                                     tb_to_ab_seg1_start,
+                                                     segment_rank, segment)
 
 Outputs:
 - Table 8.8a: Carbohydrate Consumption by Delivery Strategy Period
@@ -73,8 +82,8 @@ from utils.data_loading import load_transition_endpoints
 from utils.statistics import test_normality, compute_paired_statistics, format_p
 COLOR_CONSISTENT   = "#76D3A6"  # green — stable diet
 COLOR_INCONSISTENT = "#FF8B7C"  # orange-red — changed diet
-COLOR_IMPROVED   = "#76D3A6"
-COLOR_WORSENED   = "#FF8B7C"
+COLOR_IMPROVED   = "#0072B2"  # Wong colorblind-safe blue
+COLOR_WORSENED   = "#D55E00"  # Wong colorblind-safe vermilion
 
 
 
@@ -654,9 +663,8 @@ def create_figure_8_8b(df: pd.DataFrame, output_path: str):
 
 def create_figure_8_8c(df: pd.DataFrame, output_path: str):
     """
-    Panel of paired dot plots (one per consistency group) showing individual
-    user TIR values during temp basal and autobolus.  Lines colored by
-    direction of change, with group means ± 95% CI overlaid.
+    Paired dot + box + violin overlay (mirrors Figure 8.1a) for TIR, with one
+    panel per carbohydrate-consistency group.
     """
     consistent = df[df["cho_consistent"]].copy()
     inconsistent = df[~df["cho_consistent"]].copy()
@@ -682,56 +690,29 @@ def create_figure_8_8c(df: pd.DataFrame, output_path: str):
             ax.set_title(label, fontsize=FONT["title"], fontweight="bold")
             continue
 
+        s = compute_paired_statistics(sub.loc[valid, c1], sub.loc[valid, c2])
+        p_str = f"t: {format_p(s['p_ttest'])}  WSRT: {format_p(s['p_wsrt'])}"
+
         # Individual paired lines, colored by direction
         for s1, s2 in zip(v1, v2):
             color = COLOR_IMPROVED if s2 >= s1 else COLOR_WORSENED
-            ax.plot(
-                [0, 1], [s1, s2], "o-",
-                color=color, alpha=0.35, lw=0.8, ms=4,
-                zorder=2,
-            )
+            ax.plot([0, 1], [s1, s2], "o-", color=color, alpha=0.35, lw=0.8, ms=3)
 
-        # Group mean ± 95% CI
-        for x_pos, vals, seg_color in [
-            (0, v1, COLORS_PRIMARY),
-            (1, v2, COLORS_SECONDARY),
-        ]:
-            mean = np.mean(vals)
-            se = np.std(vals, ddof=1) / np.sqrt(len(vals))
-            t_crit = stats.t.ppf(0.975, df=len(vals) - 1)
-            ci_lo = mean - t_crit * se
-            ci_hi = mean + t_crit * se
+        bp = ax.boxplot([v1, v2], positions=[0, 1], widths=0.3,
+                        patch_artist=True, showfliers=False)
+        bp["boxes"][0].set(facecolor=COLORS_PRIMARY, alpha=0.7)
+        bp["boxes"][1].set(facecolor=COLORS_SECONDARY, alpha=0.7)
 
-            ax.errorbar(
-                x_pos, mean,
-                yerr=[[mean - ci_lo], [ci_hi - mean]],
-                fmt="D",
-                color=seg_color,
-                markersize=10,
-                capsize=8,
-                capthick=2.5,
-                elinewidth=2.5,
-                markeredgecolor="black",
-                markeredgewidth=1.5,
-                zorder=10,
-            )
-
-        # Statistics
-        s = compute_paired_statistics(
-            sub.loc[valid, c1], sub.loc[valid, c2]
-        )
-        p_str = (
-            f"t: {format_p(s['p_ttest'])}  "
-            f"WSRT: {format_p(s['p_wsrt'])}"
-        )
+        if len(v1) > 1 and len(v2) > 1:
+            parts = ax.violinplot([v1, v2], positions=[0, 1],
+                                  showmeans=False, showmedians=False, widths=0.5)
+            for i, pc in enumerate(parts["bodies"]):
+                pc.set_facecolor(COLORS_PRIMARY if i == 0 else COLORS_SECONDARY)
+                pc.set_alpha(0.3)
 
         ax.set_xticks([0, 1])
-        ax.set_xticklabels(
-            ["Temp Basal", "Autobolus"], fontsize=FONT["axis_label"]
-        )
-        ax.set_ylabel(
-            "TIR 70–180 mg/dL (%)", fontsize=FONT["axis_label"]
-        )
+        ax.set_xticklabels(["Temp Basal", "Autobolus"], fontsize=FONT["axis_label"])
+        ax.set_ylabel("TIR 70–180 mg/dL (%)", fontsize=FONT["axis_label"])
         ax.tick_params(axis="y", labelsize=FONT["tick"])
         ax.set_title(
             f"{label}\nn = {len(v1)}; {p_str}",
@@ -740,25 +721,20 @@ def create_figure_8_8c(df: pd.DataFrame, output_path: str):
         )
         ax.grid(axis="y", alpha=0.3)
 
-    # Shared legend
     legend_elements = [
         mpatches.Patch(color=COLOR_IMPROVED, alpha=0.6, label="TIR improved"),
         mpatches.Patch(color=COLOR_WORSENED, alpha=0.6, label="TIR worsened"),
-        plt.Line2D(
-            [0], [0], marker="D", color="w", markerfacecolor=COLORS_PRIMARY,
-            markersize=8, markeredgecolor="black", label="Group mean ± 95% CI",
-        ),
     ]
     axes[1].legend(
         handles=legend_elements, fontsize=FONT["legend"], loc="lower right",
     )
 
     plt.suptitle(
-        "Figure 8.8c: Individual Paired TIR by Carbohydrate Consistency\n"
-        "Lines connect paired observations; diamonds = group mean ± 95% CI",
+        "Figure 8.8c: Paired TIR by Carbohydrate Consistency\n"
+        "Lines colored by direction of change; box + violin overlay",
         fontsize=FONT["suptitle"],
         fontweight="bold",
-        y=1.03,
+        y=1.02,
     )
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")

@@ -4,6 +4,31 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-05-04: Analysis 8-8 — docstring sync, Figure 8.8c restyled to match 8.1a
+
+Touched only [analysis_8-8_carbohydrate_consumption_consistency.py](analysis/analysis_8-8_carbohydrate_consumption_consistency.py); staging tables and output schemas unchanged.
+
+### Module docstring synced with per-segment grain
+The `Inputs:` and `Population:` blocks were still describing the pre-2026-04-17 shape (one segment per user, no `segment_rank`). Updated to:
+- List `tb_to_ab_seg1_start` + `segment_rank` on `valid_transition_carbs` and `glycemic_endpoints_transition`, and `segment_start` on `valid_transition_guardrails`.
+- Note that `load_transition_endpoints` selects the lowest-rank surviving segment per user and that carb data is attributed to that same segment via `tb_to_ab_seg1_start`.
+
+Code itself was already correct (joins carbs to glycemic data on `(_userId, tb_to_ab_seg1_start)`); only the header lagged.
+
+### Figure 8.8c — paired-line plot replaced with box + violin overlay
+Restyled to mirror Figure 8.1a's pattern: paired connector lines + boxplot fill (`COLORS_PRIMARY`/`COLORS_SECONDARY`) + violin overlay at α=0.3, p-values rendered as `t: ... WSRT: ...` in the panel title. Two-panel layout (consistent / inconsistent) preserved; group-mean diamond markers + 95% CI error bars dropped (the box already conveys median/IQR; the violin shows distribution shape).
+
+### Wong colorblind-safe palette for connector lines
+Connector lines stay colored by direction of change (improved vs worsened), but the green / red pair (`#76D3A6` / `#FF8B7C`) was replaced with the Wong palette:
+- `#0072B2` (blue) — TIR improved
+- `#D55E00` (vermilion) — TIR worsened
+
+Reasons: red-green is the most common colorblindness axis (~8% of men), and the previous green also overlapped the in-range green in Figure 8.1c's stacked-bar palette. Wong is the published colorblind-safe standard — defensible for a regulatory submission.
+
+**Commit:** _not yet committed_
+
+---
+
 ## 2026-05-01: Analysis 8-7 — cohort alignment, figure cleanup, naive retention curve
 
 Touched only [analysis_8-7_autobolus_adoption_durability.py](analysis/analysis_8-7_autobolus_adoption_durability.py); staging tables and outputs schema unchanged.
