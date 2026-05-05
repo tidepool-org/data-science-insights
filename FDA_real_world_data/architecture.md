@@ -43,10 +43,13 @@ FDA_real_world_data/
 │   └── simulation/                — Tests for simulation/export/ (2 files; build_scenario_json pure-Python + export_single_user_day unit + Spark TZ-shift)
 │
 ├── simulation/
-│   └── export/
-│       ├── export_single_user_day.py     — Databricks task: pull CGM/carbs/boluses/pump-settings for one target day per user; shifts events to user-local via BDDP timezoneOffset; emits 4 CSVs to simulation/data/
-│       ├── build_scenario_json.py        — Local Python: turn the CSVs into one anonymized simulator-scenario JSON per user at simulation/data/scenarios/ (rwd_user_NNNN_day_01.json + user_id_mapping.csv); reads any prior user_id_mapping.csv before wiping so rwd_user_NNNN ↔ _userId stays stable across reruns
-│       └── export_scenario_tir.py        — Databricks task: join user_id_mapping.csv to glycemic_endpoints_transition; emit one row per scenario with tir_seg1/tir_seg2 + cbg_count to simulation/data/scenarios/scenario_tir.csv
+│   ├── export/
+│   │   ├── export_single_user_day.py             — Databricks task: pull CGM/carbs/boluses/pump-settings for one target day per user; shifts events to user-local via BDDP timezoneOffset; emits 4 CSVs to simulation/data/
+│   │   ├── build_scenario_json.py                — Local Python: turn the CSVs into one anonymized simulator-scenario JSON per user at simulation/data/scenarios/ (rwd_user_NNNN_day_01.json + user_id_mapping.csv); reads any prior user_id_mapping.csv before wiping so rwd_user_NNNN ↔ _userId stays stable across reruns
+│   │   ├── export_scenario_tir.py                — Databricks task: join user_id_mapping.csv to glycemic_endpoints_transition; emit one row per scenario with tir_seg1/tir_seg2 + cbg_count to simulation/data/scenarios/scenario_tir.csv
+│   │   └── export_settings_and_demographics.py   — Databricks task: per-user time-weighted scheduled settings (basal/ISF/CIR/target) from exported pump_settings.csv + demographics from valid_transition_segments; emits settings_demographics.csv keyed on rwd_user_id
+│   ├── plot_settings_vs_reference.py             — Local Python: compares cohort settings against Tidepool donor-population reference; writes settings_vs_reference.png (3-row by-age) + settings_vs_reference_overall.png (1×3 all-users)
+│   └── reference/                                — Tidepool donor-population P10/Q1/median/Q3/P90 by age bin (approx, from published figures); 3 CSVs: basal_rate_, isf_, cir_distribution_by_age.csv
 │
 ├── docs/
 │   └── dosing_strategy_classification.md  — AB/TB classification logic, false positive mitigations, both methods
@@ -183,4 +186,6 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 | FDA RWD → T1-simulator scenario CSVs | `simulation/export/export_single_user_day.py` |
 | CSVs → anonymized scenario JSONs | `simulation/export/build_scenario_json.py` |
 | Per-scenario TIR (seg1/seg2) keyed on rwd_user_id | `simulation/export/export_scenario_tir.py` |
+| Per-user time-weighted settings + demographics keyed on rwd_user_id | `simulation/export/export_settings_and_demographics.py` |
+| Cohort settings vs Tidepool reference plots (by-age + 1×3 all-users) | `simulation/plot_settings_vs_reference.py` |
 | ISF distribution across valid-transition pump settings | `exploratory/isf_for_valid_transition.py` |

@@ -1,0 +1,22 @@
+# Tidepool donor-population scheduled basal-rate distribution by age.
+# Sources:
+#   - n_donors: same donor cohort as isf_distribution_by_age.csv (same age table).
+#   - br_p10 / br_q1 / br_median / br_q3 / br_p90: APPROXIMATE — read off the
+#     box-plot figure ("Basal Rate"), rounded to nearest 0.05 U/hr.
+#     Replace with exact percentiles if/when source data is available.
+# Units: U/hr.
+age_group,n_donors,br_p10,br_q1,br_median,br_q3,br_p90
+1-5,31,0.10,0.15,0.20,0.30,0.45
+6-8,67,0.15,0.20,0.30,0.45,0.65
+9-11,90,0.20,0.35,0.50,0.70,0.95
+12-14,89,0.40,0.65,0.85,1.10,1.55
+15-17,57,0.50,0.75,1.00,1.20,1.70
+18-20,32,0.30,0.55,0.75,1.10,1.55
+21-24,43,0.45,0.70,0.90,1.15,1.55
+25-29,69,0.40,0.65,0.90,1.30,1.75
+30-34,94,0.40,0.65,0.90,1.20,1.65
+35-39,63,0.40,0.65,0.90,1.30,1.65
+40-49,122,0.40,0.65,0.85,1.15,1.55
+50-59,85,0.40,0.65,0.90,1.10,1.55
+60-69,59,0.35,0.55,0.75,1.05,1.50
+70-85,22,0.35,0.55,0.55,0.85,1.50

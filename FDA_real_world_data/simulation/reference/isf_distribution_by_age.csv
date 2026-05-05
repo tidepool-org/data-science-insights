@@ -1,0 +1,23 @@
+# Tidepool donor-population ISF (Insulin Sensitivity / Correction Factor) distribution by age.
+# Sources:
+#   - n_donors / pump_days / avg_days_per_donor: exact, from the donor-count table.
+#   - isf_p10 / isf_q1 / isf_median / isf_q3 / isf_p90: APPROXIMATE — read off the
+#     box-plot figure ("Insulin Sensitivity, a.k.a. Correction Factor"), rounded
+#     to the nearest 5 mg/dL/U. Replace with exact percentiles if/when source
+#     data is available.
+# Units: ISF in mg/dL per U.
+age_group,n_donors,pump_days,avg_days_per_donor,isf_p10,isf_q1,isf_median,isf_q3,isf_p90
+1-5,31,5448,176,80,135,205,300,350
+6-8,67,13545,202,70,95,140,180,240
+9-11,90,13434,149,40,55,80,105,135
+12-14,89,16614,187,30,40,55,80,100
+15-17,57,9593,168,25,30,40,55,80
+18-20,32,5749,180,25,35,50,65,90
+21-24,43,5650,131,25,30,40,50,75
+25-29,69,13470,195,25,30,40,55,85
+30-34,94,19696,210,25,35,45,60,85
+35-39,63,13395,213,25,35,45,65,90
+40-49,122,25247,207,25,35,45,60,85
+50-59,85,17565,207,25,35,50,60,80
+60-69,59,11947,202,25,35,40,60,90
+70-85,22,3849,175,25,35,40,50,100

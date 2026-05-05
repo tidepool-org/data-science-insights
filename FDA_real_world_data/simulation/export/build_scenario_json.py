@@ -37,8 +37,12 @@ import os
 import pandas as pd
 
 
-DEFAULT_INPUT_DIR = "FDA_real_world_data/simulation/data"
-DEFAULT_OUTPUT_DIR = "FDA_real_world_data/simulation/data/scenarios"
+_SIMULATION_DIR = (
+    "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights"
+    "/FDA_real_world_data/simulation"
+)
+DEFAULT_INPUT_DIR = os.path.join(_SIMULATION_DIR, "data")
+DEFAULT_OUTPUT_DIR = os.path.join(_SIMULATION_DIR, "data", "scenarios")
 SIM_START_HOUR = 12
 DURATION_HOURS = 24.0
 SIM_ID = "controller-fda-rwd"

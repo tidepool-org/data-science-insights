@@ -38,7 +38,10 @@ CATALOG = "dev.fda_510k_rwd"
 DEFAULT_SEGMENTS_TABLE = f"{CATALOG}.valid_transition_segments"
 DEFAULT_CBG_TABLE = f"{CATALOG}.loop_cbg"
 DEFAULT_BDDP_TABLE = "dev.default.bddp_sample_all_2"
-DEFAULT_OUTPUT_DIR = "FDA_real_world_data/simulation/data"
+DEFAULT_OUTPUT_DIR = (
+    "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights"
+    "/FDA_real_world_data/simulation/data"
+)
 MMOL_TO_MGDL = 18.016
 
 

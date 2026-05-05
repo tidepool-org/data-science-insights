@@ -23,7 +23,10 @@ import pandas as pd
 
 
 CATALOG = "dev.fda_510k_rwd"
-DEFAULT_SCENARIOS_DIR = "FDA_real_world_data/simulation/data/scenarios"
+DEFAULT_SCENARIOS_DIR = (
+    "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights"
+    "/FDA_real_world_data/simulation/data/scenarios"
+)
 DEFAULT_ENDPOINTS_TABLE = f"{CATALOG}.glycemic_endpoints_transition"
 
 

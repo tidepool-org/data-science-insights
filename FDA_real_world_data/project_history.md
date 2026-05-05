@@ -4,6 +4,30 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-05-05: simulation export — settings/demographics export, Tidepool reference plots, Databricks path hardcoding
+
+Three additions to the FDA RWD → T1-simulator side-harness, plus a path-resolution fix across all simulation scripts.
+
+### `export_settings_and_demographics.py` (new)
+Per-user time-weighted scheduled settings + demographics keyed on `rwd_user_id`. Reads the existing `pump_settings.csv` (already produced by `export_single_user_day.py`) and computes time-weighted averages of `basal_schedule` / `isf_schedule` / `cir_schedule` (each segment weighted by duration; last segment wraps to 24:00:00) and `target_schedule` (low/high averaged independently). Joins demographics (`gender`, `tb_to_ab_age_years`, `tb_to_ab_years_lwd`) from `valid_transition_segments` (segment_rank=1). Emits one row per `rwd_user_id` to `simulation/data/scenarios/settings_demographics.csv`. Anonymized via `user_id_mapping.csv`.
+
+### `simulation/reference/` (new) — Tidepool donor-population reference distributions
+Three CSVs encoding P10/Q1/median/Q3/P90 by age bin (14 bins, 1-5 through 70-85, matching the published Tidepool figures): `basal_rate_distribution_by_age.csv` (U/hr), `isf_distribution_by_age.csv` (mg/dL/U), `cir_distribution_by_age.csv` (g/U). `n_donors` per bin from the published donor-count table (exact); percentile values eyeballed off the published box-plot figures (approximate — rounded to nearest 5 mg/dL/U for ISF, 1 g/U for CIR, 0.05 U/hr for BR). Header comments call out the approximation explicitly.
+
+### `plot_settings_vs_reference.py` (new) — cohort vs reference plots
+Two PNGs in one run:
+1. `settings_vs_reference.png` — 3 rows (basal / ISF / CIR), one box per age bin per row, side-by-side user vs reference. User box uses real numpy percentiles; reference box reads from per-bin summary stats. Whiskers at P10/P90 to match the reference's "80% of data" band.
+2. `settings_vs_reference_overall.png` — 1×3 panels, single all-users box vs single aggregate-reference box. Aggregate reference is approximated by `n_donors`-weighted means of each percentile column (true pooled percentiles would require donor-level data).
+
+Caveat documented in the docstring: user values are per-user time-weighted averages of one schedule on one target_day, while the reference's underlying unit (per-donor / per-day / per-schedule-entry) isn't documented in the source figure. Comparison is qualitative.
+
+### Databricks path hardcoding (all simulation scripts)
+`export_single_user_day.py`, `build_scenario_json.py`, `export_scenario_tir.py`, `export_settings_and_demographics.py`, and `plot_settings_vs_reference.py` now hardcode `/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/simulation` as the default I/O root. Previous cwd-relative `"FDA_real_world_data/simulation/data/..."` defaults broke when run from Databricks notebooks where cwd was `simulation/export/`, producing nested paths like `.../simulation/export/FDA_real_world_data/simulation/data/...`. Override via explicit kwargs / `--scenarios_dir` for non-Databricks runs.
+
+**Commit:** _not yet committed_
+
+---
+
 ## 2026-05-04: Analysis 8-8 — docstring sync, Figure 8.8c restyled to match 8.1a
 
 Touched only [analysis_8-8_carbohydrate_consumption_consistency.py](analysis/analysis_8-8_carbohydrate_consumption_consistency.py); staging tables and output schemas unchanged.
