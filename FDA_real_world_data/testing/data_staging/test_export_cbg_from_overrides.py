@@ -42,7 +42,9 @@ ALL_TABLES = [OVERRIDES_TABLE, CBG_TABLE, OUTPUT_TABLE]
 # --- Test data ---
 # Override 1: valid, Exercise, 1-hour duration starting 10:00 Jan 5
 #   Window: 10:00 to 13:00 (10:00 + 1hr + 2hr buffer)
+#   Starting glucose 120 mg/dL → is_starting_glucose_in_range=True
 # Override 2: invalid (is_valid_name_only=False), Sleep, 8-hour duration starting 10:00 Jan 6
+#   Starting glucose 200 mg/dL → is_starting_glucose_in_range=False
 overrides_rows = [
     {
         "_userId": "user_a",
@@ -58,6 +60,7 @@ overrides_rows = [
         "segment": "tb_to_ab_seg2",
         "is_valid_name_only": True,
         "is_valid_full": True,
+        "is_starting_glucose_in_range": True,
     },
     {
         "_userId": "user_a",
@@ -73,6 +76,7 @@ overrides_rows = [
         "segment": "tb_to_ab_seg1",
         "is_valid_name_only": False,
         "is_valid_full": False,
+        "is_starting_glucose_in_range": False,
     },
 ]
 
@@ -144,6 +148,15 @@ try:
     cbg_values = sorted(result["cbg_mg_dl"].astype(float).tolist())
     assert cbg_values == [135.0, 140.0, 150.0], f"expected [135.0, 140.0, 150.0], got {cbg_values}"
     print("PASS: correct CBG values")
+
+    # 5. is_starting_glucose_in_range carried through from the overrides table.
+    exercise_rows = result[result["overridePreset"] == "Exercise"]
+    sleep_rows = result[result["overridePreset"] == "Sleep"]
+    assert all(exercise_rows["is_starting_glucose_in_range"].astype(bool)), \
+        "Exercise rows should carry is_starting_glucose_in_range=True"
+    assert not any(sleep_rows["is_starting_glucose_in_range"].astype(bool)), \
+        "Sleep rows should carry is_starting_glucose_in_range=False"
+    print("PASS: is_starting_glucose_in_range carried from overrides")
 
     print("\nAll tests passed.")
 

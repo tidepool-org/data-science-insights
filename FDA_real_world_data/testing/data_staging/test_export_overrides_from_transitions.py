@@ -2,15 +2,16 @@
 Unit test for export_overrides_from_transitions.py.
 
 Tests: override extraction, segment assignment, dosing_mode classification,
-name-only and full-config validity checks, and exclusion of out-of-range
-and null-preset rows.
+name-only and full-config validity checks, exclusion of out-of-range and
+null-preset rows, and starting-glucose attachment + in-range flag.
 
 Run on Databricks.
 """
 
 import sys
-from datetime import date
+from datetime import date, datetime
 
+import pandas as pd
 from pyspark.sql import SparkSession  # type: ignore
 
 import os
@@ -35,9 +36,10 @@ spark = SparkSession.builder.getOrCreate()
 # --- Table names ---
 BDDP_TABLE = f"{TEST_SCHEMA}._test_or_trans_bddp"
 SEGMENTS_TABLE = f"{TEST_SCHEMA}._test_or_trans_segments"
+LOOP_CBG_TABLE = f"{TEST_SCHEMA}._test_or_trans_loop_cbg"
 OUTPUT_TABLE = f"{TEST_SCHEMA}._test_or_trans_output"
 
-ALL_TABLES = [BDDP_TABLE, SEGMENTS_TABLE, OUTPUT_TABLE]
+ALL_TABLES = [BDDP_TABLE, SEGMENTS_TABLE, LOOP_CBG_TABLE, OUTPUT_TABLE]
 
 # --- Test data ---
 segments_rows = [
@@ -73,9 +75,13 @@ SLEEP = {
 
 bddp_rows = [
     # Exercise in seg1 (×2)
+    # Jan 3 10:00: starting glucose 120 (in range)
+    # Jan 5 10:00: starting glucose 200 (out of range)
     {"_userId": "user_a", "time_string": "2025-01-03 10:00:00", "created_timestamp": "2025-01-03 10:00:01", **EXERCISE},
     {"_userId": "user_a", "time_string": "2025-01-05 10:00:00", "created_timestamp": "2025-01-05 10:00:01", **EXERCISE},
     # Exercise in seg2 (×2)
+    # Jan 17 10:00: starting glucose 90 (in range)
+    # Jan 19 10:00: no CBG within 30 min (NULL starting glucose, not in range)
     {"_userId": "user_a", "time_string": "2025-01-17 10:00:00", "created_timestamp": "2025-01-17 10:00:01", **EXERCISE},
     {"_userId": "user_a", "time_string": "2025-01-19 10:00:00", "created_timestamp": "2025-01-19 10:00:01", **EXERCISE},
     # Sleep in seg1 (×1)
@@ -98,16 +104,37 @@ bddp_rows = [
     },
 ]
 
+# Loop CBG: covers some but not all overrides; stays well within the 30-min
+# lookback window for the activations we want to test, and is intentionally
+# absent for Jan 19 (the "no CBG in window" case).
+loop_cbg_rows = [
+    # Jan 3 10:00 Exercise activation — CBG at 09:55, 120 mg/dL (in range)
+    {"_userId": "user_a", "cbg_timestamp": datetime(2025, 1, 3, 9, 55), "cbg_mg_dl": 120.0},
+    # Jan 5 10:00 Exercise activation — CBG at 09:50, 200 mg/dL (out of range)
+    {"_userId": "user_a", "cbg_timestamp": datetime(2025, 1, 5, 9, 50), "cbg_mg_dl": 200.0},
+    # Jan 4 22:00 Sleep activation — CBG at 21:45, 110 mg/dL (in range)
+    {"_userId": "user_a", "cbg_timestamp": datetime(2025, 1, 4, 21, 45), "cbg_mg_dl": 110.0},
+    # Jan 16 22:00 Sleep activation — CBG at 21:50, 95 mg/dL (in range)
+    {"_userId": "user_a", "cbg_timestamp": datetime(2025, 1, 16, 21, 50), "cbg_mg_dl": 95.0},
+    # Jan 17 10:00 Exercise activation — CBG at 09:45, 90 mg/dL (in range)
+    {"_userId": "user_a", "cbg_timestamp": datetime(2025, 1, 17, 9, 45), "cbg_mg_dl": 90.0},
+    # Stray reading just outside the 30-min window for Jan 19 10:00 (at 09:25,
+    # 35 minutes earlier) — should NOT be picked up as starting glucose.
+    {"_userId": "user_a", "cbg_timestamp": datetime(2025, 1, 19, 9, 25), "cbg_mg_dl": 130.0},
+]
+
 # --- Run test ---
 try:
     setup_test_table(spark, SEGMENTS_TABLE, segments_rows)
     setup_test_table(spark, BDDP_TABLE, bddp_rows)
+    setup_test_table(spark, LOOP_CBG_TABLE, loop_cbg_rows)
 
     run(
         spark,
         output_table=OUTPUT_TABLE,
         bddp_table=BDDP_TABLE,
         transition_segments_table=SEGMENTS_TABLE,
+        loop_cbg_table=LOOP_CBG_TABLE,
     )
 
     result = read_test_output(spark, OUTPUT_TABLE)
@@ -142,6 +169,29 @@ try:
     expected_btl = 8.3 * 18.018
     assert abs(btl - expected_btl) < 0.001, f"bg_target_low: expected {expected_btl}, got {btl}"
     print(f"PASS: bg_target_low converted to mg/dL ({btl:.4f})")
+
+    # 6. Starting glucose attached + in-range flag works for all four cases.
+    by_time = {r["override_time"]: r for _, r in result.iterrows()}
+
+    jan3 = by_time[pd.Timestamp(2025, 1, 3, 10, 0)]
+    assert float(jan3["starting_glucose"]) == 120.0, f"Jan 3 starting_glucose: {jan3['starting_glucose']}"
+    assert bool(jan3["is_starting_glucose_in_range"]), "Jan 3 should be in-range (120)"
+
+    jan5 = by_time[pd.Timestamp(2025, 1, 5, 10, 0)]
+    assert float(jan5["starting_glucose"]) == 200.0, f"Jan 5 starting_glucose: {jan5['starting_glucose']}"
+    assert not bool(jan5["is_starting_glucose_in_range"]), "Jan 5 should be out-of-range (200)"
+
+    jan17 = by_time[pd.Timestamp(2025, 1, 17, 10, 0)]
+    assert float(jan17["starting_glucose"]) == 90.0, f"Jan 17 starting_glucose: {jan17['starting_glucose']}"
+    assert bool(jan17["is_starting_glucose_in_range"]), "Jan 17 should be in-range (90)"
+
+    jan19 = by_time[pd.Timestamp(2025, 1, 19, 10, 0)]
+    # 35-minute-earlier reading is outside the 30-min lookback window, so NULL.
+    assert pd.isna(jan19["starting_glucose"]), (
+        f"Jan 19 starting_glucose should be NULL, got {jan19['starting_glucose']}"
+    )
+    assert not bool(jan19["is_starting_glucose_in_range"]), "Jan 19 should be out-of-range (NULL)"
+    print("PASS: starting_glucose + is_starting_glucose_in_range correctly attached")
 
     print("\nAll tests passed.")
 

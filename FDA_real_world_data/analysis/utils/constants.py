@@ -29,3 +29,11 @@ COLORS_STACKED_BAR = {
     "180-250": ["#CCAFF0", "#AA85DE"],
     ">250":    ["#A384E0", "#7046CC"],
 }
+
+# =============================================================================
+# Inclusion criteria — starting glucose at the time an override is activated.
+# Used by Analysis 8-2 (preset glycemic outcomes) and 8-3 (preset parameter
+# changes) to restrict to activations that begin in a normoglycemic state.
+# =============================================================================
+STARTING_GLUCOSE_LOW  = 70    # mg/dL
+STARTING_GLUCOSE_HIGH = 180   # mg/dL

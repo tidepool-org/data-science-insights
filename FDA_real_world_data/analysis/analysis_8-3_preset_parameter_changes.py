@@ -42,11 +42,12 @@ import os
 OUTPUT_DIR = "outputs/analysis_8_3"
 SEG1 = "temp_basal"
 SEG2 = "autobolus"
-STARTING_GLUCOSE_LOW  = 70    # mg/dL — inclusion criterion
-STARTING_GLUCOSE_HIGH = 180   # mg/dL — inclusion criterion
 CBG_LOOKBACK_MINUTES  = 30    # minutes before override_time to search for CBG
 
-from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT
+from utils.constants import (
+    FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT,
+    STARTING_GLUCOSE_LOW, STARTING_GLUCOSE_HIGH,
+)
 from utils.statistics import test_normality, compute_paired_statistics, format_p
 from utils.data_loading import MAX_LOOP_VERSION_INT, MAX_SEG2_END_DATE
 

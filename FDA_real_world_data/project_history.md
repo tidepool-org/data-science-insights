@@ -4,6 +4,46 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-05-06: Analysis 8-2 — P1 alignment with the written analysis plan
+
+Closed five gaps between the implementation and the written Analysis 8-2 plan ("Glycemic Outcomes During Preset Activation"). Two larger items — Table 8.2c (a second AB segment 14–28 days post-transition) and a preset-name-grain primary analysis with exact-config sensitivity — remain required for the submission and are deferred to follow-up PRs.
+
+### Inclusion filters wired up end-to-end
+- `is_valid_name_only` was being computed in `export_overrides_from_transitions.py` but dropped during aggregation in [compute_glycemic_endpoints.py](data_staging/compute_glycemic_endpoints.py) (the override-mode `group_cols` omitted it). Added it (and `is_starting_glucose_in_range`, see below) to `MODE_CONFIG["override"]["group_cols"]` so they survive `GROUP BY` and propagate into `glycemic_endpoints_override`.
+- The new analysis-side loader filters on both flags before pivoting.
+
+### Starting-glucose filter (70–180 mg/dL)
+- New CTEs in [export_overrides_from_transitions.py](data_staging/export_overrides_from_transitions.py) join `loop_cbg` on `_userId` with `cbg_timestamp BETWEEN override_time - INTERVAL '30' MINUTE AND override_time` and pick the closest reading per activation. Emits `starting_glucose` (DOUBLE, nullable) and `is_starting_glucose_in_range` (BOOLEAN, gated on `BETWEEN 70 AND 180`). Activations with no CBG in the window get NULL/FALSE.
+- Lookback is 30 min backward (matching Analysis 8-3's `CBG_LOOKBACK_MINUTES`) so both analyses use the same starting-glucose definition.
+- Thresholds live in [analysis/utils/constants.py](analysis/utils/constants.py) as `STARTING_GLUCOSE_LOW = 70` / `STARTING_GLUCOSE_HIGH = 180` (moved out of analysis_8-3, where they were defined locally). Staging script carries module-level defaults `_STARTING_GLUCOSE_LOW` / `_STARTING_GLUCOSE_HIGH` exposed as `run()` parameters — avoids cross-package `sys.path` manipulation in staging code; comment in the staging file points at the analysis-side source of truth.
+- `is_starting_glucose_in_range` is carried through [export_cbg_from_overrides.py](data_staging/export_cbg_from_overrides.py) onto `valid_override_cbg`.
+
+### Cohort/guardrail filter for 8-2
+New `load_override_endpoints(spark)` in [analysis/utils/data_loading.py](analysis/utils/data_loading.py) mirroring `load_transition_endpoints` — same `MAX_LOOP_VERSION_INT` / `MAX_SEG2_END_DATE` cohort gate, same `valid_transition_guardrails` anti-join, plus the two override-specific inclusion filters. Returns long-form per (user, preset, params, segment) bucket; the analysis driver pivots. Previously 8-2 read `glycemic_endpoints_override` directly with no cohort filter, so its denominator could drift from 8-1/8-5/8-8.
+
+### Output artifacts now match the plan
+[analysis_8-2_glycemic_outcomes_during_preset_activation.py](analysis/analysis_8-2_glycemic_outcomes_during_preset_activation.py) full rewrite of the driver:
+- **Table 8.2a (new, sample characteristics):** users with preset use in both periods, median [IQR] activations per user per segment, total preset+tail hours per segment. Rows for the second AB period are placeholder `N/A*` with a footnote "Reserved for Table 8.2c, pending segment-pipeline change". Saved as `outputs/analysis_8_2/table_8_2a.csv`.
+- **Table 8.2b (renamed from 8.2a):** TB vs initial AB endpoint comparisons. Function `create_table_8_2b`; outputs `table_8_2b_parametric.csv` / `table_8_2b_nonparametric.csv`.
+- **Figure 8.2a:** unchanged (paired connectors + box + violin per endpoint, per override type + pooled).
+- **Figure 8.2b (replaced):** previous histogram-of-paired-differences view (which duplicated 8.2a's information) dropped. New view: 5×2 grid of CGM traces — rows = top-5 users with paired activations of the most-paired preset, columns = (TB, AB). x-axis = minutes from `override_time`; vertical dotted lines mark `t=0` and `t=duration` (preset end / tail start); 70–180 band shaded. Panel titles use anonymized `User 1`…`User N` labels; `_userId` is used internally for filtering and never appears in the rendered figure.
+
+### Tests
+- [test_export_overrides_from_transitions.py](testing/data_staging/test_export_overrides_from_transitions.py) — added a `loop_cbg` fixture covering four cases: in-range (120), out-of-range (200), in-range (90), and no-CBG-in-window (a stray reading 35 min before activation, just outside the 30-min lookback). Asserts `starting_glucose` and `is_starting_glucose_in_range` for each.
+- [test_export_cbg_from_overrides.py](testing/data_staging/test_export_cbg_from_overrides.py) — added `is_starting_glucose_in_range` to fixture rows + carry-through assertion (Exercise rows TRUE, Sleep rows FALSE).
+- [testing/analysis/test_analysis_8_2.py](testing/analysis/test_analysis_8_2.py) (new) — 6 pure-pandas unit tests for `create_table_8_2a` (counts, hours, second-AB placeholder + footnote) and `_select_demo_users` (preset selection, top-N capping, no-pairing edge case). Runs without Spark.
+
+### Deferred (required for submission, separate PRs)
+- **Table 8.2c — second AB segment (days 14–28).** Needs new `tb_to_ab_seg3_start/end` in `valid_transition_segments`, propagated through the override extraction `CASE` branches, CBG windowing, endpoint group_cols, and a parallel analysis pass. Placeholder rows in Table 8.2a make space for these values.
+- **Preset-name primary aggregation + exact-config sensitivity.** Current grain is exact-config (preset + 5 numeric params); plan calls for averaging across parameter variants of the same preset name within a user-segment, then pairing across TB/AB.
+- **Hypo events as rate per hour of preset exposure** (currently raw count).
+- **Forest-plot variant of Figure 8.2a** — paired connector + box + violin is what's there now; if the regulator wants CI bars, add alongside.
+- **Direction-of-adjustment / event-type strata** — "when feasible" in the plan; not implemented.
+
+**Commit:** _not yet committed_
+
+---
+
 ## 2026-05-05: simulation export — settings/demographics export, Tidepool reference plots, Databricks path hardcoding
 
 Three additions to the FDA RWD → T1-simulator side-harness, plus a path-resolution fix across all simulation scripts.

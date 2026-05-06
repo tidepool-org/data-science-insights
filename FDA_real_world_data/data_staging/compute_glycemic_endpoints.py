@@ -120,10 +120,18 @@ MODE_CONFIG = {
     "override": {
         "default_input_table": f"{CATALOG}.valid_override_cbg",
         "default_output_table": f"{CATALOG}.glycemic_endpoints_override",
+        # Validity flags partition the aggregation so the analysis can apply
+        # them as filters: is_valid_name_only is constant within (user, preset)
+        # so it just rides through; is_starting_glucose_in_range varies per
+        # activation, so it splits a (user, preset, params, segment) bucket
+        # into in-range / out-of-range halves and the analysis keeps only the
+        # in-range half.
         "group_cols": [
             "_userId", "overridePreset",
             "brsf", "btl", "bth", "crsf", "issf",
             "segment",
+            "is_valid_name_only",
+            "is_starting_glucose_in_range",
         ],
     },
     "stable": {

@@ -3,12 +3,26 @@ import argparse
 
 CATALOG = "dev.fda_510k_rwd"
 
+# Window before override_time to search for the activation's starting CBG.
+# Mirrors Analysis 8-3's CBG_LOOKBACK_MINUTES so both analyses use the same
+# starting-glucose definition.
+STARTING_GLUCOSE_LOOKBACK_MINUTES = 30
+
+# Starting-glucose inclusion thresholds (mg/dL). Analysis-side code reads
+# these from analysis/utils/constants.py (STARTING_GLUCOSE_LOW/HIGH); the
+# staging defaults below match. Override via run() if they ever diverge.
+_STARTING_GLUCOSE_LOW = 70
+_STARTING_GLUCOSE_HIGH = 180
+
 
 def run(
     spark,
     output_table=f"{CATALOG}.overrides_by_segment",
     bddp_table="dev.default.bddp_sample_all_2",
     transition_segments_table=f"{CATALOG}.valid_transition_segments",
+    loop_cbg_table=f"{CATALOG}.loop_cbg",
+    starting_glucose_low=_STARTING_GLUCOSE_LOW,
+    starting_glucose_high=_STARTING_GLUCOSE_HIGH,
 ):
     spark.sql(f"""
     --begin-sql
@@ -185,6 +199,33 @@ def run(
       FROM config_counts
       GROUP BY _userId, preset_key
         , brsf, btl, bth, crsf, issf
+    ),
+
+    -- Starting glucose: the CBG reading closest to (but at or before) the
+    -- override activation, within a fixed lookback window. Activations with
+    -- no CBG in the window get starting_glucose = NULL and fail the
+    -- in-range check (treated as failed inclusion).
+    starting_cbg_ranked AS (
+      SELECT
+        o._userId,
+        o.override_time,
+        c.cbg_mg_dl,
+        ROW_NUMBER() OVER (
+          PARTITION BY o._userId, o.override_time
+          ORDER BY c.cbg_timestamp DESC
+        ) AS rn
+      FROM overrides_clean o
+      INNER JOIN {loop_cbg_table} c
+        ON c._userId = o._userId
+       AND c.cbg_timestamp BETWEEN
+             o.override_time - INTERVAL '{STARTING_GLUCOSE_LOOKBACK_MINUTES}' MINUTE
+             AND o.override_time
+    ),
+
+    starting_cbg AS (
+      SELECT _userId, override_time, cbg_mg_dl AS starting_glucose
+      FROM starting_cbg_ranked
+      WHERE rn = 1
     )
 
     SELECT
@@ -208,7 +249,13 @@ def run(
       CASE WHEN vn.n_seg1_name >= 2 AND vn.n_seg2_name >= 2 THEN TRUE ELSE FALSE END AS is_valid_name_only,
       v.n_seg1,
       v.n_seg2,
-      CASE WHEN v.n_seg1 >= 2 AND v.n_seg2 >= 2 THEN TRUE ELSE FALSE END AS is_valid_full
+      CASE WHEN v.n_seg1 >= 2 AND v.n_seg2 >= 2 THEN TRUE ELSE FALSE END AS is_valid_full,
+      sc.starting_glucose,
+      CASE
+        WHEN sc.starting_glucose BETWEEN {starting_glucose_low} AND {starting_glucose_high}
+          THEN TRUE
+        ELSE FALSE
+      END AS is_starting_glucose_in_range
     FROM overrides_clean o
     JOIN config_validity_name_only vn
       ON o._userId = vn._userId
@@ -221,6 +268,9 @@ def run(
       AND o.bth = v.bth
       AND o.crsf = v.crsf
       AND o.issf = v.issf
+    LEFT JOIN starting_cbg sc
+      ON sc._userId = o._userId
+      AND sc.override_time = o.override_time
     ORDER BY o._userId, o.override_time
     ;
     """)

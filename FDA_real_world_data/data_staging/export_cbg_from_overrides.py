@@ -26,7 +26,8 @@ def run(
         c.cbg_mg_dl,
         c.cbg_timestamp,
         o.is_valid_name_only,
-        o.is_valid_full
+        o.is_valid_full,
+        o.is_starting_glucose_in_range
     FROM {overrides_table} o
     INNER JOIN {loop_cbg_table} c
         ON o._userId = c._userId
