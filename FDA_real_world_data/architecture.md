@@ -22,7 +22,7 @@ FDA_real_world_data/
 │
 ├── analysis/
 │   ├── analysis_8-1_*.py  — Comparative TB vs AB performance (paired t-test on TIR/TBR/TAR)
-│   ├── analysis_8-2_*.py  — Glycemic outcomes during preset overrides; Tables 8.2a (sample chars), 8.2b (TB vs initial AB endpoints); Figures 8.2a (paired diffs), 8.2b (anonymized example glucose traces). Table 8.2c (TB vs second-AB at days 14–28) deferred — needs a third transition segment
+│   ├── analysis_8-2_*.py  — Glycemic outcomes during preset overrides; Tables 8.2a (sample chars), 8.2b (TB vs initial AB), 8.2c (TB vs second AB, days 14–28); each endpoint table is emitted at primary (preset-name) and sensitivity (preset+exact-params) grain. Figures 8.2a (paired diffs, primary 8.2b dataset), 8.2b (anonymized example glucose traces). Hypo events reported as rate/hour of preset exposure
 │   ├── analysis_8-3_*.py  — Preset parameter changes (scale factors)
 │   ├── analysis_8-4_*.py  — Preset activation duration
 │   ├── analysis_8-5_*.py  — Demographic subgroup analysis (age/gender/YLD)
@@ -32,7 +32,7 @@ FDA_real_world_data/
 │   ├── plot_stable_ab_sample_size.py — CONSORT chart, sample size heatmap, AB% distribution
 │   └── utils/
 │       ├── constants.py    — Font sizes, color schemes, STARTING_GLUCOSE_LOW/HIGH (70/180) shared across 8-2 and 8-3
-│       ├── data_loading.py — load_transition_endpoints() with per-segment coverage + guardrail filtering, cohort filter (MAX_LOOP_VERSION_INT / MAX_SEG2_END_DATE), and best-surviving-segment selection per user. load_override_endpoints() applies the same cohort + guardrail filters to glycemic_endpoints_override plus is_valid_name_only + is_starting_glucose_in_range inclusion gates
+│       ├── data_loading.py — load_transition_endpoints() with per-segment coverage + guardrail filtering, cohort filter (MAX_LOOP_VERSION_INT / MAX_SEG2_END_DATE), and best-surviving-segment selection per user. load_override_endpoints() returns per-activation rows from glycemic_endpoints_override after cohort + guardrail + starting-glucose filters; aggregate_override_endpoints(activations, ab_segment, grain) collapses to (user, preset_name) primary or (user, preset, params) sensitivity grain, computes hypo rate as total events / total exposure hours, and pivots to wide TB-vs-AB form
 │       └── statistics.py   — Paired t-test, Wilcoxon, ANOVA, Tukey, Dunn's, p-value formatting; shapiro + wilcoxon short-circuit to NaN when input has <2 distinct values (avoids scipy zero-range warnings)
 │
 ├── testing/
@@ -81,10 +81,10 @@ Phase 3A: Transition Analyses
     → compute_glycemic_endpoints (mode=transition, group by (_userId, tb_to_ab_seg1_start, segment_rank, segment)) → glycemic_endpoints_transition
       → Analysis 8-1, 8-5, 8-8
   export_carbohydrates_from_transitions → valid_transition_carbs (per-segment, with tb_to_ab_seg1_start + segment_rank, deduped) → Analysis 8-8
-  export_overrides_from_transitions    → overrides_by_segment (includes starting_glucose + is_starting_glucose_in_range from a 30-min backward CBG join, and is_valid_name_only / is_valid_full)
-    → export_cbg_from_overrides        → valid_override_cbg (carries is_starting_glucose_in_range)
-      → compute_glycemic_endpoints (mode=override; group_cols include is_valid_name_only + is_starting_glucose_in_range so they survive aggregation) → glycemic_endpoints_override
-        → Analysis 8-2 (filters via load_override_endpoints)
+  export_overrides_from_transitions    → overrides_by_segment (covers seg1 + seg2 + seg3; emits starting_glucose + is_starting_glucose_in_range from a 30-min backward CBG join, and dual validity flags is_valid_name_only_{seg2,seg3} / is_valid_full_{seg2,seg3})
+    → export_cbg_from_overrides        → valid_override_cbg (carries override_time, duration, segment (tb_to_ab_seg1/2/3), dosing_mode (temp_basal/autobolus), is_valid_name_only_{seg2,seg3}, is_starting_glucose_in_range)
+      → compute_glycemic_endpoints (mode=override; per-activation grain — group_cols include override_time + duration so each activation produces its own endpoint row) → glycemic_endpoints_override
+        → Analysis 8-2 (load_override_endpoints loads per-activation; aggregate_override_endpoints averages up to preset-name primary or exact-config sensitivity grain, pairs TB vs seg2 for Table 8.2b and TB vs seg3 for Table 8.2c)
     → Analysis 8-3, 8-4
   export_segments_within_guardrails (mode=transition) → valid_transition_guardrails
 
@@ -107,7 +107,7 @@ Phase 4: Adoption
 ## Domain Concepts
 
 ### Segments
-- **Transition (TB→AB):** `seg1` = 14-day temp-basal period (<30% AB), `seg2` = 14-day autobolus period (>70% AB). Best transition per user selected by segment score = `min(1 - ab%_seg1, ab%_seg2)`.
+- **Transition (TB→AB):** `seg1` = 14-day temp-basal period (<30% AB), `seg2` = 14-day autobolus period (>70% AB). Best transition per user selected by segment score = `min(1 - ab%_seg1, ab%_seg2)`. `seg3` = the 14 days immediately following `seg2` (days 14–28 post-transition); no additional AB% requirement on `seg3` itself — it's used by Analysis 8-2 Table 8.2c as a "two weeks after transition" comparison window, gated downstream by ≥2 same-name preset activations.
 - **Stable AB:** 14-day period of 100% autobolus days starting ≥28 days after the user's first AB day. One segment per user (earliest qualifying window).
 
 ### Autobolus vs Temp Basal
@@ -130,7 +130,7 @@ The script FULL OUTER JOINs the two methods and emits one row per (user, day) wi
 - **Event metrics:** Hypo events (≥3 consecutive readings <54, exit at ≥3 consecutive >70)
 
 ### Preset Overrides
-User-activated parameter adjustments (basal scale factor, BG targets, carb ratio scale factor, ISF scale factor, duration). Validity: `is_valid_name_only` (same name ≥2× each segment), `is_valid_full` (same name + exact params ≥2× each segment). `starting_glucose` is the closest CBG in the 30 minutes before activation; `is_starting_glucose_in_range` gates on `STARTING_GLUCOSE_LOW ≤ starting_glucose ≤ STARTING_GLUCOSE_HIGH` (defaults 70 / 180 mg/dL). Activations with no CBG in the 30-min window get `starting_glucose = NULL` and fail the in-range check.
+User-activated parameter adjustments (basal scale factor, BG targets, carb ratio scale factor, ISF scale factor, duration). Two validity dimensions per (preset, params): name-only (same name ≥2× in TB and ≥2× in the AB segment of interest) vs full-config (same name + same five numeric params ≥2× in each side). Each is split per AB segment: `is_valid_name_only_seg2` / `is_valid_name_only_seg3` and `is_valid_full_seg2` / `is_valid_full_seg3`. Tables 8.2b and 8.2c use the corresponding pair. `starting_glucose` is the closest CBG in the 30 minutes before activation; `is_starting_glucose_in_range` gates on `STARTING_GLUCOSE_LOW ≤ starting_glucose ≤ STARTING_GLUCOSE_HIGH` (defaults 70 / 180 mg/dL). Activations with no CBG in the 30-min window get `starting_glucose = NULL` and fail the in-range check.
 
 ### Guardrails
 Pump settings validated against FDA limits. Check functions per setting type (`check_basal`, `check_bg_targets`, `check_insulin_sensitivity`, etc.). Users with `violation_count > 0` excluded from analyses.

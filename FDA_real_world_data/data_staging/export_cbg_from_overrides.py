@@ -16,17 +16,23 @@ def run(
 
     SELECT
         c._userId,
+        o.override_time,
+        o.duration,
         o.overridePreset,
         COALESCE(TRY_CAST(o.basalRateScaleFactor AS DOUBLE), -1) AS brsf,
         COALESCE(TRY_CAST(o.bg_target_low AS DOUBLE), -1) AS btl,
         COALESCE(TRY_CAST(o.bg_target_high AS DOUBLE), -1) AS bth,
         COALESCE(TRY_CAST(o.carbRatioScaleFactor AS DOUBLE), -1) AS crsf,
         COALESCE(TRY_CAST(o.insulinSensitivityScaleFactor AS DOUBLE), -1) AS issf,
-        o.dosing_mode AS segment,
+        -- segment carries the actual segment label (tb_to_ab_seg1/2/3) so
+        -- Tables 8.2b and 8.2c can distinguish initial vs second AB. Use
+        -- dosing_mode (also carried) when only the TB-vs-AB collapse matters.
+        o.segment,
+        o.dosing_mode,
         c.cbg_mg_dl,
         c.cbg_timestamp,
-        o.is_valid_name_only,
-        o.is_valid_full,
+        o.is_valid_name_only_seg2,
+        o.is_valid_name_only_seg3,
         o.is_starting_glucose_in_range
     FROM {overrides_table} o
     INNER JOIN {loop_cbg_table} c

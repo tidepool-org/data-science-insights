@@ -8,21 +8,30 @@ Objective: Compare glycemic endpoints during eligible preset activation
 windows (preset duration + 2-hour tail) between the temp-basal and
 autobolus phases of a TB→AB transition.
 
-Inclusion (applied by utils.data_loading.load_override_endpoints):
+Inclusion (applied by utils.data_loading.load_override_endpoints +
+aggregate_override_endpoints):
 - Cohort: Loop version below MAX_LOOP_VERSION_INT (or, if version unknown,
   segment ending before MAX_SEG2_END_DATE)
 - No guardrail violations on the rank-1 transition segment
-- is_valid_name_only = TRUE (preset name appears >= 2 times in each phase)
 - is_starting_glucose_in_range = TRUE (CBG within 30 min before activation
   is between STARTING_GLUCOSE_LOW and STARTING_GLUCOSE_HIGH)
+- is_valid_name_only_seg2 = TRUE for Table 8.2b (TB vs initial AB)
+- is_valid_name_only_seg3 = TRUE for Table 8.2c (TB vs second AB,
+  days 14–28 post-transition)
+
+Per-activation endpoints are computed in compute_glycemic_endpoints (override
+mode); the analysis aggregates them up to the requested grain — primary
+(preset name) or sensitivity (preset name + exact parameter set).
 
 Outputs:
 - Table 8.2a: Sample characteristics (users, activations/segment, hours/segment)
-- Table 8.2b: Glycemic endpoints during preset activation (TB vs initial AB)
-- Table 8.2c: Glycemic endpoints two weeks after transition (DEFERRED;
-  requires a third transition segment that the pipeline does not yet emit)
-- Figure 8.2a: Paired differences per endpoint (paired connectors + box + violin)
-- Figure 8.2b: Example glucose traces during preset activation, TB vs AB
+- Table 8.2b: Glycemic endpoints, TB vs initial AB
+  - Primary:     `table_8_2b_parametric.csv` / `table_8_2b_nonparametric.csv`
+  - Sensitivity: `table_8_2b_by_config_parametric.csv` / `..._nonparametric.csv`
+- Table 8.2c: Glycemic endpoints, TB vs second AB (days 14–28)
+  - Primary + sensitivity files mirroring 8.2b
+- Figure 8.2a: Paired differences for the primary TB vs initial AB analysis
+- Figure 8.2b: Example glucose traces during preset activation, anonymized
 =============================================================================
 """
 
@@ -41,31 +50,34 @@ from utils.constants import (
 )
 from utils.data_loading import (
     MAX_LOOP_VERSION_INT, MAX_SEG2_END_DATE,
-    load_override_endpoints,
+    load_override_endpoints, aggregate_override_endpoints,
 )
 from utils.statistics import compute_paired_statistics, format_p
 
 
 OUTPUT_DIR = "outputs/analysis_8_2"
 
-SEG1 = "temp_basal"
-SEG2 = "autobolus"
+# Internal segment labels (match the staging table values).
+TB  = "tb_to_ab_seg1"
+AB1 = "tb_to_ab_seg2"  # initial AB, days 0–14
+AB2 = "tb_to_ab_seg3"  # second AB, days 14–28
 
-CONFIG_COLS = ["overridePreset", "brsf", "btl", "bth", "crsf", "issf"]
+# `dosing_mode` collapses both AB segments to "autobolus" (used by Table 8.2a
+# to count temp-basal vs autobolus activations).
+DOSING_TB = "temp_basal"
+DOSING_AB = "autobolus"
 
 ENDPOINTS = [
-    ("Time <54 mg/dL (%)",           "tbr_very_low_seg1", "tbr_very_low_seg2", "%"),
-    ("Time <70 mg/dL (%)",           "tbr_seg1",          "tbr_seg2",          "%"),
-    ("Time 70–180 mg/dL (%)",        "tir_seg1",          "tir_seg2",          "%"),
-    ("Time >180 mg/dL (%)",          "tar_seg1",          "tar_seg2",          "%"),
-    ("Time >250 mg/dL (%)",          "tar_very_high_seg1","tar_very_high_seg2","%"),
-    ("Hypoglycemic events (n)",      "hypo_events_seg1",  "hypo_events_seg2",  "n"),
-    ("Mean glucose (mg/dL)",         "mean_glucose_seg1",  "mean_glucose_seg2", "mg/dL"),
-    ("Coefficient of variation (%)", "cv_seg1",            "cv_seg2",           "%"),
+    ("Time <54 mg/dL (%)",                "tbr_very_low_seg1",  "tbr_very_low_seg2",  "%"),
+    ("Time <70 mg/dL (%)",                "tbr_seg1",           "tbr_seg2",           "%"),
+    ("Time 70–180 mg/dL (%)",             "tir_seg1",           "tir_seg2",           "%"),
+    ("Time >180 mg/dL (%)",               "tar_seg1",           "tar_seg2",           "%"),
+    ("Time >250 mg/dL (%)",               "tar_very_high_seg1", "tar_very_high_seg2", "%"),
+    ("Hypoglycemic event rate (n/hour)",  "hypo_rate_seg1",     "hypo_rate_seg2",     "n/hr"),
+    ("Mean glucose (mg/dL)",              "mean_glucose_seg1",  "mean_glucose_seg2",  "mg/dL"),
+    ("Coefficient of variation (%)",      "cv_seg1",            "cv_seg2",            "%"),
 ]
 
-# Cohort/guardrail predicate, mirrored from load_transition_endpoints. Used
-# by the activation loader (load_activations) to filter overrides_by_segment.
 _COHORT_WHERE = (
     f"(tb_to_ab_max_loop_version_int IS NOT NULL "
     f" AND tb_to_ab_max_loop_version_int < {MAX_LOOP_VERSION_INT}) "
@@ -82,54 +94,41 @@ def _safe_filename(name: str) -> str:
 # Data loading
 # =============================================================================
 
-def load_data(spark) -> Dict[str, pd.DataFrame]:
+def build_datasets(
+    activations_endpoints: pd.DataFrame,
+    ab_segment: str,
+    grain: str,
+) -> Dict[str, pd.DataFrame]:
     """
-    Load filtered glycemic endpoints and pivot to one row per (user, config)
-    with paired seg1/seg2 columns. Splits by overridePreset for per-type
-    analysis; the "_all" key is pooled across types.
+    Aggregate per-activation endpoints to the requested grain, pair TB vs the
+    requested AB segment, and split by overridePreset for per-type analysis.
+    The "_all" key pools across preset types.
     """
-    endpoints = load_override_endpoints(spark)
+    wide = aggregate_override_endpoints(activations_endpoints, ab_segment, grain)
+    if wide.empty:
+        return {}
 
-    # Drop the validity columns now that filtering is done — they're constant
-    # within the surviving rows.
-    endpoints = endpoints.drop(
-        columns=["is_valid_name_only", "is_starting_glucose_in_range"],
-        errors="ignore",
-    )
-
-    index_cols = ["_userId"] + CONFIG_COLS
-
-    seg1 = (endpoints[endpoints["segment"] == SEG1]
-            .set_index(index_cols)
-            .drop(columns=["segment"])
-            .add_suffix("_seg1"))
-    seg2 = (endpoints[endpoints["segment"] == SEG2]
-            .set_index(index_cols)
-            .drop(columns=["segment"])
-            .add_suffix("_seg2"))
-
-    wide = seg1.join(seg2, how="inner").reset_index()
-
-    result = {}
+    result: Dict[str, pd.DataFrame] = {}
     for otype, group in wide.groupby("overridePreset"):
+        key = str(otype)
         if len(group) >= 3:
-            result[otype] = group.reset_index(drop=True)
-            print(f"  {otype}: {len(group)} paired configs")
+            result[key] = group.reset_index(drop=True)
+            print(f"    {key}: {len(group)} paired groups")
         else:
-            print(f"  {otype}: {len(group)} paired configs (skipping, < 3)")
-
+            print(f"    {key}: {len(group)} paired groups (skipping, < 3)")
     if len(wide) >= 3:
         result["_all"] = wide.reset_index(drop=True)
-        print(f"  _all (pooled): {len(wide)} paired configs")
-
+        print(f"    _all (pooled): {len(wide)} paired groups")
     return result
 
 
 def load_activations(spark) -> pd.DataFrame:
     """
-    Load per-activation rows from overrides_by_segment with the same cohort
-    and inclusion filters as load_override_endpoints. Returns one row per
-    eligible activation, used by Table 8.2a and Figure 8.2b.
+    Per-activation rows from `overrides_by_segment` with cohort + guardrail +
+    starting-glucose filters applied. Used by Table 8.2a (counts and hours)
+    and Figure 8.2b (glucose traces). The two `is_valid_name_only_seg{2,3}`
+    flags are kept on each row so downstream code can filter for the
+    appropriate segment-pair.
     """
     cohort = (
         spark.table("dev.fda_510k_rwd.valid_transition_segments")
@@ -155,10 +154,8 @@ def load_activations(spark) -> pd.DataFrame:
     activations = (
         spark.table("dev.fda_510k_rwd.overrides_by_segment")
         .join(cohort, on=["_userId", "tb_to_ab_seg1_start"], how="inner")
-        .filter(F.col("is_valid_name_only") == True)  # noqa: E712
         .filter(F.col("is_starting_glucose_in_range") == True)  # noqa: E712
     )
-
     return activations.toPandas()
 
 
@@ -168,21 +165,29 @@ def load_activations(spark) -> pd.DataFrame:
 
 def create_table_8_2a(activations: pd.DataFrame) -> pd.DataFrame:
     """
-    Sample characteristics for the preset glycemic analysis.
-
-    Counts and durations come from `activations` (per-activation rows post
-    cohort + inclusion filters). The "second autobolus period" rows are
-    placeholders pending the seg3 (days 14–28) pipeline change tracked for
-    Table 8.2c.
+    Sample characteristics covering all three segments. "Both periods" means
+    a user has at least one activation in TB and at least one in any AB
+    segment (initial OR second). Per-segment counts are reported separately
+    so the reader can see seg2 and seg3 cohort sizes side-by-side.
     """
-    # Both-period users: have ≥1 activation in TB AND ≥1 in initial AB.
     by_user_seg = (
-        activations.groupby(["_userId", "dosing_mode"])
+        activations.groupby(["_userId", "segment"])
         .size()
         .unstack(fill_value=0)
     )
-    both = by_user_seg[(by_user_seg.get(SEG1, 0) > 0) & (by_user_seg.get(SEG2, 0) > 0)]
-    n_both = len(both)
+    for seg in (TB, AB1, AB2):
+        if seg not in by_user_seg.columns:
+            by_user_seg[seg] = 0
+    has_tb  = by_user_seg[TB]  > 0
+    has_ab1 = by_user_seg[AB1] > 0
+    has_ab2 = by_user_seg[AB2] > 0
+    n_both = int(((has_ab1 | has_ab2) & has_tb).sum())
+
+    cohort_users = by_user_seg.index[(has_ab1 | has_ab2) & has_tb]
+    cohort = activations[activations["_userId"].isin(cohort_users)].copy()
+    cohort["window_hours"] = (
+        pd.to_numeric(cohort["duration"], errors="coerce") + 7200
+    ) / 3600.0
 
     def _median_iqr(series: pd.Series) -> str:
         if series.empty:
@@ -192,78 +197,71 @@ def create_table_8_2a(activations: pd.DataFrame) -> pd.DataFrame:
             f"[{series.quantile(0.25):.1f}, {series.quantile(0.75):.1f}]"
         )
 
-    # Activations-per-user is computed only over users who appear in both
-    # periods, so the per-period summaries describe the analyzed cohort.
-    cohort_users = both.index
-    cohort_acts = activations[activations["_userId"].isin(cohort_users)]
-    tb_per_user = cohort_acts[cohort_acts["dosing_mode"] == SEG1].groupby("_userId").size()
-    ab_per_user = cohort_acts[cohort_acts["dosing_mode"] == SEG2].groupby("_userId").size()
+    def _per_user_count(seg: str) -> pd.Series:
+        return cohort[cohort["segment"] == seg].groupby("_userId").size()
 
-    # Total preset+tail hours: (duration + 7200s) per activation, in hours.
-    cohort_acts = cohort_acts.assign(
-        window_hours=(pd.to_numeric(cohort_acts["duration"], errors="coerce") + 7200) / 3600.0
-    )
-    tb_hours = cohort_acts.loc[cohort_acts["dosing_mode"] == SEG1, "window_hours"].sum()
-    ab_hours = cohort_acts.loc[cohort_acts["dosing_mode"] == SEG2, "window_hours"].sum()
+    def _hours(seg: str) -> float:
+        return float(cohort.loc[cohort["segment"] == seg, "window_hours"].sum())
 
     rows = [
         ("Users with preset use in both periods", str(n_both)),
-        ("Preset activations per user, temp basal period", _median_iqr(tb_per_user)),
-        ("Preset activations per user, initial autobolus period", _median_iqr(ab_per_user)),
-        ("Preset activations per user, second autobolus period", "N/A*"),
-        ("Total preset + tail hours analyzed, temp basal", f"{tb_hours:.1f}"),
-        ("Total preset + tail hours analyzed, initial autobolus", f"{ab_hours:.1f}"),
-        ("Total preset + tail hours analyzed, second autobolus", "N/A*"),
+        ("Preset activations per user, temp basal period",
+            _median_iqr(_per_user_count(TB))),
+        ("Preset activations per user, initial autobolus period",
+            _median_iqr(_per_user_count(AB1))),
+        ("Preset activations per user, second autobolus period",
+            _median_iqr(_per_user_count(AB2))),
+        ("Total preset + tail hours analyzed, temp basal",
+            f"{_hours(TB):.1f}"),
+        ("Total preset + tail hours analyzed, initial autobolus",
+            f"{_hours(AB1):.1f}"),
+        ("Total preset + tail hours analyzed, second autobolus",
+            f"{_hours(AB2):.1f}"),
     ]
-
-    table = pd.DataFrame(rows, columns=["Characteristic", "N or Median [IQR]"])
-    table.attrs["footnote"] = (
-        "*Reserved for Table 8.2c (days 14–28 post-transition); pending "
-        "addition of a third transition segment to the staging pipeline."
-    )
-    return table
+    return pd.DataFrame(rows, columns=["Characteristic", "N or Median [IQR]"])
 
 
 # =============================================================================
-# Table 8.2b — Glycemic endpoints (TB vs initial AB)
+# Tables 8.2b / 8.2c — Glycemic endpoints
 # =============================================================================
 
-def create_table_8_2b(datasets: Dict[str, pd.DataFrame]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def create_endpoint_table(
+    datasets: Dict[str, pd.DataFrame],
+    label: str,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Build parametric and nonparametric endpoint summary tables for one
+    grain × segment-pair dataset (e.g. 8.2b primary, 8.2c sensitivity)."""
     parametric_rows = []
     nonparametric_rows = []
-
     for otype, df in datasets.items():
         for name, c1, c2, _ in ENDPOINTS:
             if c1 not in df.columns or c2 not in df.columns:
                 continue
             s = compute_paired_statistics(df[c1], df[c2])
-
             parametric_rows.append({
                 "Override Type": otype,
                 "Endpoint": name,
                 "Temp Basal Mean ± SD":  f"{s['seg1_mean']:.2f} ± {s['seg1_sd']:.2f}",
-                "Autobolus Mean ± SD":   f"{s['seg2_mean']:.2f} ± {s['seg2_sd']:.2f}",
+                f"{label} Mean ± SD":    f"{s['seg2_mean']:.2f} ± {s['seg2_sd']:.2f}",
                 "Paired Diff Mean ± SD": f"{s['diff_mean']:.2f} ± {s['diff_sd']:.2f}",
-                "p (paired t-test)": format_p(s['p_ttest']),
-                "N": s["n_pairs"],
+                "p (paired t-test)":     format_p(s["p_ttest"]),
+                "N":                     s["n_pairs"],
             })
-
             nonparametric_rows.append({
                 "Override Type": otype,
                 "Endpoint": name,
                 "Temp Basal Median [IQR]":  f"{s['seg1_median']:.2f} [{s['seg1_q1']:.1f}, {s['seg1_q3']:.1f}]",
-                "Autobolus Median [IQR]":   f"{s['seg2_median']:.2f} [{s['seg2_q1']:.1f}, {s['seg2_q3']:.1f}]",
+                f"{label} Median [IQR]":    f"{s['seg2_median']:.2f} [{s['seg2_q1']:.1f}, {s['seg2_q3']:.1f}]",
                 "Paired Diff Median [IQR]": f"{s['diff_median']:.2f} [{s['diff_q1']:.1f}, {s['diff_q3']:.1f}]",
-                "p (Wilcoxon signed-rank)": format_p(s['p_wsrt']),
-                "Normality (Shapiro p)": format_p(s['normality_p']),
-                "N": s["n_pairs"],
+                "p (Wilcoxon signed-rank)": format_p(s["p_wsrt"]),
+                "Normality (Shapiro p)":    format_p(s["normality_p"]),
+                "N":                        s["n_pairs"],
             })
-
     return pd.DataFrame(parametric_rows), pd.DataFrame(nonparametric_rows)
 
 
 # =============================================================================
-# Figure 8.2a — Paired connectors + box + violin (per override type)
+# Figure 8.2a — Paired connectors + box + violin
 # =============================================================================
 
 def create_figure_8_2a(datasets: Dict[str, pd.DataFrame], output_dir: str):
@@ -323,7 +321,7 @@ def create_figure_8_2a(datasets: Dict[str, pd.DataFrame], output_dir: str):
             part_label = "i" if part == 0 else "ii"
             otype_display = "All Overrides (Pooled)" if otype == "_all" else otype.title()
             plt.suptitle(f"Figure 8.2a ({part_label}): Paired Differences — {otype_display}\n"
-                         "Individual override configs connected by lines; box + violin overlay",
+                         "Individual users connected by lines; box + violin overlay",
                          fontsize=FONT["suptitle"], fontweight="bold", y=1.02)
             plt.tight_layout()
 
@@ -336,66 +334,54 @@ def create_figure_8_2a(datasets: Dict[str, pd.DataFrame], output_dir: str):
 
 
 # =============================================================================
-# Figure 8.2b — Example glucose traces during preset activation
+# Figure 8.2b — Example glucose traces
 # =============================================================================
 
 def _select_demo_users(activations: pd.DataFrame, max_users: int = 5) -> Tuple[str, list]:
-    """
-    Pick a demo preset (most paired users) and the top users within it
-    (most paired activations across TB and AB).
-    """
-    paired = (
-        activations.groupby(["overridePreset", "_userId", "dosing_mode"])
+    """Pick the preset name with the most users having both TB and initial-AB
+    paired activations, then the top-N users within it."""
+    valid = activations[activations["is_valid_name_only_seg2"] == True]  # noqa: E712
+    if valid.empty:
+        return "", []
+    by_seg = (
+        valid.groupby(["overridePreset", "_userId", "segment"])
         .size()
         .unstack(fill_value=0)
     )
-    paired_both = paired[(paired.get(SEG1, 0) > 0) & (paired.get(SEG2, 0) > 0)]
-    if paired_both.empty:
+    for seg in (TB, AB1):
+        if seg not in by_seg.columns:
+            by_seg[seg] = 0
+    paired = by_seg[(by_seg[TB] > 0) & (by_seg[AB1] > 0)]
+    if paired.empty:
         return "", []
-
-    by_preset_user_count = paired_both.reset_index().groupby("overridePreset").size()
+    by_preset_user_count = paired.reset_index().groupby("overridePreset").size()
     demo_preset = by_preset_user_count.idxmax()
-
-    in_demo = paired_both.xs(demo_preset, level="overridePreset")
-    in_demo = in_demo.assign(total=in_demo[SEG1] + in_demo[SEG2])
+    in_demo = paired.xs(demo_preset, level="overridePreset")
+    in_demo = in_demo.assign(total=in_demo[TB] + in_demo[AB1])
     top_users = in_demo.sort_values("total", ascending=False).index[:max_users].tolist()
     return demo_preset, top_users
 
 
 def create_figure_8_2b(spark, activations: pd.DataFrame, output_dir: str):
-    """
-    Plot CGM traces for 3–5 representative users showing one TB activation
-    and one AB activation of the same demo preset, with the activation +
-    2-hour-tail window highlighted.
-    """
     demo_preset, demo_users = _select_demo_users(activations, max_users=5)
     if not demo_users:
         print("  Figure 8.2b: no users with paired activations of any preset; skipping.")
         return
 
-    # Pull CBG only for the chosen users + demo preset (small slice).
     cbg = (
         spark.table("dev.fda_510k_rwd.valid_override_cbg")
         .filter(F.col("_userId").isin(demo_users))
         .filter(F.col("overridePreset") == demo_preset)
-        .filter(F.col("is_valid_name_only") == True)  # noqa: E712
+        .filter(F.col("is_valid_name_only_seg2") == True)  # noqa: E712
         .filter(F.col("is_starting_glucose_in_range") == True)  # noqa: E712
-        .select("_userId", "segment", "cbg_timestamp", "cbg_mg_dl")
+        .select("_userId", "segment", "override_time", "duration",
+                "cbg_timestamp", "cbg_mg_dl")
         .toPandas()
     )
-
-    # Per-activation lookup: pick the first eligible TB activation and first
-    # eligible AB activation for each user. For Figure 8.2b we just need one
-    # representative trace per user per phase.
-    demo_acts = activations[
-        (activations["overridePreset"] == demo_preset)
-        & (activations["_userId"].isin(demo_users))
-    ].copy()
-    demo_acts["override_time"] = pd.to_datetime(demo_acts["override_time"])
-    demo_acts["duration"] = pd.to_numeric(demo_acts["duration"], errors="coerce")
-
+    cbg["override_time"] = pd.to_datetime(cbg["override_time"])
     cbg["cbg_timestamp"] = pd.to_datetime(cbg["cbg_timestamp"])
     cbg["cbg_mg_dl"] = pd.to_numeric(cbg["cbg_mg_dl"], errors="coerce")
+    cbg["duration"] = pd.to_numeric(cbg["duration"], errors="coerce")
 
     n = len(demo_users)
     fig, axes = plt.subplots(n, 2, figsize=(12, 3 * n), sharey=True)
@@ -404,39 +390,30 @@ def create_figure_8_2b(spark, activations: pd.DataFrame, output_dir: str):
 
     for row, user in enumerate(demo_users):
         user_label = f"User {row + 1}"
-        for col, mode in enumerate([SEG1, SEG2]):
+        for col, seg in enumerate([TB, AB1]):
             ax = axes[row, col]
-            user_acts = demo_acts[
-                (demo_acts["_userId"] == user) & (demo_acts["dosing_mode"] == mode)
-            ].sort_values("override_time")
-            if user_acts.empty:
-                ax.text(0.5, 0.5, "No activation", ha="center", va="center",
-                        transform=ax.transAxes, fontsize=FONT["annotation"])
-                continue
-            act = user_acts.iloc[0]
-            t0 = act["override_time"]
-            dur_s = float(act["duration"]) if pd.notna(act["duration"]) else 0.0
-            window_end = t0 + pd.Timedelta(seconds=dur_s + 7200)
-
-            trace = cbg[
-                (cbg["_userId"] == user)
-                & (cbg["segment"] == mode)
-                & (cbg["cbg_timestamp"] >= t0)
-                & (cbg["cbg_timestamp"] <= window_end)
-            ].sort_values("cbg_timestamp")
-            if trace.empty:
+            user_cbg = cbg[(cbg["_userId"] == user) & (cbg["segment"] == seg)]
+            if user_cbg.empty:
                 ax.text(0.5, 0.5, "No CBG in window", ha="center", va="center",
                         transform=ax.transAxes, fontsize=FONT["annotation"])
                 continue
 
+            # Pick the activation with the most CBG readings (avoids the
+            # cherry-picked-first-activation case where CGM was offline).
+            act_counts = user_cbg.groupby("override_time").size()
+            best_t0 = act_counts.idxmax()
+            trace = user_cbg[user_cbg["override_time"] == best_t0].sort_values("cbg_timestamp")
+            t0 = trace["override_time"].iloc[0]
+            dur_s = float(trace["duration"].iloc[0]) if pd.notna(trace["duration"].iloc[0]) else 0.0
+
             mins = (trace["cbg_timestamp"] - t0).dt.total_seconds() / 60.0
-            color = COLORS_PRIMARY if mode == SEG1 else COLORS_SECONDARY
+            color = COLORS_PRIMARY if seg == TB else COLORS_SECONDARY
             ax.plot(mins, trace["cbg_mg_dl"], "-o", color=color, markersize=3, lw=1)
             ax.axhspan(70, 180, color="green", alpha=0.08)
             ax.axvline(0, color="black", lw=0.8, ls=":")
             ax.axvline(dur_s / 60.0, color="black", lw=0.8, ls=":")
 
-            label = "Temp Basal" if mode == SEG1 else "Autobolus"
+            label = "Temp Basal" if seg == TB else "Autobolus (initial)"
             ax.set_title(f"{user_label} — {label}", fontsize=FONT["title"])
             if col == 0:
                 ax.set_ylabel("Glucose (mg/dL)", fontsize=FONT["axis_label"])
@@ -450,7 +427,6 @@ def create_figure_8_2b(spark, activations: pd.DataFrame, output_dir: str):
         fontsize=FONT["suptitle"], fontweight="bold", y=1.0,
     )
     plt.tight_layout()
-
     os.makedirs(output_dir, exist_ok=True)
     path = f"{output_dir}/figure_8_2b.png"
     plt.savefig(path, dpi=300, bbox_inches="tight")
@@ -462,6 +438,16 @@ def create_figure_8_2b(spark, activations: pd.DataFrame, output_dir: str):
 # Main
 # =============================================================================
 
+def _save_table_pair(
+    parametric: pd.DataFrame,
+    nonparametric: pd.DataFrame,
+    output_dir: str,
+    stem: str,
+):
+    parametric.to_csv(f"{output_dir}/{stem}_parametric.csv", index=False)
+    nonparametric.to_csv(f"{output_dir}/{stem}_nonparametric.csv", index=False)
+
+
 def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -469,31 +455,56 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     print("Analysis 8.2: Glycemic Outcomes During Preset Activation")
     print("=" * 60)
 
-    print("\n1. Loading paired endpoints...")
-    datasets = load_data(spark)
+    print("\n1. Loading per-activation endpoints...")
+    activations_endpoints = load_override_endpoints(spark)
 
-    print("\n2. Loading per-activation rows (for Table 8.2a + Figure 8.2b)...")
+    print("\n2. Loading per-activation rows for Table 8.2a + Figure 8.2b...")
     activations = load_activations(spark)
     print(f"   {len(activations)} eligible activations across "
           f"{activations['_userId'].nunique()} users")
 
-    print("\n3. Creating Table 8.2a (sample characteristics)...")
+    print("\n3. Aggregating endpoints to (user, preset_name) primary grain...")
+    print("   Table 8.2b primary (TB vs initial AB):")
+    ds_b_primary = build_datasets(activations_endpoints, AB1, "name")
+    print("   Table 8.2c primary (TB vs second AB):")
+    ds_c_primary = build_datasets(activations_endpoints, AB2, "name")
+
+    print("\n4. Aggregating endpoints to (user, preset, params) sensitivity grain...")
+    print("   Table 8.2b sensitivity:")
+    ds_b_config = build_datasets(activations_endpoints, AB1, "config")
+    print("   Table 8.2c sensitivity:")
+    ds_c_config = build_datasets(activations_endpoints, AB2, "config")
+
+    print("\n5. Building Table 8.2a (sample characteristics)...")
     table_a = create_table_8_2a(activations)
     table_a.to_csv(f"{output_dir}/table_8_2a.csv", index=False)
     print("\n" + table_a.to_string(index=False))
-    if "footnote" in table_a.attrs:
-        print(table_a.attrs["footnote"])
 
-    print("\n4. Creating Table 8.2b (TB vs initial AB endpoints)...")
-    table_b_p, table_b_np = create_table_8_2b(datasets)
-    table_b_p.to_csv(f"{output_dir}/table_8_2b_parametric.csv", index=False)
-    table_b_np.to_csv(f"{output_dir}/table_8_2b_nonparametric.csv", index=False)
-    print("\n" + table_b_p.to_string(index=False))
+    print("\n6. Building Tables 8.2b and 8.2c...")
+    if ds_b_primary:
+        b_p, b_np = create_endpoint_table(ds_b_primary, label="Autobolus")
+        _save_table_pair(b_p, b_np, output_dir, "table_8_2b")
+        print("\nTable 8.2b (TB vs initial AB, primary grain):")
+        print(b_p.to_string(index=False))
+    if ds_b_config:
+        b_p_c, b_np_c = create_endpoint_table(ds_b_config, label="Autobolus")
+        _save_table_pair(b_p_c, b_np_c, output_dir, "table_8_2b_by_config")
+    if ds_c_primary:
+        c_p, c_np = create_endpoint_table(ds_c_primary, label="Autobolus (2nd)")
+        _save_table_pair(c_p, c_np, output_dir, "table_8_2c")
+        print("\nTable 8.2c (TB vs second AB, primary grain):")
+        print(c_p.to_string(index=False))
+    if ds_c_config:
+        c_p_c, c_np_c = create_endpoint_table(ds_c_config, label="Autobolus (2nd)")
+        _save_table_pair(c_p_c, c_np_c, output_dir, "table_8_2c_by_config")
 
-    print("\n5. Creating Figure 8.2a...")
-    create_figure_8_2a(datasets, output_dir)
+    print("\n7. Creating Figure 8.2a (TB vs initial AB primary)...")
+    if ds_b_primary:
+        create_figure_8_2a(ds_b_primary, output_dir)
+    else:
+        print("  Skipping — no eligible groups for the primary 8.2b dataset.")
 
-    print("\n6. Creating Figure 8.2b (example glucose traces)...")
+    print("\n8. Creating Figure 8.2b (example glucose traces)...")
     create_figure_8_2b(spark, activations, output_dir)
 
     print("\n" + "=" * 60)
@@ -502,9 +513,10 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
 
     return {
         "table_8_2a": table_a,
-        "table_8_2b_parametric": table_b_p,
-        "table_8_2b_nonparametric": table_b_np,
-        "datasets": datasets,
+        "datasets_8_2b_primary":     ds_b_primary,
+        "datasets_8_2b_sensitivity": ds_b_config,
+        "datasets_8_2c_primary":     ds_c_primary,
+        "datasets_8_2c_sensitivity": ds_c_config,
         "activations": activations,
     }
 

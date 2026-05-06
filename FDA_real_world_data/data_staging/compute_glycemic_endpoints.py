@@ -120,17 +120,19 @@ MODE_CONFIG = {
     "override": {
         "default_input_table": f"{CATALOG}.valid_override_cbg",
         "default_output_table": f"{CATALOG}.glycemic_endpoints_override",
-        # Validity flags partition the aggregation so the analysis can apply
-        # them as filters: is_valid_name_only is constant within (user, preset)
-        # so it just rides through; is_starting_glucose_in_range varies per
-        # activation, so it splits a (user, preset, params, segment) bucket
-        # into in-range / out-of-range halves and the analysis keeps only the
-        # in-range half.
+        # Per-activation grain. (_userId, override_time) is the activation
+        # identifier; the rest are passthrough — constant within an activation
+        # so they don't split groups, just ride through to keep the columns
+        # available downstream (aggregate_override_endpoints needs duration
+        # for window_hours / hypo rate; the validity and starting-glucose
+        # flags are per-activation properties the analysis filters on).
         "group_cols": [
-            "_userId", "overridePreset",
+            "_userId", "override_time", "duration",
+            "overridePreset",
             "brsf", "btl", "bth", "crsf", "issf",
             "segment",
-            "is_valid_name_only",
+            "is_valid_name_only_seg2",
+            "is_valid_name_only_seg3",
             "is_starting_glucose_in_range",
         ],
     },

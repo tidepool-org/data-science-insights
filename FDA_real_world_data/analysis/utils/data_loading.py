@@ -106,30 +106,30 @@ def load_transition_endpoints(spark) -> pd.DataFrame:
 
 def load_override_endpoints(spark) -> pd.DataFrame:
     """
-    Load glycemic endpoints aggregated per (user, preset, params, segment) for
-    Analysis 8-2, applying the same cohort and guardrail filters used in the
-    transition analyses, plus the override-specific inclusion criteria.
+    Load per-activation glycemic endpoints for Analysis 8-2 with cohort,
+    guardrail, and starting-glucose filters applied.
 
-    Filters (in order):
+    Returns one row per surviving preset activation. The validity flags
+    `is_valid_name_only_seg2` and `is_valid_name_only_seg3` are kept on the
+    DataFrame so callers can filter for the appropriate AB segment pairing
+    (Table 8.2b uses _seg2, Table 8.2c uses _seg3).
+
+    Filters applied here:
     1. Cohort: Loop version below MAX_LOOP_VERSION_INT (or, if version unknown,
        segment ending before MAX_SEG2_END_DATE). Sourced from
-       `valid_transition_segments` (rank-1 row per user).
+       `valid_transition_segments` rank-1 row per user.
     2. Guardrail: drop users whose rank-1 segment has any guardrail violation.
-    3. Inclusion: `is_valid_name_only = TRUE` (preset name appears >= 2 times
-       in each TB and AB phase for the user).
-    4. Inclusion: `is_starting_glucose_in_range = TRUE` (activation begins with
-       a CBG between STARTING_GLUCOSE_LOW and STARTING_GLUCOSE_HIGH).
+    3. Inclusion: `is_starting_glucose_in_range = TRUE`.
 
-    Returns a long DataFrame with one row per surviving (user, preset, params,
-    segment) bucket. Numeric columns are coerced; the analysis driver pivots
-    to wide form.
+    The name-only validity is applied later by `aggregate_override_endpoints`
+    because seg2 and seg3 have separate validity flags.
     """
     endpoints = spark.table("dev.fda_510k_rwd.glycemic_endpoints_override").toPandas()
 
     # Coerce object columns to numeric (skip the keys + boolean flags).
     non_numeric_cols = {
-        "_userId", "segment", "overridePreset",
-        "is_valid_name_only", "is_valid_full",
+        "_userId", "segment", "overridePreset", "override_time",
+        "is_valid_name_only_seg2", "is_valid_name_only_seg3",
         "is_starting_glucose_in_range",
     }
     for col in endpoints.select_dtypes(include=["object"]).columns:
@@ -140,7 +140,7 @@ def load_override_endpoints(spark) -> pd.DataFrame:
     allowed = (
         spark.table("dev.fda_510k_rwd.valid_transition_segments")
         .where("segment_rank = 1")
-        .where( 
+        .where(
             f"(tb_to_ab_max_loop_version_int IS NOT NULL "
             f" AND tb_to_ab_max_loop_version_int < {MAX_LOOP_VERSION_INT}) "
             f"OR (tb_to_ab_max_loop_version_int IS NULL "
@@ -153,9 +153,7 @@ def load_override_endpoints(spark) -> pd.DataFrame:
     endpoints = endpoints.merge(allowed, on="_userId", how="inner")
     print(f"  Cohort filter kept {endpoints['_userId'].nunique()}/{pre_cohort} users")
 
-    # Guardrail-violation exclusion: drop users whose rank-1 segment has any
-    # violation. Match on (_userId, tb_to_ab_seg1_start), same key as the
-    # transition loader.
+    # Guardrail-violation exclusion.
     guardrails = (
         spark.table("dev.fda_510k_rwd.valid_transition_guardrails")
         .select("_userId", "segment_start", "violation_count")
@@ -172,14 +170,96 @@ def load_override_endpoints(spark) -> pd.DataFrame:
     endpoints = endpoints[~seg_keys.isin(bad_segments)].copy()
     print(f"  Guardrail filter kept {endpoints['_userId'].nunique()}/{pre_gr} users")
 
-    # Inclusion criteria.
-    endpoints = endpoints[endpoints["is_valid_name_only"] == True].copy()  # noqa: E712
+    # Starting-glucose inclusion (applies to all 8.2b / 8.2c analyses).
     endpoints = endpoints[endpoints["is_starting_glucose_in_range"] == True].copy()  # noqa: E712
-    print(f"  Inclusion filters kept {endpoints['_userId'].nunique()} users, "
-          f"{len(endpoints)} (user, config, segment) rows")
+    print(f"  Starting-glucose filter kept {endpoints['_userId'].nunique()} users, "
+          f"{len(endpoints)} per-activation rows")
 
-    # tb_to_ab_seg1_start is no longer needed downstream (analysis pivots on
-    # _userId + config). Drop it to keep the schema tight.
     endpoints = endpoints.drop(columns=["tb_to_ab_seg1_start"])
 
+    # Per-activation exposure window (preset duration + 2-hour tail), in hours.
+    # Duration is in seconds; +7200s captures the tail.
+    endpoints["window_hours"] = (
+        pd.to_numeric(endpoints["duration"], errors="coerce") + 7200
+    ) / 3600.0
+
     return endpoints
+
+
+_ENDPOINT_AVG_COLS = (
+    "tbr_very_low", "tbr", "tir", "tar", "tar_very_high",
+    "mean_glucose", "cv",
+)
+_GRAIN_COLS = {
+    "name":   ["overridePreset"],
+    "config": ["overridePreset", "brsf", "btl", "bth", "crsf", "issf"],
+}
+
+
+def aggregate_override_endpoints(
+    activations: pd.DataFrame,
+    ab_segment: str,
+    grain: str,
+) -> pd.DataFrame:
+    """
+    Average per-activation endpoints up to the requested grain and return
+    a wide DataFrame pairing temp_basal with the requested AB segment.
+
+    Parameters
+    ----------
+    activations : pd.DataFrame
+        Per-activation rows from `load_override_endpoints`.
+    ab_segment : {"tb_to_ab_seg2", "tb_to_ab_seg3"}
+        Which AB segment to pair with TB. Selects the matching
+        `is_valid_name_only_*` validity column.
+    grain : {"name", "config"}
+        "name"   → (user, overridePreset)
+        "config" → (user, overridePreset, brsf, btl, bth, crsf, issf)
+
+    Aggregation rules (per the analysis plan):
+    - Range and shape endpoints (TIR / TBR / TAR / mean / CV): unweighted
+      mean across activations within the group.
+    - Hypo events: total events ÷ total exposure hours → events/hour.
+    - activation_count: number of activations contributing to the group.
+
+    The returned DataFrame has one row per (user, grain_key) with `_seg1`
+    (TB) and `_seg2` (the requested AB segment) suffixed columns; `_seg2`
+    is used in the suffix regardless of which AB segment was requested so
+    downstream code (paired stats, plotting) doesn't need to know.
+    """
+    if grain not in _GRAIN_COLS:
+        raise ValueError(f"grain must be 'name' or 'config', got {grain!r}")
+    if ab_segment not in ("tb_to_ab_seg2", "tb_to_ab_seg3"):
+        raise ValueError(f"ab_segment must be 'tb_to_ab_seg2' or 'tb_to_ab_seg3', got {ab_segment!r}")
+
+    valid_col = "is_valid_name_only_seg2" if ab_segment == "tb_to_ab_seg2" else "is_valid_name_only_seg3"
+    df = activations[activations[valid_col] == True].copy()  # noqa: E712
+    df = df[df["segment"].isin(["tb_to_ab_seg1", ab_segment])].copy()
+
+    grain_cols = _GRAIN_COLS[grain]
+    group_cols = ["_userId"] + grain_cols + ["segment"]
+
+    agg_spec = {col: "mean" for col in _ENDPOINT_AVG_COLS}
+    agg_spec["hypo_events"] = "sum"
+    agg_spec["window_hours"] = "sum"
+
+    aggregated = df.groupby(group_cols, as_index=False).agg(agg_spec)
+    sizes = (
+        df.groupby(group_cols, as_index=False)
+        .size()
+        .rename(columns={"size": "activation_count"})
+    )
+    aggregated = aggregated.merge(sizes, on=group_cols, how="left")
+    # Hypo rate per hour of preset exposure (window = duration + 2h tail).
+    aggregated["hypo_rate"] = (
+        aggregated["hypo_events"] / aggregated["window_hours"]
+    ).where(aggregated["window_hours"] > 0)
+
+    # Pivot to wide on segment.
+    index_cols = ["_userId"] + grain_cols
+    seg1 = (aggregated[aggregated["segment"] == "tb_to_ab_seg1"]
+            .set_index(index_cols).drop(columns=["segment"]).add_suffix("_seg1"))
+    seg2 = (aggregated[aggregated["segment"] == ab_segment]
+            .set_index(index_cols).drop(columns=["segment"]).add_suffix("_seg2"))
+    wide = seg1.join(seg2, how="inner").reset_index()
+    return wide

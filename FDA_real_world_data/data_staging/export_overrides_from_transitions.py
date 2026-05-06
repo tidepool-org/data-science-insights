@@ -126,28 +126,39 @@ def run(
             WHEN o.override_day BETWEEN t.tb_to_ab_seg2_start AND t.tb_to_ab_seg2_end THEN
               UNIX_TIMESTAMP(CAST(DATE_ADD(t.tb_to_ab_seg2_end, 1) AS TIMESTAMP))
                 - UNIX_TIMESTAMP(o.override_time)
+            WHEN o.override_day BETWEEN t.tb_to_ab_seg3_start AND t.tb_to_ab_seg3_end THEN
+              UNIX_TIMESTAMP(CAST(DATE_ADD(t.tb_to_ab_seg3_end, 1) AS TIMESTAMP))
+                - UNIX_TIMESTAMP(o.override_time)
           END
         ) AS duration,
 
         CASE
           WHEN o.override_day BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg1_end THEN 'tb_to_ab_seg1'
           WHEN o.override_day BETWEEN t.tb_to_ab_seg2_start AND t.tb_to_ab_seg2_end THEN 'tb_to_ab_seg2'
+          WHEN o.override_day BETWEEN t.tb_to_ab_seg3_start AND t.tb_to_ab_seg3_end THEN 'tb_to_ab_seg3'
         END AS segment,
 
+        -- dosing_mode collapses seg2 and seg3 into a single 'autobolus' label
+        -- because both phases are post-transition. Analysis 8-2 uses `segment`
+        -- (not `dosing_mode`) when it needs to distinguish the initial vs
+        -- second AB period (Tables 8.2b vs 8.2c).
         CASE
           WHEN o.override_day BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg1_end THEN 'temp_basal'
           WHEN o.override_day BETWEEN t.tb_to_ab_seg2_start AND t.tb_to_ab_seg2_end THEN 'autobolus'
+          WHEN o.override_day BETWEEN t.tb_to_ab_seg3_start AND t.tb_to_ab_seg3_end THEN 'autobolus'
         END AS dosing_mode,
 
         t.tb_to_ab_seg1_start,
         t.tb_to_ab_seg1_end,
         t.tb_to_ab_seg2_start,
-        t.tb_to_ab_seg2_end
+        t.tb_to_ab_seg2_end,
+        t.tb_to_ab_seg3_start,
+        t.tb_to_ab_seg3_end
 
       FROM {transition_segments_table} t
       INNER JOIN overrides o ON t._userId = o._userId
       WHERE t.segment_rank = 1
-        AND o.override_day BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg2_end
+        AND o.override_day BETWEEN t.tb_to_ab_seg1_start AND t.tb_to_ab_seg3_end
     ),
 
     overrides_clean AS (
@@ -185,7 +196,8 @@ def run(
       SELECT
         _userId, preset_key,
         MAX(CASE WHEN segment = 'tb_to_ab_seg1' THEN n ELSE 0 END) AS n_seg1_name,
-        MAX(CASE WHEN segment = 'tb_to_ab_seg2' THEN n ELSE 0 END) AS n_seg2_name
+        MAX(CASE WHEN segment = 'tb_to_ab_seg2' THEN n ELSE 0 END) AS n_seg2_name,
+        MAX(CASE WHEN segment = 'tb_to_ab_seg3' THEN n ELSE 0 END) AS n_seg3_name
       FROM config_counts_name_only
       GROUP BY _userId, preset_key
     ),
@@ -195,7 +207,8 @@ def run(
         _userId, preset_key,
         brsf, btl, bth, crsf, issf,
         MAX(CASE WHEN segment = 'tb_to_ab_seg1' THEN n ELSE 0 END) AS n_seg1,
-        MAX(CASE WHEN segment = 'tb_to_ab_seg2' THEN n ELSE 0 END) AS n_seg2
+        MAX(CASE WHEN segment = 'tb_to_ab_seg2' THEN n ELSE 0 END) AS n_seg2,
+        MAX(CASE WHEN segment = 'tb_to_ab_seg3' THEN n ELSE 0 END) AS n_seg3
       FROM config_counts
       GROUP BY _userId, preset_key
         , brsf, btl, bth, crsf, issf
@@ -244,12 +257,21 @@ def run(
       o.tb_to_ab_seg1_end,
       o.tb_to_ab_seg2_start,
       o.tb_to_ab_seg2_end,
+      o.tb_to_ab_seg3_start,
+      o.tb_to_ab_seg3_end,
       vn.n_seg1_name,
       vn.n_seg2_name,
-      CASE WHEN vn.n_seg1_name >= 2 AND vn.n_seg2_name >= 2 THEN TRUE ELSE FALSE END AS is_valid_name_only,
+      vn.n_seg3_name,
+      -- Each AB segment has its own pairing with TB. is_valid_name_only_seg2
+      -- gates Analysis 8-2 Table 8.2b (TB vs initial AB); _seg3 gates Table 8.2c
+      -- (TB vs second AB). A user can satisfy one and not the other.
+      CASE WHEN vn.n_seg1_name >= 2 AND vn.n_seg2_name >= 2 THEN TRUE ELSE FALSE END AS is_valid_name_only_seg2,
+      CASE WHEN vn.n_seg1_name >= 2 AND vn.n_seg3_name >= 2 THEN TRUE ELSE FALSE END AS is_valid_name_only_seg3,
       v.n_seg1,
       v.n_seg2,
-      CASE WHEN v.n_seg1 >= 2 AND v.n_seg2 >= 2 THEN TRUE ELSE FALSE END AS is_valid_full,
+      v.n_seg3,
+      CASE WHEN v.n_seg1 >= 2 AND v.n_seg2 >= 2 THEN TRUE ELSE FALSE END AS is_valid_full_seg2,
+      CASE WHEN v.n_seg1 >= 2 AND v.n_seg3 >= 2 THEN TRUE ELSE FALSE END AS is_valid_full_seg3,
       sc.starting_glucose,
       CASE
         WHEN sc.starting_glucose BETWEEN {starting_glucose_low} AND {starting_glucose_high}

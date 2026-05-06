@@ -4,6 +4,44 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-05-06: Analysis 8-2 — P2 closure (per-activation grain, Table 8.2c, hypo rate)
+
+Closes the remaining items from the written-plan audit (except the forest-plot variant, kept as an intentional deviation). Companion to the P1 commit earlier today.
+
+### Per-activation endpoint grain
+`compute_glycemic_endpoints` (override mode) now groups by `_userId, override_time, duration, overridePreset, brsf, btl, bth, crsf, issf, segment, is_valid_name_only_seg2, is_valid_name_only_seg3, is_starting_glucose_in_range`. Each activation produces its own endpoint row; the analysis layer averages across activations to reach the (user, preset, segment) summary the plan describes ("endpoints calculated for each preset+2-hour tail … averaged across all of the presets within each … segment"). To support this, [export_cbg_from_overrides.py](data_staging/export_cbg_from_overrides.py) now carries `override_time` and `duration` from `overrides_by_segment` onto `valid_override_cbg`.
+
+### Bug fix: segment column on valid_override_cbg / glycemic_endpoints_override
+The previous `o.dosing_mode AS segment` projection in `export_cbg_from_overrides.py` overwrote the actual segment label (`tb_to_ab_seg1/2/3`) with `temp_basal/autobolus`. That alias dated from when there was no seg3 and the two concepts were 1-to-1. With seg3 added, the alias collapsed seg2 + seg3 into a single `'autobolus'` value, making it impossible to distinguish the initial vs second AB period downstream — and the analysis driver's filters on `tb_to_ab_seg{1,2,3}` matched nothing, leaving Tables 8.2b / 8.2c empty and Figure 8.2b filled with "No CBG in window" placeholders. Fixed by emitting the genuine `segment` value alongside a separate `dosing_mode` column. After re-running the override pipeline downstream of this fix, the analysis filters resolve correctly.
+
+### Dual aggregation grain in the analysis layer
+[analysis/utils/data_loading.py](analysis/utils/data_loading.py) exposes a new `aggregate_override_endpoints(activations, ab_segment, grain)` helper. `grain="name"` collapses to (user, preset_name) — the plan-level primary; `grain="config"` collapses to (user, preset, params) — sensitivity. Range / shape endpoints (TIR / TBR / TAR / mean / CV) are unweighted means across activations within a group; hypo events are summed and divided by total `window_hours` (preset duration + 2-hour tail) to yield events/hour. `load_override_endpoints` was thinned to per-activation loading + cohort/guardrail/starting-glucose filtering; the validity gate moved to the aggregator so seg2 and seg3 use their own flags.
+
+### Table 8.2c — second AB segment (days 14–28)
+[export_valid_transition_segments.py](data_staging/export_valid_transition_segments.py) now emits `tb_to_ab_seg3_start` / `tb_to_ab_seg3_end` (the 14 days immediately following `seg2`); no AB% requirement on seg3 itself — the inclusion gate is "≥2 same-name preset activations in seg1 and ≥2 in seg3". [export_overrides_from_transitions.py](data_staging/export_overrides_from_transitions.py) extends segment classification to seg3, splits `is_valid_name_only` into `is_valid_name_only_seg2` / `is_valid_name_only_seg3` (each gates one TB-vs-AB pairing), and similarly for `is_valid_full`. `dosing_mode` collapses both AB segments to `'autobolus'`; the `segment` column distinguishes them. Analysis 8-2 produces `table_8_2c_parametric.csv` / `table_8_2c_nonparametric.csv` (primary grain) and `table_8_2c_by_config_*` (sensitivity).
+
+### Hypo events as rate per hour
+ENDPOINTS in [analysis_8-2_glycemic_outcomes_during_preset_activation.py](analysis/analysis_8-2_glycemic_outcomes_during_preset_activation.py) replaces "Hypoglycemic events (n)" / `hypo_events_seg{1,2}` with "Hypoglycemic event rate (n/hour)" / `hypo_rate_seg{1,2}`. The aggregator computes `sum(hypo_events) / sum(window_hours)` per group, which is a true exposure-normalized rate rather than a count.
+
+### Figure 8.2b — pick the activation with the most CBG, not the first
+`create_figure_8_2b` previously did `iloc[0]` on each user's TB and AB1 activations and rendered that window. If the chronologically-first activation happened to have CGM offline (no rows in `valid_override_cbg` even though the activation existed in `overrides_by_segment`), the panel showed "No CBG in window". Now the function groups its CBG slice by `override_time` and renders the activation with the most readings — guaranteed non-empty as long as the user has any CBG-bearing activation in that segment.
+
+### Analysis 8-3 cascading update
+The new dual validity flags renamed `is_valid_name_only` → `is_valid_name_only_seg{2,3}`, and `overrides_by_segment` now also includes seg3 rows. [analysis_8-3_preset_parameter_changes.py](analysis/analysis_8-3_preset_parameter_changes.py) was using the old name and would have implicitly pooled seg3 into its AB-side parameter averages once seg3 rows started appearing. Updated to filter `is_valid_name_only_seg2 = TRUE` and restrict to `segment IN ('tb_to_ab_seg1', 'tb_to_ab_seg2')` — preserving the analysis's previous TB-vs-initial-AB scope.
+
+### Forest plot intentionally NOT changed
+Plan calls for a forest plot in Figure 8.2a; current paired-connector + box + violin view stays. Documented as an intentional deviation for clarity.
+
+### Tests
+- [test_export_overrides_from_transitions.py](testing/data_staging/test_export_overrides_from_transitions.py) — fixture extended with seg3 dates, two seg3 Exercise activations + matching CBG, and an out-of-segment activation past seg3_end. Assertions cover `is_valid_name_only_seg{2,3}` and `is_valid_full_seg{2,3}` plus seg3 rows under `dosing_mode='autobolus'`.
+- [test_export_cbg_from_overrides.py](testing/data_staging/test_export_cbg_from_overrides.py) — fixture rows updated to dual validity flags; new assertion that `override_time` + `duration` carry through.
+- [test_analysis_8_2.py](testing/analysis/test_analysis_8_2.py) — rewritten around `segment` (not `dosing_mode`), with a new test verifying `aggregate_override_endpoints` averages endpoints unweighted and computes hypo rate as total/total. 7/7 pass locally.
+- [testing/integration/run_pipeline.py](testing/integration/run_pipeline.py) — passes `loop_cbg_table` to `export_overrides_from_transitions` (newly required since it now joins CBG for the starting-glucose computation).
+
+**Commit:** _not yet committed_
+
+---
+
 ## 2026-05-06: Analysis 8-2 — P1 alignment with the written analysis plan
 
 Closed five gaps between the implementation and the written Analysis 8-2 plan ("Glycemic Outcomes During Preset Activation"). Two larger items — Table 8.2c (a second AB segment 14–28 days post-transition) and a preset-name-grain primary analysis with exact-config sensitivity — remain required for the submission and are deferred to follow-up PRs.
@@ -40,7 +78,7 @@ New `load_override_endpoints(spark)` in [analysis/utils/data_loading.py](analysi
 - **Forest-plot variant of Figure 8.2a** — paired connector + box + violin is what's there now; if the regulator wants CI bars, add alongside.
 - **Direction-of-adjustment / event-type strata** — "when feasible" in the plan; not implemented.
 
-**Commit:** _not yet committed_
+**Commit:** 6ddf7d1
 
 ---
 

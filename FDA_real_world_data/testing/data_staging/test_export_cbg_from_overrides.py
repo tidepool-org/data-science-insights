@@ -3,7 +3,9 @@ Unit test for export_cbg_from_overrides.py.
 
 Tests: CBG readings are matched to all overrides within the time window
 (override duration + 2-hour buffer). Both valid and invalid overrides
-appear with is_valid_name_only/is_valid_full columns for downstream filtering.
+appear with is_valid_name_only_seg{2,3} and is_starting_glucose_in_range
+columns for downstream filtering, and override_time + duration carry
+through for the per-activation grain in compute_glycemic_endpoints.
 
 Run on Databricks.
 """
@@ -43,7 +45,7 @@ ALL_TABLES = [OVERRIDES_TABLE, CBG_TABLE, OUTPUT_TABLE]
 # Override 1: valid, Exercise, 1-hour duration starting 10:00 Jan 5
 #   Window: 10:00 to 13:00 (10:00 + 1hr + 2hr buffer)
 #   Starting glucose 120 mg/dL → is_starting_glucose_in_range=True
-# Override 2: invalid (is_valid_name_only=False), Sleep, 8-hour duration starting 10:00 Jan 6
+# Override 2: invalid (is_valid_name_only_seg2=False), Sleep, 8-hour duration starting 10:00 Jan 6
 #   Starting glucose 200 mg/dL → is_starting_glucose_in_range=False
 overrides_rows = [
     {
@@ -58,8 +60,8 @@ overrides_rows = [
         "duration": 3600,
         "dosing_mode": "autobolus",
         "segment": "tb_to_ab_seg2",
-        "is_valid_name_only": True,
-        "is_valid_full": True,
+        "is_valid_name_only_seg2": True,
+        "is_valid_name_only_seg3": True,
         "is_starting_glucose_in_range": True,
     },
     {
@@ -74,8 +76,8 @@ overrides_rows = [
         "duration": 28800,
         "dosing_mode": "temp_basal",
         "segment": "tb_to_ab_seg1",
-        "is_valid_name_only": False,
-        "is_valid_full": False,
+        "is_valid_name_only_seg2": False,
+        "is_valid_name_only_seg3": False,
         "is_starting_glucose_in_range": False,
     },
 ]
@@ -101,7 +103,7 @@ cbg_rows = [
         "cbg_timestamp": datetime(2025, 1, 5, 13, 5),
         "cbg_mg_dl": 145.0,
     },
-    {  # Row 5: matches invalid override time window — included with is_valid_name_only=False
+    {  # Row 5: matches invalid override time window — included with is_valid_name_only_seg2=False
         "_userId": "user_a",
         "cbg_timestamp": datetime(2025, 1, 6, 12, 0),
         "cbg_mg_dl": 150.0,
@@ -135,14 +137,14 @@ try:
     assert presets == ["Exercise", "Sleep"], f"expected [Exercise, Sleep], got {presets}"
     print("PASS: both valid and invalid overrides included")
 
-    # 3. is_valid_name_only flag distinguishes them
-    valid_mask = result["is_valid_name_only"].astype(bool)
+    # 3. is_valid_name_only_seg2 flag distinguishes valid Exercise from invalid Sleep.
+    valid_mask = result["is_valid_name_only_seg2"].astype(bool)
     valid_rows = result[valid_mask]
     invalid_rows = result[~valid_mask]
     assert len(valid_rows) == 2, f"expected 2 valid rows, got {len(valid_rows)}"
     assert len(invalid_rows) == 1, f"expected 1 invalid row, got {len(invalid_rows)}"
     assert invalid_rows.iloc[0]["overridePreset"] == "Sleep", "invalid row should be Sleep"
-    print("PASS: is_valid_name_only correctly flags valid/invalid overrides")
+    print("PASS: is_valid_name_only_seg2 correctly flags valid/invalid overrides")
 
     # 4. Correct CBG values
     cbg_values = sorted(result["cbg_mg_dl"].astype(float).tolist())
@@ -157,6 +159,13 @@ try:
     assert not any(sleep_rows["is_starting_glucose_in_range"].astype(bool)), \
         "Sleep rows should carry is_starting_glucose_in_range=False"
     print("PASS: is_starting_glucose_in_range carried from overrides")
+
+    # 6. override_time and duration carried through (per-activation grain for
+    #    downstream compute_glycemic_endpoints).
+    assert "override_time" in result.columns, "override_time should be carried into valid_override_cbg"
+    assert "duration" in result.columns, "duration should be carried into valid_override_cbg"
+    assert all(exercise_rows["duration"].astype(int) == 3600), "Exercise duration should be 3600"
+    print("PASS: override_time + duration carried from overrides")
 
     print("\nAll tests passed.")
 

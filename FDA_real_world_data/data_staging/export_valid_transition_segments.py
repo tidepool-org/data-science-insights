@@ -182,6 +182,12 @@ valid_user_table AS (
     seg1_end AS tb_to_ab_seg1_end,
     seg2_start AS tb_to_ab_seg2_start,
     seg2_end AS tb_to_ab_seg2_end,
+    -- seg3 = the 14 days immediately following seg2 (days 14–28 post-transition).
+    -- No additional AB% requirement on seg3 itself; the analysis-side filter
+    -- (>=2 same-name preset activations in seg1 AND seg3) gates inclusion for
+    -- Analysis 8-2 Table 8.2c.
+    DATE_ADD(seg2_end, 1)  AS tb_to_ab_seg3_start,
+    DATE_ADD(seg2_end, 14) AS tb_to_ab_seg3_end,
     temp_basal_pct_seg1 AS tb_to_ab_pct_seg1,
     autobolus_pct_seg2 AS tb_to_ab_pct_seg2,
     coverage_seg1 AS tb_to_ab_coverage_seg1,

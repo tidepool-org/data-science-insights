@@ -226,6 +226,7 @@ def run(spark, force=False):
         output_table=TABLES["overrides_by_segment"],
         bddp_table=TABLES["bddp"],
         transition_segments_table=TABLES["valid_transition_segments"],
+        loop_cbg_table=TABLES["loop_cbg"],
     )
     print("[integration.run_pipeline] export_cbg_from_overrides...")
     export_cbg_from_overrides.run(

@@ -49,12 +49,15 @@ segments_rows = [
         "tb_to_ab_seg1_end": date(2025, 1, 14),
         "tb_to_ab_seg2_start": date(2025, 1, 15),
         "tb_to_ab_seg2_end": date(2025, 1, 28),
+        "tb_to_ab_seg3_start": date(2025, 1, 29),
+        "tb_to_ab_seg3_end": date(2025, 2, 11),
         "segment_rank": 1,
     },
 ]
 
-# Exercise preset: 2 in seg1 + 2 in seg2, same params → valid (name + full)
-# Sleep preset: 1 in seg1 + 1 in seg2 → invalid (< 2 per segment)
+# Exercise preset: 2 in seg1 + 2 in seg2 + 2 in seg3, same params → valid for
+# both seg2 and seg3 pairings (name + full).
+# Sleep preset: 1 in seg1 + 1 in seg2 + 0 in seg3 → invalid for both pairings.
 EXERCISE = {
     "overridePreset": "Exercise",
     "basalRateScaleFactor": "0.5",
@@ -84,12 +87,15 @@ bddp_rows = [
     # Jan 19 10:00: no CBG within 30 min (NULL starting glucose, not in range)
     {"_userId": "user_a", "time_string": "2025-01-17 10:00:00", "created_timestamp": "2025-01-17 10:00:01", **EXERCISE},
     {"_userId": "user_a", "time_string": "2025-01-19 10:00:00", "created_timestamp": "2025-01-19 10:00:01", **EXERCISE},
+    # Exercise in seg3 (×2): both with in-range starting glucose
+    {"_userId": "user_a", "time_string": "2025-01-31 10:00:00", "created_timestamp": "2025-01-31 10:00:01", **EXERCISE},
+    {"_userId": "user_a", "time_string": "2025-02-02 10:00:00", "created_timestamp": "2025-02-02 10:00:01", **EXERCISE},
     # Sleep in seg1 (×1)
     {"_userId": "user_a", "time_string": "2025-01-04 22:00:00", "created_timestamp": "2025-01-04 22:00:01", **SLEEP},
     # Sleep in seg2 (×1)
     {"_userId": "user_a", "time_string": "2025-01-16 22:00:00", "created_timestamp": "2025-01-16 22:00:01", **SLEEP},
-    # Outside segments — excluded
-    {"_userId": "user_a", "time_string": "2025-01-30 10:00:00", "created_timestamp": "2025-01-30 10:00:01", **EXERCISE},
+    # Outside segments — excluded (Feb 12 is past seg3 end Feb 11)
+    {"_userId": "user_a", "time_string": "2025-02-12 10:00:00", "created_timestamp": "2025-02-12 10:00:01", **EXERCISE},
     # Null preset — excluded by WHERE overridePreset IS NOT NULL
     {
         "_userId": "user_a",
@@ -121,6 +127,10 @@ loop_cbg_rows = [
     # Stray reading just outside the 30-min window for Jan 19 10:00 (at 09:25,
     # 35 minutes earlier) — should NOT be picked up as starting glucose.
     {"_userId": "user_a", "cbg_timestamp": datetime(2025, 1, 19, 9, 25), "cbg_mg_dl": 130.0},
+    # Jan 31 10:00 Exercise activation — CBG at 09:50, 130 mg/dL (in range)
+    {"_userId": "user_a", "cbg_timestamp": datetime(2025, 1, 31, 9, 50), "cbg_mg_dl": 130.0},
+    # Feb 2 10:00 Exercise activation — CBG at 09:50, 100 mg/dL (in range)
+    {"_userId": "user_a", "cbg_timestamp": datetime(2025, 2, 2, 9, 50), "cbg_mg_dl": 100.0},
 ]
 
 # --- Run test ---
@@ -139,29 +149,35 @@ try:
 
     result = read_test_output(spark, OUTPUT_TABLE)
 
-    # 1. 6 rows: 4 Exercise + 2 Sleep (outside-segments and null-preset excluded)
-    assert_row_count(result, 6, "overrides within transition segments")
+    # 1. 8 rows: 6 Exercise (2 seg1 + 2 seg2 + 2 seg3) + 2 Sleep (1 seg1 + 1 seg2);
+    #    outside-segments and null-preset excluded.
+    assert_row_count(result, 8, "overrides within transition segments")
 
-    # 2. Exercise: is_valid_name_only=True, is_valid_full=True
+    # 2. Exercise: valid for both seg2 and seg3 pairings (≥2 each in seg1, seg2, seg3).
     exercise = result[result["overridePreset"] == "Exercise"]
-    assert len(exercise) == 4, f"expected 4 Exercise rows, got {len(exercise)}"
-    assert all(exercise["is_valid_name_only"]), "Exercise should be valid (name only)"
-    assert all(exercise["is_valid_full"]), "Exercise should be valid (full config)"
-    print("PASS: Exercise preset valid (name + full)")
+    assert len(exercise) == 6, f"expected 6 Exercise rows, got {len(exercise)}"
+    assert all(exercise["is_valid_name_only_seg2"]), "Exercise should be valid_name_only_seg2"
+    assert all(exercise["is_valid_name_only_seg3"]), "Exercise should be valid_name_only_seg3"
+    assert all(exercise["is_valid_full_seg2"]), "Exercise should be valid_full_seg2"
+    assert all(exercise["is_valid_full_seg3"]), "Exercise should be valid_full_seg3"
+    print("PASS: Exercise preset valid for both seg2 and seg3 pairings")
 
-    # 3. Sleep: is_valid_name_only=False, is_valid_full=False
+    # 3. Sleep: 1 in seg1 + 1 in seg2 + 0 in seg3 → invalid for both pairings.
     sleep = result[result["overridePreset"] == "Sleep"]
     assert len(sleep) == 2, f"expected 2 Sleep rows, got {len(sleep)}"
-    assert not any(sleep["is_valid_name_only"]), "Sleep should be invalid (name only)"
-    assert not any(sleep["is_valid_full"]), "Sleep should be invalid (full config)"
-    print("PASS: Sleep preset invalid (< 2 per segment)")
+    assert not any(sleep["is_valid_name_only_seg2"]), "Sleep should be invalid (seg2)"
+    assert not any(sleep["is_valid_name_only_seg3"]), "Sleep should be invalid (seg3)"
+    print("PASS: Sleep preset invalid for both pairings")
 
-    # 4. Correct dosing_mode: seg1 = temp_basal, seg2 = autobolus
+    # 4. Correct dosing_mode: seg1 = temp_basal, seg2 + seg3 = autobolus.
     seg1 = result[result["segment"] == "tb_to_ab_seg1"]
     seg2 = result[result["segment"] == "tb_to_ab_seg2"]
+    seg3 = result[result["segment"] == "tb_to_ab_seg3"]
     assert all(seg1["dosing_mode"] == "temp_basal"), "seg1 dosing_mode should be temp_basal"
     assert all(seg2["dosing_mode"] == "autobolus"), "seg2 dosing_mode should be autobolus"
-    print("PASS: correct dosing_mode per segment")
+    assert all(seg3["dosing_mode"] == "autobolus"), "seg3 dosing_mode should be autobolus"
+    assert len(seg3) == 2, f"expected 2 seg3 rows, got {len(seg3)}"
+    print("PASS: correct dosing_mode per segment (seg1 / seg2 / seg3)")
 
     # 5. bg_target values converted to mg/dL (deterministic mmol → mg/dL conversion).
     ex_row = exercise.iloc[0]

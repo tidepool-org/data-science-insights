@@ -22,7 +22,7 @@ phase). Stable-AB users span a separate later window. Loop version defaults to
 | `int_user_06` | Guardrail violator, female 65y/30y dx | pumpSettings has bg_target_max = 200 (> 180 ceiling); should be DROPPED via valid_transition_guardrails | 8-1, 8-5 (cohort filter check) |
 | `int_user_07` | Age-filtered, male 5y/1y dx | Age 5 at seg1_start (< 6 minimum in valid_transition_segments); should be DROPPED upstream | 8-1, 8-5 (cohort filter check) |
 | `int_user_08` | Multi-preset user | Two preset names (`Workout`, `Sleep`) each activated ≥2× in TB and ≥2× in AB; carbRatioScaleFactor and insulinSensitivityScaleFactor differ between phases | 8-3, 8-4 |
-| `int_user_09` | Single-preset, AB-only | One preset (`Workout`) activated only in seg2; should be excluded from 8-3 (`is_valid_name_only` requires ≥2× each phase) | 8-3 (validity gate), 8-4 (still counted) |
+| `int_user_09` | Single-preset, AB-only | One preset (`Workout`) activated only in seg2; should be excluded from 8-3 (`is_valid_name_only_seg2` requires ≥2× each phase) | 8-3 (validity gate), 8-4 (still counted) |
 | `int_user_10` | No-preset user | Zero override events in either phase; serves as 0-duration baseline | 8-4 (zero-baseline) |
 | `int_user_11` | Heavy preset use | Long-duration overrides dominating seg1 (e.g. 8h/day Workout); short or no use in seg2 | 8-4 (duration extreme) |
 | `int_user_12` | Stable carbs (≤25% CHO change) | Mean carb intake matched ±10% across seg1/seg2 (~150 g/day each) | 8-8 (stable-diet stratum) |
@@ -56,6 +56,6 @@ phase). Stable-AB users span a separate later window. Loop version defaults to
 | CBG coverage < 70% (drop) | int_user_05 |
 | Guardrail violation (drop) | int_user_06 |
 | Age < 6 (drop) | int_user_07 |
-| `is_valid_name_only` ≥2× each phase (drop from 8-3) | int_user_09 |
+| `is_valid_name_only_seg2` ≥2× each phase (drop from 8-3) | int_user_09 |
 | Min followup for adoption (drop from 8-7) | int_user_23 |
 | JAEB linkage required (drop from 8-6) | int_user_20 |

@@ -13,7 +13,8 @@ Inputs:
 
 Inclusion:
 - Same preset string name activated in both temp basal and autobolus phases
-  (is_valid_name_only = TRUE: preset name appears >= 2 times in each phase)
+  (is_valid_name_only_seg2 = TRUE: preset name appears >= 2 times in each
+  of the TB and initial-AB phases for the user)
 - Only override activations where starting glucose is 70–180 mg/dL
 
 Methods:
@@ -102,10 +103,15 @@ def load_data(spark) -> pd.DataFrame:
         WHERE {COHORT_WHERE}
     """)
 
+    # Restrict to seg1 (TB) and seg2 (initial AB); seg3 (days 14–28) was added
+    # for Analysis 8-2 Table 8.2c and is out of scope for the parameter-change
+    # comparison here. is_valid_name_only_seg2 enforces ≥2 same-name activations
+    # in each of seg1 and seg2.
     overrides_sdf = (
         spark.table("dev.fda_510k_rwd.overrides_by_segment")
         .join(allowed_segments, on=["_userId", "tb_to_ab_seg1_start"], how="inner")
-        .filter(F.col("is_valid_name_only") == True)
+        .filter(F.col("segment").isin("tb_to_ab_seg1", "tb_to_ab_seg2"))
+        .filter(F.col("is_valid_name_only_seg2") == True)
         .select(
             "_userId", "override_time", "dosing_mode", "overridePreset",
             "basalRateScaleFactor", "carbRatioScaleFactor",
