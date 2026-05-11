@@ -86,7 +86,9 @@ def run(
       CROSS JOIN params p
     ),
 
-    events AS (
+    -- Trailing-AB% events: the first week where the rolling 4-week AB%
+    -- drops to ≤20% and never recovers.
+    detected_events AS (
       SELECT
         _userId,
         MIN(week_post_adoption) AS event_week
@@ -94,6 +96,36 @@ def run(
       CROSS JOIN params p
       WHERE is_window_complete
         AND max_trailing_from_here <= p.discontinuation_threshold
+      GROUP BY _userId
+    ),
+
+    -- Terminal-dropoff events: users whose 28-day data coverage fell below
+    -- threshold and never recovered AND whose pre-dropoff AB% was low (i.e.
+    -- the durability table classifies them is_discontinued = TRUE) are
+    -- anchored at the week immediately after their effective_last_day.
+    -- Dropoff users with high pre-dropoff AB% are NOT counted here; they
+    -- naturally censor at their max observed week in the analysis layer.
+    dropoff_events AS (
+      SELECT
+        d._userId,
+        CAST(FLOOR(DATEDIFF(DATE_ADD(d.effective_last_day, 1), d.adoption_date) / 7) AS INT)
+            AS event_week
+      FROM {durability_table} d
+      WHERE d.had_terminal_dropoff
+        AND d.is_discontinued = 1
+        AND d.effective_last_day IS NOT NULL
+        AND d.adoption_date IS NOT NULL
+    ),
+
+    events AS (
+      SELECT
+        _userId,
+        MIN(event_week) AS event_week
+      FROM (
+        SELECT _userId, event_week FROM detected_events
+        UNION ALL
+        SELECT _userId, event_week FROM dropoff_events
+      )
       GROUP BY _userId
     )
 

@@ -81,25 +81,26 @@ def load_event_times(spark, qualified_user_ids: set) -> pd.DataFrame:
     Restricted to `qualified_user_ids` so the KM curve cohort matches the
     Table 8.7a eligibility cohort (is_adopted + has_min_followup +
     has_final_coverage + is_age_eligible).
+
+    Uses `event_week` directly from the staging table rather than the
+    `is_event_week` row flag, so that terminal-dropoff events (whose week may
+    fall outside any data-containing week) are not lost.
     """
     df = spark.table("dev.fda_510k_rwd.autobolus_event_times").toPandas()
     df = df[df["_userId"].isin(qualified_user_ids)]
 
-    # For users with a discontinuation event, take the event week.
-    # For censored users, take the max observed week.
-    event_users = df[df["is_event_week"] == True].drop_duplicates(subset="_userId", keep="first")  # noqa: E712
-    censored_users = df[df["has_discontinuation"] == False].groupby("_userId").agg(  # noqa: E712
-        week_post_adoption=("week_post_adoption", "max")
+    summary = df.groupby("_userId").agg(
+        has_discontinuation=("has_discontinuation", "first"),
+        event_week=("event_week", "first"),
+        max_observed_week=("week_post_adoption", "max"),
     ).reset_index()
-    censored_users = censored_users[~censored_users["_userId"].isin(event_users["_userId"])]
 
-    event_users = event_users[["_userId", "week_post_adoption"]].copy()
-    event_users["event"] = True
-    censored_users["event"] = False
-
-    result = pd.concat([event_users, censored_users], ignore_index=True)
-    result = result.rename(columns={"week_post_adoption": "time"})
-    result["time"] = pd.to_numeric(result["time"], errors="coerce")
+    summary["event"] = summary["has_discontinuation"].astype(bool)
+    summary["time"] = pd.to_numeric(
+        summary["event_week"].where(summary["event"], summary["max_observed_week"]),
+        errors="coerce",
+    )
+    result = summary[["_userId", "time", "event"]].copy()
 
     print(f"  Loaded {len(result)} qualified users ({result['event'].sum()} events, "
           f"{(~result['event']).sum()} censored)")

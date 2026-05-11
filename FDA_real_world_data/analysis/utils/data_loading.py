@@ -20,8 +20,20 @@ SEGMENT_KEY = ["_userId", "tb_to_ab_seg1_start"]
 # Cohort eligibility:
 #   - If Loop version is known, keep segments below this version_int.
 #   - If Loop version is unknown, fall back to segments ending before this date.
+#   - Loop autobolus indication: age ≥6 at segment start (or DOB unknown).
 MAX_LOOP_VERSION_INT = 3_004_000  # Loop 3.4.0
 MAX_SEG2_END_DATE = "2024-07-13"
+MIN_AGE = 6
+
+# Cohort predicate against `valid_transition_segments`. Imported by
+# analysis_8-3 / analysis_8-4 so the cohort definition lives in one place.
+COHORT_WHERE = (
+    f"((tb_to_ab_max_loop_version_int IS NOT NULL "
+    f"  AND tb_to_ab_max_loop_version_int < {MAX_LOOP_VERSION_INT}) "
+    f" OR (tb_to_ab_max_loop_version_int IS NULL "
+    f"  AND tb_to_ab_seg2_end < DATE '{MAX_SEG2_END_DATE}')) "
+    f"AND (tb_to_ab_age_years >= {MIN_AGE} OR tb_to_ab_age_years IS NULL)"
+)
 
 
 def load_transition_endpoints(spark) -> pd.DataFrame:
@@ -51,17 +63,13 @@ def load_transition_endpoints(spark) -> pd.DataFrame:
         if col not in non_numeric_cols:
             endpoints[col] = pd.to_numeric(endpoints[col], errors="coerce")
 
-    # Cohort filter: version takes precedence. If a Loop version is known, keep
-    # the segment iff version_int < MAX_LOOP_VERSION_INT. If unknown, fall back
-    # to segments ending before MAX_SEG2_END_DATE.
+    # Cohort filter: Loop-version predicate + age ≥6 (per indication). Version
+    # takes precedence — if known, keep iff < MAX_LOOP_VERSION_INT; if unknown,
+    # fall back to seg2_end < MAX_SEG2_END_DATE. Users with unknown DOB
+    # (tb_to_ab_age_years IS NULL) are kept.
     allowed = (
         spark.table("dev.fda_510k_rwd.valid_transition_segments")
-        .where(
-            f"(tb_to_ab_max_loop_version_int IS NOT NULL "
-            f" AND tb_to_ab_max_loop_version_int < {MAX_LOOP_VERSION_INT}) "
-            f"OR (tb_to_ab_max_loop_version_int IS NULL "
-            f" AND tb_to_ab_seg2_end < DATE '{MAX_SEG2_END_DATE}')"
-        )
+        .where(COHORT_WHERE)
         .select("_userId", "tb_to_ab_seg1_start")
         .toPandas()
     )
@@ -140,12 +148,7 @@ def load_override_endpoints(spark) -> pd.DataFrame:
     allowed = (
         spark.table("dev.fda_510k_rwd.valid_transition_segments")
         .where("segment_rank = 1")
-        .where(
-            f"(tb_to_ab_max_loop_version_int IS NOT NULL "
-            f" AND tb_to_ab_max_loop_version_int < {MAX_LOOP_VERSION_INT}) "
-            f"OR (tb_to_ab_max_loop_version_int IS NULL "
-            f" AND tb_to_ab_seg2_end < DATE '{MAX_SEG2_END_DATE}')"
-        )
+        .where(COHORT_WHERE)
         .select("_userId", "tb_to_ab_seg1_start")
         .toPandas()
     )

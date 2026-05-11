@@ -11,8 +11,8 @@ FDA_real_world_data/
 │   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window, day-level counts; emits ALL valid segments per user with segment_rank; tunable min_autobolus_count threshold, default 3; tracks max Loop version and min/median/max daily AB count per seg2)
 │   ├── export_stable_autobolus_segments.py      — Identify 14-day stable AB periods using day-level counts from `loop_recommendations`. Emits ONE segment per user (earliest fully-AB 14-day window starting ≥28 days post-first-AB); min_autobolus_count threshold, default 3
 │   ├── export_segments_within_guardrails.py     — Validate pump settings against FDA guardrails (transition mode carries segment_rank)
-│   ├── export_autobolus_durability.py           — Track adoption + discontinuation using day-level counts from `loop_recommendations` (3-day rolling window for adoption; final 28-day window for discontinuation); min_autobolus_count threshold, default 3
-│   ├── export_autobolus_event_times.py          — Weekly autobolus retention rates from day-level counts; 4-week trailing average; min_autobolus_count threshold, default 3
+│   ├── export_autobolus_durability.py           — Track adoption + discontinuation using day-level counts from `loop_recommendations` (3-day rolling window for adoption; final 28-day window for discontinuation; terminal-dropoff path classifies users whose rolling 28-day data coverage permanently fell below 70% — but only as discontinued when `pre_dropoff_ab_pct ≤ 0.20` in the 28 days ending at `effective_last_day`; otherwise censored as still on AB); min_autobolus_count threshold, default 3
+│   ├── export_autobolus_event_times.py          — Weekly autobolus retention rates from day-level counts; 4-week trailing average; emits a discontinuation event at the dropoff week only for terminal-dropoff users that the durability table classifies `is_discontinued = 1` (low pre-dropoff AB%); high pre-dropoff AB% dropoffs censor naturally at last observed week; min_autobolus_count threshold, default 3
 │   ├── export_cbg_from_transitions.py           — Filter CBG by transition segments (carries tb_to_ab_seg1_start + segment_rank)
 │   ├── export_cbg_from_stable.py                — Filter CBG by stable AB segments
 │   ├── export_cbg_from_overrides.py             — Filter CBG by preset override periods
@@ -32,7 +32,7 @@ FDA_real_world_data/
 │   ├── plot_stable_ab_sample_size.py — CONSORT chart, sample size heatmap, AB% distribution
 │   └── utils/
 │       ├── constants.py    — Font sizes, color schemes, STARTING_GLUCOSE_LOW/HIGH (70/180) shared across 8-2 and 8-3
-│       ├── data_loading.py — load_transition_endpoints() with per-segment coverage + guardrail filtering, cohort filter (MAX_LOOP_VERSION_INT / MAX_SEG2_END_DATE), and best-surviving-segment selection per user. load_override_endpoints() returns per-activation rows from glycemic_endpoints_override after cohort + guardrail + starting-glucose filters; aggregate_override_endpoints(activations, ab_segment, grain) collapses to (user, preset_name) primary or (user, preset, params) sensitivity grain, computes hypo rate as total events / total exposure hours, and pivots to wide TB-vs-AB form
+│       ├── data_loading.py — load_transition_endpoints() with per-segment coverage + guardrail filtering, cohort filter (`COHORT_WHERE` = MAX_LOOP_VERSION_INT / MAX_SEG2_END_DATE + age ≥ MIN_AGE), and best-surviving-segment selection per user. `COHORT_WHERE` is the single source of truth for the transition-cohort predicate; analysis_8-3 / 8-4 import it. load_override_endpoints() returns per-activation rows from glycemic_endpoints_override after cohort + guardrail + starting-glucose filters; aggregate_override_endpoints(activations, ab_segment, grain) collapses to (user, preset_name) primary or (user, preset, params) sensitivity grain, computes hypo rate as total events / total exposure hours, and pivots to wide TB-vs-AB form
 │       └── statistics.py   — Paired t-test, Wilcoxon, ANOVA, Tukey, Dunn's, p-value formatting; shapiro + wilcoxon short-circuit to NaN when input has <2 distinct values (avoids scipy zero-range warnings)
 │
 ├── testing/
@@ -121,9 +121,10 @@ The script FULL OUTER JOINs the two methods and emits one row per (user, day) wi
 
 ### Adoption & Durability
 - **Adoption:** ≥80% autobolus over 3-day rolling window
-- **Sustained:** Final 28-day autobolus% > 20% (requires ≥56 days follow-up)
-- **Discontinued:** Final 28-day autobolus% ≤ 20%
-- **Event detection:** Trailing 4-week avg ≤20% → `is_event_week`
+- **Sustained:** Final 28-day autobolus% > 20% (requires ≥56 days follow-up; final 28 days have ≥70% data coverage), **or** terminal dropoff with `pre_dropoff_ab_pct > 0.20` (last 28 dense days were AB-heavy → censored as still on AB, can't infer discontinuation from a coverage gap alone)
+- **Discontinued:** Final 28-day autobolus% ≤ 20%, **or** terminal dropoff with `pre_dropoff_ab_pct ≤ 0.20` (had already deactivated AB before going dark)
+- **Event detection:** Earliest of (a) trailing 4-week AB% ≤20% (sticky) → `is_event_week`, or (b) terminal-dropoff week — but only when the durability table classifies the user `is_discontinued = 1`
+- **Age eligibility:** age at adoption ≥6, or DOB unknown (`is_age_eligible`)
 
 ### Glycemic Endpoints
 - **Range metrics:** TIR [70–180], TBR [<70], TBR very low [<54], TAR [>180], TAR very high [>250], mean glucose, CV

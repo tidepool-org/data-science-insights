@@ -50,17 +50,7 @@ from utils.constants import (
     STARTING_GLUCOSE_LOW, STARTING_GLUCOSE_HIGH,
 )
 from utils.statistics import test_normality, compute_paired_statistics, format_p
-from utils.data_loading import MAX_LOOP_VERSION_INT, MAX_SEG2_END_DATE
-
-# Cohort filter: matches load_transition_endpoints in utils/data_loading.py.
-# Keep segments on Loop versions below MAX_LOOP_VERSION_INT; if version is
-# unknown, fall back to segments ending before MAX_SEG2_END_DATE.
-COHORT_WHERE = (
-    f"(tb_to_ab_max_loop_version_int IS NOT NULL "
-    f" AND tb_to_ab_max_loop_version_int < {MAX_LOOP_VERSION_INT}) "
-    f"OR (tb_to_ab_max_loop_version_int IS NULL "
-    f" AND tb_to_ab_seg2_end < DATE '{MAX_SEG2_END_DATE}')"
-)
+from utils.data_loading import COHORT_WHERE
 
 # =============================================================================
 # Parameter definitions: (display_name, seg1_col, seg2_col, unit)

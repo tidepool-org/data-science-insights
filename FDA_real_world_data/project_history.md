@@ -4,6 +4,27 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-05-11: Terminal-dropoff handling for autobolus durability; age-eligibility boundary fix; COHORT_WHERE centralization
+
+Two-part fix to the durability pipeline. (1) Users whose data goes dark mid-tenure were previously dropped by the final-28-day coverage gate, regardless of what they were doing right before they vanished. Now `export_autobolus_durability.py` detects a terminal dropoff via a rolling 28-day coverage window, anchors `effective_last_day` at the last day before coverage permanently fell below 70%, and classifies the user by `pre_dropoff_ab_pct` in the 28 days ending at that day — low pre-dropoff AB% → discontinued (deactivated AB before going dark), high pre-dropoff AB% → censored as still on AB (we just stopped observing). (2) `export_autobolus_event_times.py` adds a `dropoff_events` CTE that emits a discontinuation event at the dropoff week only for users the durability table classifies `is_discontinued = 1`; high-AB dropoffs censor naturally at their last observed week in the analysis layer.
+
+### Age-eligibility boundary
+`is_age_eligible` was `age > 6 OR dob IS NULL` — the Loop autobolus indication is age ≥6, so a user with exactly six years at adoption was being excluded. Changed to `age >= 6` in `export_autobolus_durability.py`. Added a `user_age_six` test fixture (DOB exactly six years before adoption) to pin the boundary.
+
+### COHORT_WHERE centralization
+`analysis_8-3` and `analysis_8-4` had duplicated copies of the transition-cohort predicate, and both had drifted from `load_transition_endpoints` in `data_loading.py` (no age filter). Moved the predicate into `data_loading.py` as `COHORT_WHERE` (Loop-version + age ≥ `MIN_AGE`), and `load_transition_endpoints` / `load_override_endpoints` / analysis 8-3 / analysis 8-4 all import it. Analysis 8-6 picks up the same age gate via a per-user `age_eligible` SELECT against `stable_autobolus_segments` (users with unknown DOB are kept, matching the durability rule).
+
+### Analysis 8-7 event loading simplification
+`load_event_times` was filtering on `is_event_week` and reconstructing censored users from the row-flag — fragile because the new terminal-dropoff event week can fall outside any row in the staging table (it's anchored on `effective_last_day`, not on an observed AB week). Rewrote to read `event_week` directly from the table (one row per user via `first`), use `max(week_post_adoption)` as the censoring time, and pivot to `(time, event)` once at the end.
+
+### Tests
+`test_export_autobolus_durability.py` adds three fixtures (`user_age_six`, `user_dropoff_sustained`, `user_dropoff_disc`) covering the age boundary, the high-pre-dropoff-AB% censoring path, and the low-pre-dropoff-AB% discontinuation path. `test_export_autobolus_event_times.py` extends the durability stub with `had_terminal_dropoff` / `effective_last_day` / `is_discontinued` columns and adds two fixtures pinning that `dropoff_events` only fires when the durability table marks `is_discontinued = 1`.
+
+### Exploratory
+`exploratory/compare_jaeb_csvs.py` reports PtID overlap between Analysis 8-6's glycemic CSV and Analysis 8-7's durability CSV — used during this work to sanity-check the cohort joins after the age filter landed.
+
+---
+
 ## 2026-05-06: Analysis 8-2 — P2 closure (per-activation grain, Table 8.2c, hypo rate)
 
 Closes the remaining items from the written-plan audit (except the forest-plot variant, kept as an intentional deviation). Companion to the P1 commit earlier today.

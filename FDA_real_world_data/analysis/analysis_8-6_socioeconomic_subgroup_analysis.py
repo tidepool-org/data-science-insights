@@ -27,6 +27,7 @@ import pandas as pd
 import os
 
 from utils import MIN_CBG_COUNT
+from utils.data_loading import MIN_AGE
 
 OUTPUT_DIR = "outputs/analysis_8_6"
 
@@ -50,6 +51,19 @@ def load_data(spark) -> pd.DataFrame:
     # CBG coverage filter (70% of 14-day period)
     endpoints = endpoints.loc[endpoints["cbg_count"] >= MIN_CBG_COUNT].copy()
     print(f"  Users after CBG coverage filter: {len(endpoints)}")
+
+    # Age eligibility (Loop autobolus indication: age ≥6 at segment start;
+    # users with unknown DOB are kept).
+    age_eligible = spark.sql(f"""
+        --begin-sql
+        SELECT _userId
+        FROM dev.fda_510k_rwd.stable_autobolus_segments
+        WHERE age_years >= {MIN_AGE} OR age_years IS NULL
+    ;
+    """).toPandas()
+    pre_age = endpoints["_userId"].nunique()
+    endpoints = endpoints.merge(age_eligible, on="_userId", how="inner")
+    print(f"  Users after age filter (≥{MIN_AGE}): {endpoints['_userId'].nunique()}/{pre_age}")
 
     # --- JAEB PtID linkage ---
     jaeb_map = spark.sql("""
