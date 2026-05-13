@@ -39,9 +39,10 @@ MMOL_PER_MGDL = 1.0 / 18.018
 TZ_OFFSET_MIN = -300  # UTC-5 (EST); single TZ for all synthetic users
 
 # Every BDDP column the staging scripts read. Rows are dicts; we fill missing
-# columns with None so Spark's createDataFrame produces a stable schema even
-# when a column has all-None values across a partition (avoids the Databricks
-# Connect all-None-column-drop bug; see databricks_connect_all_none_drop memo).
+# columns with None and pass BDDP_SCHEMA explicitly to createDataFrame so
+# Spark preserves columns that are all-None across the fixture (Databricks
+# Connect's pandas→Arrow path silently drops all-None columns when the schema
+# is inferred; see databricks_connect_all_none_drop memo).
 BDDP_COLUMNS = [
     "_userId",
     "time_string",
@@ -76,6 +77,41 @@ BDDP_COLUMNS = [
     "bgTargetPreprandial",
     "bgTargetPhysicalActivity",
 ]
+
+BDDP_SCHEMA = (
+    "`_userId` string, "
+    "`time_string` string, "
+    "`created_timestamp` string, "
+    "`timezoneOffset` bigint, "
+    "`type` string, "
+    "`subType` string, "
+    "`reason` string, "
+    "`value` double, "
+    "`normal` double, "
+    "`recommendedBolus` string, "
+    "`recommendedBasal` string, "
+    "`origin` string, "
+    "`payload` string, "
+    "`nutrition` string, "
+    "`food` string, "
+    "`overridePreset` string, "
+    "`basalRateScaleFactor` double, "
+    "`carbRatioScaleFactor` double, "
+    "`insulinSensitivityScaleFactor` double, "
+    "`bgTarget` string, "
+    "`duration` string, "
+    "`basalSchedules` string, "
+    "`bgTargets` string, "
+    "`insulinSensitivities` string, "
+    "`insulinSensitivity` string, "
+    "`carbRatios` string, "
+    "`carbRatio` string, "
+    "`basal` string, "
+    "`bolus` string, "
+    "`bgSafetyLimit` double, "
+    "`bgTargetPreprandial` string, "
+    "`bgTargetPhysicalActivity` string"
+)
 
 
 def _row(**fields):
@@ -130,8 +166,9 @@ def _cbg_rows(user_id, day, mgdl_values, version=DEFAULT_VERSION):
 def _autobolus_day_rows(user_id, day, n_events=10, version=DEFAULT_VERSION):
     """Emit n_events autobolus pairs (loop DD + smb bolus 2s later) on `day`."""
     rows = []
+    base = datetime(day.year, day.month, day.day, 6, 0, 0)
     for i in range(n_events):
-        t = datetime(day.year, day.month, day.day, 6 + i, 0, 0)
+        t = base + timedelta(minutes=30 * i)
         rows.append(_row(
             _userId=user_id,
             time_string=_iso(t),
@@ -152,8 +189,9 @@ def _autobolus_day_rows(user_id, day, n_events=10, version=DEFAULT_VERSION):
 
 def _temp_basal_day_rows(user_id, day, n_events=10, version=DEFAULT_VERSION):
     rows = []
+    base = datetime(day.year, day.month, day.day, 6, 0, 0)
     for i in range(n_events):
-        t = datetime(day.year, day.month, day.day, 6 + i, 0, 0)
+        t = base + timedelta(minutes=30 * i)
         rows.append(_row(
             _userId=user_id,
             time_string=_iso(t),
@@ -212,7 +250,7 @@ def _food_row(user_id, day, hour, carb_grams, absorption_minutes=180):
 
 def _pump_settings_row(
     user_id,
-    setup_day=date(2023, 12, 31),
+    setup_day=SEG1_START,
     bg_target_high_mgdl=120.0,
     isf_mgdl_per_u=50.0,
     cir_g_per_u=15.0,
@@ -222,6 +260,12 @@ def _pump_settings_row(
 
     All schedules are constant 24h ('Default') so analyses see one segment.
     Use bg_target_high_mgdl > 180 to trigger a guardrail violation.
+
+    setup_day must fall inside the transition segment window because
+    export_segments_within_guardrails.py inner-joins pumpSettings to segments
+    with TRY_CAST(time_string AS DATE) BETWEEN seg1_start AND seg2_end —
+    settings dated before seg1_start are silently dropped from the guardrails
+    table (which silently passes guardrail-violator archetypes through).
     """
     t = datetime(setup_day.year, setup_day.month, setup_day.day, 0, 0, 0)
     schedule_entry = lambda **kv: [{"start": 0, **kv}]  # noqa: E731
@@ -333,7 +377,13 @@ def _archetype_tir_improver(user_id="int_user_01", version=DEFAULT_VERSION):
 
 
 def _archetype_tir_decliner(user_id="int_user_02"):
-    """seg1 TIR ~75%, seg2 TIR ~60% (autobolus over-corrects). (8-1, 8-5)"""
+    """seg1 TIR 75%, seg2 TIR 62.5% (autobolus over-corrects). (8-1, 8-5)
+
+    Both targets must be representable exactly as (in-range / 288)
+    so per-day TIR matches the per-segment mean used in 8-1's assertions:
+    216/288 = 75.0; 180/288 = 62.5. 60.0 was the previous target but
+    288 × 0.60 = 172.8 rounds to 173, producing TIR=60.0694%.
+    """
     rows = [_pump_settings_row(user_id)]
     for d_idx in range(14):
         day = SEG1_START + timedelta(days=d_idx)
@@ -341,7 +391,7 @@ def _archetype_tir_decliner(user_id="int_user_02"):
         rows.extend(_temp_basal_day_rows(user_id, day, n_events=20))
     for d_idx in range(14):
         day = SEG2_START + timedelta(days=d_idx)
-        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(60.0)))
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(62.5)))
         rows.extend(_autobolus_day_rows(user_id, day, n_events=20))
     return rows
 
@@ -424,8 +474,12 @@ def _build_bddp_rows():
 def build(spark, bddp_table):
     """Materialize the synthetic BDDP fixture as a Unity Catalog table."""
     rows = _build_bddp_rows()
-    df = pd.DataFrame(rows, columns=BDDP_COLUMNS)
-    spark.createDataFrame(df).write.mode("overwrite").saveAsTable(bddp_table)
+    (
+        spark.createDataFrame(rows, schema=BDDP_SCHEMA)
+        .write.mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(bddp_table)
+    )
     print(f"Wrote {len(rows):,} BDDP rows ({len(ARCHETYPES)} users) to {bddp_table}")
 
 

@@ -10,7 +10,7 @@ Predicted output (per archetypes.md):
 - int_user_05 dropped: cbg_count_seg1 < 2,822 (only 7 days of seg1 cbg)
 - int_user_06 dropped: pumpSettings bg_target_high = 200 > 180 guardrail
 - int_user_01 paired diff: tir_seg1 == 50.0, tir_seg2 == 75.0
-- int_user_02 paired diff: tir_seg1 == 75.0, tir_seg2 == 60.0 (decliner)
+- int_user_02 paired diff: tir_seg1 == 75.0, tir_seg2 == 62.5 (decliner)
 - int_user_03: hypo_events_seg1 == 1, hypo_events_seg2 == 0
 
 Run on Databricks.
@@ -54,6 +54,7 @@ def _row_for(df, user_id):
     assert len(rows) == 1, f"expected 1 row for {user_id}, got {len(rows)}"
     return rows.iloc[0]
 
+run_pipeline.teardown(spark)
 
 # ── 1. Build fixture and run pipeline ──────────────────────────────────────
 run_pipeline.run(spark)
@@ -84,8 +85,8 @@ try:
 
     u2 = _row_for(df, "int_user_02")
     assert u2["tir_seg1"] == 75.0, f"int_user_02 tir_seg1 expected 75.0, got {u2['tir_seg1']}"
-    assert u2["tir_seg2"] == 60.0, f"int_user_02 tir_seg2 expected 60.0, got {u2['tir_seg2']}"
-    print("PASS: int_user_02 tir_seg1 = 75.0, tir_seg2 = 60.0 (decliner)")
+    assert u2["tir_seg2"] == 62.5, f"int_user_02 tir_seg2 expected 62.5, got {u2['tir_seg2']}"
+    print("PASS: int_user_02 tir_seg1 = 75.0, tir_seg2 = 62.5 (decliner)")
 
     u3 = _row_for(df, "int_user_03")
     assert u3["hypo_events_seg1"] == 1, (

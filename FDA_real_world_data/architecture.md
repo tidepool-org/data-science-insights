@@ -40,6 +40,7 @@ FDA_real_world_data/
 │   ├── staging_test_helpers.py    — setup_test_table(), read_test_output(), assert_row_count(), make_loop_recs()
 │   ├── create_test_loop_data.py   — Synthetic loop data generator
 │   ├── data_staging/              — Paired tests for every data_staging/ script (13 files)
+│   ├── integration/               — End-to-end tests: synthetic BDDP → all staging scripts → analysis. build_synthetic_bddp.py emits a deterministic BDDP fixture with explicit DDL schema (defeats Databricks Connect's all-None-column drop); run_pipeline.py chains every staging script against the fixture and exposes RedirectingSpark to swap prod table names → `test_*` equivalents at analysis time; archetypes.md catalogs 23 planned synthetic users (6 implemented for 8-1's cohort-filter branches); test_analysis_8_1.py is the proof-of-concept end-to-end test. Run on Databricks.
 │   └── simulation/                — Tests for simulation/export/ (2 files; build_scenario_json pure-Python + export_single_user_day unit + Spark TZ-shift)
 │
 ├── simulation/

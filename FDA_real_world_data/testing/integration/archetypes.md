@@ -15,7 +15,7 @@ phase). Stable-AB users span a separate later window. Loop version defaults to
 | _userId | Archetype | What makes it interesting | Analyses exercised |
 |---|---|---|---|
 | `int_user_01` | TIR-improver, female 30y/5y dx | seg1 TIR ≈ 50% (frequent highs), seg2 TIR ≈ 75% (highs corrected); passes all filters | 8-1, 8-3, 8-5, 8-8 |
-| `int_user_02` | TIR-decliner, male 45y/15y dx | seg1 TIR ≈ 75%, seg2 TIR ≈ 60% (autobolus over-corrects → mild hypos); passes all filters | 8-1, 8-5 |
+| `int_user_02` | TIR-decliner, male 45y/15y dx | seg1 TIR 75%, seg2 TIR 62.5% (autobolus over-corrects → mild hypos); passes all filters | 8-1, 8-5 |
 | `int_user_03` | Hypo-event user, male 12y/3y dx | seg1 has 1 fully-formed hypo event (≥3 consecutive <54, exit on ≥3 consecutive >70); seg2 has 0 | 8-1 |
 | `int_user_04` | Version-filtered, female 20y/8y dx | Loop version `3.5.0` (≥ 3.4.0 cutoff); should be DROPPED by analyses 8-1/8-3/8-4/8-5/8-8 | 8-1 (cohort filter check) |
 | `int_user_05` | CBG-undercoverage, male 50y/20y dx | Only 2,000 cbg readings in seg1 (below 2,822 threshold); should be DROPPED | 8-1 (cohort filter check) |

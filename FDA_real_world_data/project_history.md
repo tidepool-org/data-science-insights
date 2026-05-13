@@ -4,6 +4,35 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-05-13: Integration tests — first end-to-end Databricks run of `test_analysis_8_1.py`
+
+The May-1 scaffold ([testing/integration/](testing/integration/)) had never executed against Databricks until today; first-run surfaced four latent bugs in [build_synthetic_bddp.py](testing/integration/build_synthetic_bddp.py), all now fixed. The 8-1 proof-of-concept now passes all six assertion blocks end-to-end.
+
+### Hour-overflow in day-row emitters
+`_temp_basal_day_rows` and `_autobolus_day_rows` were stepping one event per hour starting at 06:00 (`datetime(..., 6 + i, 0, 0)`). Every archetype passes `n_events=20`, so `i=18` produced hour=24 and raised `ValueError`. Switched to 30-min stepping from a 06:00 base — 20 events now run 06:00 → 15:30 within the day. Staging thresholds remain satisfied (AB-day ≥3 smb boluses per `export_valid_transition_segments.py:51`; TB-day ≥1 temp basal per `:59`; no event-spacing requirement).
+
+### Databricks Connect all-None-column drop
+The fixture's pandas→Arrow path silently dropped any BDDP column that was `None` in every row (`overridePreset`, `basalRateScaleFactor`, `bgTarget`, etc.), causing the downstream `WHERE overridePreset IS NOT NULL` in `export_overrides_from_transitions` to crash with `INTERNAL_ERROR_ATTRIBUTE_NOT_FOUND`. Added an explicit `BDDP_SCHEMA` DDL string (32 columns, mostly string + double + bigint) and pass it to `spark.createDataFrame(rows, schema=BDDP_SCHEMA)`. Also added `.option("overwriteSchema", "true")` so stale Delta tables from prior failed runs get replaced cleanly. The zero/empty-fill workaround used elsewhere wouldn't apply here — `""` would slip past `IS NOT NULL`.
+
+### pumpSettings dated before the segment window
+`_pump_settings_row` defaulted `setup_day=date(2023, 12, 31)`, one day before `SEG1_START`. The guardrails staging script joins pumpSettings to segments with `TRY_CAST(time_string AS DATE) BETWEEN seg1_start AND seg2_end` ([export_segments_within_guardrails.py:574-577](data_staging/export_segments_within_guardrails.py#L574-L577)) — the fixture row was silently dropped, leaving `valid_transition_guardrails` empty for `int_user_06` and letting the guardrail-violator archetype pass the cohort filter despite `bg_target_high = 200 mg/dL`. Anchored `setup_day=SEG1_START` and added a docstring note.
+
+### TIR target unrepresentable with 288 readings × 14 days
+`_archetype_tir_decliner`'s seg2 target was 60% TIR, but `_cbg_day_at_target_tir(60.0)` produces 173/288 in-range = 60.0694…% (4032 isn't a multiple of 5). The test asserted exact equality to 60.0 and failed. Changed the decliner's seg2 to 62.5% (180/288 = exactly 0.625), preserving the ~12-point decline narrative. Updated [archetypes.md](testing/integration/archetypes.md) and [test_analysis_8_1.py](testing/integration/test_analysis_8_1.py) assertion + docstring + print message to match.
+
+### Test now self-contained
+`test_analysis_8_1.py` calls `run_pipeline.teardown(spark)` before `run()`, so every invocation starts from a clean catalog state and the `_all_terminal_tables_exist` idempotency guard doesn't masquerade stale fixture data as the current shape. Defeats per-session amortization across 8-2..8-8 tests; revisit when those tests land (move teardown to a shared setup or gate it behind an env flag).
+
+### Known gap (deferred follow-up)
+`export_segments_within_guardrails.py`'s `BETWEEN seg1_start AND seg2_end` join means users whose last pumpSettings event predates seg1_start (i.e. their existing settings haven't changed during the segment — common in production) get no row in `valid_transition_guardrails`. The analysis-side filter (`~seg_keys.isin(bad_segments)` where `bad_segments` requires `violation_count > 0`) treats "no record" as "no violation" and lets the user pass. The simulation-export pipeline at `export_single_user_day.py:343` already uses the right `MAX_BY` "latest as-of" pattern; the analysis-cohort path should mirror it. Same gap exists in stable-AB mode and in `isf_for_valid_transition.py`. Out of scope for this slice — affects production analysis output for 8-1 through 8-8 if changed.
+
+### Architecture.md
+Added a `testing/integration/` entry under the `testing/` tree (the directory has existed since May 1 but was never indexed).
+
+**Commit:** _not yet committed_
+
+---
+
 ## 2026-05-13: Analysis 8-7 — Figure 8.7d from partner subgroup discontinuation stats
 
 Symmetric to the 8-6 figures change: 8-7 was already exporting `autobolus_durability_by_jaeb_id.csv` to the partner; they returned per-subgroup discontinuation statistics (`RWD_Autobolus_Figure_8-7_Data_05-05-26.csv` — N, NumDiscontinued, PropDiscontinued for each of two levels across Race/Ethnicity, Income, Education, Insurance, helpStartLoop, plus a Barnard's-test risk-difference 99% Bonferroni-corrected CI + p-value per subgroup). Added a `--mode figures` path to `analysis_8-7_autobolus_adoption_durability.py` that reads that CSV and renders `figure_8_7d_subgroup_discontinuation.png` using the same 5-panel `ax.bxp()` idiom as 8.6 — one panel per subgroup, two boxes per panel. The CSV gives only point-estimate proportions (no per-level CI), so the box bounds are 95% Clopper-Pearson CIs computed locally from `(N, NumDiscontinued)` via the existing `clopper_pearson_ci` helper. The Barnard's-test p-value from the CSV is annotated in each panel title; the risk-difference CI from the CSV is reported but not plotted (a forest variant was considered and rejected in favour of visual consistency with 8.6). The existing Databricks-side outputs (Figures 8.7a/b/c, Table 8.7a, the JAEB CSV) are unchanged.
