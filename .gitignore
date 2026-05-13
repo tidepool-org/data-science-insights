@@ -108,3 +108,7 @@ venv.bak/
 
 .databricks
 databricks.yml
+FDA_real_world_data/analysis/outputs/analysis_8_6/figure_8_6a_tir.png
+FDA_real_world_data/analysis/outputs/analysis_8_6/figure_8_6b_tbr.png
+FDA_real_world_data/analysis/outputs/analysis_8_6/figure_8_6c_hypo_rate.png
+FDA_real_world_data/analysis/outputs/analysis_8_7/figure_8_7d_subgroup_discontinuation.png
