@@ -26,8 +26,8 @@ FDA_real_world_data/
 │   ├── analysis_8-3_*.py  — Preset parameter changes (scale factors)
 │   ├── analysis_8-4_*.py  — Preset activation duration
 │   ├── analysis_8-5_*.py  — Demographic subgroup analysis (age/gender/YLD)
-│   ├── analysis_8-6_*.py  — Socioeconomic subgroup analysis (stable AB cohort)
-│   ├── analysis_8-7_*.py  — Autobolus adoption durability (Kaplan-Meier)
+│   ├── analysis_8-6_*.py  — Socioeconomic subgroup analysis (stable AB cohort). Two modes: `--mode export` (Databricks) writes `glycemic_endpoints_by_jaeb_id.csv` for the partner team; `--mode figures` (local, pure pandas/matplotlib) reads the partner's returned summary CSV (median/Q1/Q3 of TIR, TBR, hypoEventRate14Day across Race/Ethnicity, Income, Education, Insurance, helpStartLoop) and renders figures 8.6a/b/c via `ax.bxp()` with whiskers collapsed to the IQR
+│   ├── analysis_8-7_*.py  — Autobolus adoption durability. `--mode default` (Databricks): Table 8.7a + Figures 8.7a (stacked bar), 8.7b (KM retention curve) and 8.7c (per-user trajectories), plus `autobolus_durability_by_jaeb_id.csv` for the partner team. `--mode figures` (local): reads the partner's per-subgroup CSV (N, NumDiscontinued, PropDiscontinued, Barnard's-test RD + 99% Bonferroni CI + p-value, across the same five subgroups as 8-6) and renders Figure 8.7d — one panel per subgroup, two boxes per panel via `ax.bxp()` with whiskers collapsed to the per-level 95% Clopper-Pearson CI on the proportion
 │   ├── analysis_8-8_*.py  — Carbohydrate consumption consistency
 │   ├── plot_stable_ab_sample_size.py — CONSORT chart, sample size heatmap, AB% distribution
 │   └── utils/

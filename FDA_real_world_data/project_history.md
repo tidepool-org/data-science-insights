@@ -4,6 +4,18 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-05-13: Analysis 8-7 — Figure 8.7d from partner subgroup discontinuation stats
+
+Symmetric to the 8-6 figures change: 8-7 was already exporting `autobolus_durability_by_jaeb_id.csv` to the partner; they returned per-subgroup discontinuation statistics (`RWD_Autobolus_Figure_8-7_Data_05-05-26.csv` — N, NumDiscontinued, PropDiscontinued for each of two levels across Race/Ethnicity, Income, Education, Insurance, helpStartLoop, plus a Barnard's-test risk-difference 99% Bonferroni-corrected CI + p-value per subgroup). Added a `--mode figures` path to `analysis_8-7_autobolus_adoption_durability.py` that reads that CSV and renders `figure_8_7d_subgroup_discontinuation.png` using the same 5-panel `ax.bxp()` idiom as 8.6 — one panel per subgroup, two boxes per panel. The CSV gives only point-estimate proportions (no per-level CI), so the box bounds are 95% Clopper-Pearson CIs computed locally from `(N, NumDiscontinued)` via the existing `clopper_pearson_ci` helper. The Barnard's-test p-value from the CSV is annotated in each panel title; the risk-difference CI from the CSV is reported but not plotted (a forest variant was considered and rejected in favour of visual consistency with 8.6). The existing Databricks-side outputs (Figures 8.7a/b/c, Table 8.7a, the JAEB CSV) are unchanged.
+
+---
+
+## 2026-05-11: Analysis 8-6 — subgroup figures from partner summary stats
+
+Analysis 8-6 was previously a one-way Databricks export: ship `glycemic_endpoints_by_jaeb_id.csv` to the partner team and they ran the socioeconomic stratification on their side. The partner has returned the summary statistics (`RWD_Autobolus_Figure_8-6_Data_05-05-26.csv` — median, Q1, Q3 of TIR, TBR, and 14-day hypo-event rate for two-level splits across Race/Ethnicity, Income, Education, Insurance, helpStartLoop). Added a second mode to the same script (`--mode figures`, pure pandas/matplotlib, no Spark) that reads that CSV and renders three figures (`figure_8_6a_tir.png`, `figure_8_6b_tbr.png`, `figure_8_6c_hypo_rate.png`) — one per metric, five subgroup panels each, two boxes per panel. Since the partner only returned quartiles, boxes are drawn via `ax.bxp()` with `whislo = q1` / `whishi = q3` so the figure shows IQR + median only (no whiskers, no fliers). Colors follow the report's `COLORS_PRIMARY` / `COLORS_SECONDARY` pairing used for two-group comparisons in 8-2 / 8-3, and font sizes come from the shared `FONT` dict. The export path is unchanged and stays the default mode.
+
+---
+
 ## 2026-05-11: Terminal-dropoff handling for autobolus durability; age-eligibility boundary fix; COHORT_WHERE centralization
 
 Two-part fix to the durability pipeline. (1) Users whose data goes dark mid-tenure were previously dropped by the final-28-day coverage gate, regardless of what they were doing right before they vanished. Now `export_autobolus_durability.py` detects a terminal dropoff via a rolling 28-day coverage window, anchors `effective_last_day` at the last day before coverage permanently fell below 70%, and classifies the user by `pre_dropoff_ab_pct` in the 28 days ending at that day — low pre-dropoff AB% → discontinued (deactivated AB before going dark), high pre-dropoff AB% → censored as still on AB (we just stopped observing). (2) `export_autobolus_event_times.py` adds a `dropoff_events` CTE that emits a discontinuation event at the dropoff week only for users the durability table classifies `is_discontinued = 1`; high-AB dropoffs censor naturally at their last observed week in the analysis layer.

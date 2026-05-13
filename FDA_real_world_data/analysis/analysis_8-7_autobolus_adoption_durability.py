@@ -16,14 +16,20 @@ Inputs:
 - dev.fda_510k_rwd.autobolus_event_times (export_autobolus_event_times.sql)
 - dev.default.jaeb_upload_to_userid      (PtID ↔ userid linkage)
 - dev.default.bddp_sample_all_2          (uploadID → userid)
-Outputs:
+Outputs (Databricks `--mode default`):
 - Table  8.7a: Overall durability (sustained vs. discontinued)
 - Figure 8.7a: Stacked bar chart of sustained vs. discontinued
 - Figure 8.7b: Kaplan-Meier-style autobolus retention curve
+- Figure 8.7c: Per-user trajectories
 - CSV:   autobolus_durability_by_jaeb_id.csv (per-user, keyed by PtID)
+
+Outputs (local `--mode figures`, from partner-returned summary CSV):
+- Figure 8.7d: Discontinuation rate by demographic subgroup (box plot of
+  proportion + 95% Clopper-Pearson CI per level; same panel layout as 8.6)
 =============================================================================
 """
 
+import argparse
 import os
 
 import matplotlib.pyplot as plt
@@ -34,6 +40,17 @@ from scipy.stats import beta as beta_dist
 from utils.constants import COLORS_ACCENT, COLORS_PRIMARY, COLORS_SECONDARY, FONT
 
 OUTPUT_DIR = "outputs/analysis_8_7"
+
+# Subgroup figure (figure 8.7d) — partner returns one row per (subgroup, level)
+# with N, NumDiscontinued, PropDiscontinued, and a Bonferroni-corrected CI on
+# the between-level risk difference + p-value. Left-to-right panel order:
+SUBGROUP_ORDER = [
+    ("Race/Ethnicity", "Race / Ethnicity"),
+    ("Income",         "Income"),
+    ("Education",      "Education"),
+    ("Insurance",      "Insurance"),
+    ("helpStartLoop",  "Help Starting Loop"),
+]
 
 
 # =============================================================================
@@ -460,5 +477,120 @@ def run_in_databricks(spark):
     return run_analysis(spark)
 
 
+# =============================================================================
+# Figure 8.7d — Discontinuation by subgroup (from partner summary CSV)
+# =============================================================================
+
+
+def load_subgroup_discontinuation_stats(csv_path: str) -> pd.DataFrame:
+    """Load the partner's per-subgroup discontinuation CSV. Splits the
+    `SubGroupCategory` numeric-prefix off for display."""
+    df = pd.read_csv(csv_path)
+    df["display_label"] = df["SubGroupCategory"].str.split(".", n=1).str[1]
+    return df
+
+
+def create_figure_8_7d(stats_df: pd.DataFrame, filepath: str):
+    """Discontinuation rate by demographic subgroup.
+
+    One panel per subgroup, two boxes per panel: each box is centered at the
+    point-estimate proportion (`PropDiscontinued`), with whiskers collapsed to
+    the 95% Clopper-Pearson CI bounds computed from `N` and `NumDiscontinued`.
+    p-value (Barnard's, Bonferroni-corrected) annotated in each panel title.
+    """
+    fig, axes = plt.subplots(1, len(SUBGROUP_ORDER), figsize=(15, 5), sharey=True)
+
+    for ax, (subgroup, display) in zip(axes, SUBGROUP_ORDER):
+        rows = (
+            stats_df[stats_df["SubGroup"] == subgroup]
+            .sort_values("SubGroupCategory")
+        )
+        if len(rows) != 2:
+            ax.text(0.5, 0.5, f"Expected 2 levels,\ngot {len(rows)}",
+                    ha="center", va="center", fontsize=FONT["annotation"],
+                    transform=ax.transAxes)
+            ax.set_title(display, fontsize=FONT["title"], fontweight="bold")
+            continue
+
+        boxes = []
+        for _, r in rows.iterrows():
+            lo, hi = clopper_pearson_ci(int(r["NumDiscontinued"]), int(r["N"]))
+            p = r["PropDiscontinued"]
+            boxes.append({"med": p, "q1": lo, "q3": hi,
+                          "whislo": lo, "whishi": hi, "fliers": []})
+
+        bp = ax.bxp(boxes, positions=[0, 1], widths=0.5,
+                    patch_artist=True, showcaps=False, showfliers=False)
+        bp["boxes"][0].set(facecolor=COLORS_PRIMARY, alpha=0.7)
+        bp["boxes"][1].set(facecolor=COLORS_SECONDARY, alpha=0.7)
+
+        for pos, (_, r) in zip([0, 1], rows.iterrows()):
+            _, hi = clopper_pearson_ci(int(r["NumDiscontinued"]), int(r["N"]))
+            ax.text(pos, hi + 0.02, f"n={int(r['N'])}",
+                    ha="center", va="bottom", fontsize=FONT["tick"] - 2)
+
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels(rows["display_label"].tolist(),
+                           fontsize=FONT["tick"], rotation=15, ha="right")
+        ax.tick_params(axis="y", labelsize=FONT["tick"])
+
+        p_val = rows["pValue"].dropna()
+        p_str = f"p = {p_val.iloc[0]:.3f}" if len(p_val) else ""
+        title = display if not p_str else f"{display}\n{p_str}"
+        ax.set_title(title, fontsize=FONT["title"], fontweight="bold")
+        ax.grid(axis="y", alpha=0.3)
+
+    axes[0].set_ylabel("Discontinuation Rate", fontsize=FONT["axis_label"])
+    plt.suptitle(
+        "Figure 8.7d: Discontinuation Rate by Demographic Subgroup\n"
+        "(box = point estimate ± 95% Clopper-Pearson CI)",
+        fontsize=FONT["suptitle"], fontweight="bold", y=1.02,
+    )
+    plt.tight_layout()
+
+    plt.savefig(filepath, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved: {filepath}")
+
+
+def render_subgroup_figure(csv_path: str, output_dir: str = OUTPUT_DIR):
+    os.makedirs(output_dir, exist_ok=True)
+    print("=" * 60)
+    print("Analysis 8.7: Subgroup Discontinuation Figure")
+    print("=" * 60)
+    print(f"\nInput CSV: {csv_path}")
+
+    stats_df = load_subgroup_discontinuation_stats(csv_path)
+    path = os.path.join(output_dir, "figure_8_7d_subgroup_discontinuation.png")
+    create_figure_8_7d(stats_df, path)
+
+    print("\n" + "=" * 60)
+    print(f"Outputs saved to: {output_dir}/")
+    print("=" * 60)
+
+
+# =============================================================================
+# CLI dispatcher
+# =============================================================================
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description="Analysis 8.7")
+    parser.add_argument("--mode", choices=("default", "figures"), default="default",
+                        help="default: full Databricks analysis. "
+                             "figures: render Figure 8.7d from partner summary CSV.")
+    parser.add_argument("--input-csv", default=None,
+                        help="Path to partner summary CSV (required for --mode figures).")
+    parser.add_argument("--output-dir", default=OUTPUT_DIR,
+                        help=f"Output directory (default: {OUTPUT_DIR}).")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    run_in_databricks(spark)  # type: ignore[name-defined]
+    args = _parse_args()
+    if args.mode == "figures":
+        if not args.input_csv:
+            raise SystemExit("--mode figures requires --input-csv PATH")
+        render_subgroup_figure(args.input_csv, args.output_dir)
+    else:
+        run_in_databricks(spark)  # type: ignore[name-defined]
