@@ -4,30 +4,47 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
-## 2026-05-13: Integration tests — first end-to-end Databricks run of `test_analysis_8_1.py`
+## 2026-05-14: Integration tests — full Databricks suite for analyses 8-1 through 8-8
 
-The May-1 scaffold ([testing/integration/](testing/integration/)) had never executed against Databricks until today; first-run surfaced four latent bugs in [build_synthetic_bddp.py](testing/integration/build_synthetic_bddp.py), all now fixed. The 8-1 proof-of-concept now passes all six assertion blocks end-to-end.
+The May-1 [testing/integration/](testing/integration/) scaffold had never run against Databricks; this pass brings it to life. 20 deterministic synthetic users in [build_synthetic_bddp.py](testing/integration/build_synthetic_bddp.py) feed end-to-end tests `test_analysis_8_1.py` through `test_analysis_8_8.py`, plus a [run_all_tests.py](testing/integration/run_all_tests.py) sequencer. First-run shakeout surfaced bugs in both the fixture builder (now fixed) and the production analyses (two real bugs fixed, one defensive guard added).
 
-### Hour-overflow in day-row emitters
-`_temp_basal_day_rows` and `_autobolus_day_rows` were stepping one event per hour starting at 06:00 (`datetime(..., 6 + i, 0, 0)`). Every archetype passes `n_events=20`, so `i=18` produced hour=24 and raised `ValueError`. Switched to 30-min stepping from a 06:00 base — 20 events now run 06:00 → 15:30 within the day. Staging thresholds remain satisfied (AB-day ≥3 smb boluses per `export_valid_transition_segments.py:51`; TB-day ≥1 temp basal per `:59`; no event-spacing requirement).
+### Fixture-builder bugs (build_synthetic_bddp.py)
+- **Hour-overflow** in `_temp_basal_day_rows` / `_autobolus_day_rows`: `datetime(..., 6 + i, 0, 0)` with `n_events=20` raised `ValueError: hour must be in 0..23`. Switched to 30-min stepping from a 06:00 base — 20 events run 06:00 → 15:30. AB-day (≥3 smb) and TB-day (≥1 temp basal) thresholds remain satisfied.
+- **Databricks Connect all-None-column drop**: pandas→Arrow silently dropped every BDDP column that was None in every fixture row (`overridePreset`, scale factors, JSON columns), and `export_overrides_from_transitions`'s `WHERE overridePreset IS NOT NULL` crashed with `INTERNAL_ERROR_ATTRIBUTE_NOT_FOUND`. Added an explicit `BDDP_SCHEMA` DDL string (33 columns including `uploadID`) and `.option("overwriteSchema", "true")` on the write. The zero/empty-fill workaround from `testing/data_staging/` doesn't apply here — `""` would pass `IS NOT NULL`.
+- **pumpSettings dated before the segment window**: `_pump_settings_row` defaulted `setup_day=date(2023, 12, 31)`, one day before `SEG1_START`. `export_segments_within_guardrails.py:574-577` joins on `BETWEEN seg1_start AND seg2_end`, so the fixture row was silently excluded — `int_user_06`'s 200 mg/dL guardrail violation never surfaced and the cohort filter passed it through. Anchored `setup_day=SEG1_START`.
+- **TIR target unrepresentable**: `_archetype_tir_decliner`'s 60% seg2 target produced 173/288 = 60.069%, not 60. Switched to 62.5% (180/288 = exact).
+- **Carb-entry outlier**: 180 g/day single food rows for `int_user_13` / `_14` exceeded 8-8's per-entry `carb_grams <= 150` outlier filter ([analysis_8-8_*.py:107-108](analysis/analysis_8-8_carbohydrate_consumption_consistency.py#L107-L108)). Split each day's carbs into 3 meals (breakfast / lunch / dinner) so per-entry amounts stay under the threshold.
 
-### Databricks Connect all-None-column drop
-The fixture's pandas→Arrow path silently dropped any BDDP column that was `None` in every row (`overridePreset`, `basalRateScaleFactor`, `bgTarget`, etc.), causing the downstream `WHERE overridePreset IS NOT NULL` in `export_overrides_from_transitions` to crash with `INTERNAL_ERROR_ATTRIBUTE_NOT_FOUND`. Added an explicit `BDDP_SCHEMA` DDL string (32 columns, mostly string + double + bigint) and pass it to `spark.createDataFrame(rows, schema=BDDP_SCHEMA)`. Also added `.option("overwriteSchema", "true")` so stale Delta tables from prior failed runs get replaced cleanly. The zero/empty-fill workaround used elsewhere wouldn't apply here — `""` would slip past `IS NOT NULL`.
+### Production bugs (caught by the new tests, fixed in analysis code)
+- **8-4 seg3 pollution**: The May-6 P2 closure introduced `tb_to_ab_seg3` rows in `overrides_by_segment` and made `dosing_mode` collapse both AB segments to `'autobolus'`. 8-3 was updated to filter `segment IN ('tb_to_ab_seg1', 'tb_to_ab_seg2')` in that commit; **8-4 was missed** and silently double-counted seg3 activations into the AB-side. The test caught it (`int_user_08 seg2 expected 6 activations; got 12.0`). Added the matching filter to [analysis_8-4_preset_activation_duration.py:77](analysis/analysis_8-4_preset_activation_duration.py#L77). Affects production output for any user with preset activations in days 14-28 of seg2.
+- **8-3 polyfit SVD failure on degenerate input**: `create_figure_8_3c`'s `np.polyfit(x, y, 1)` raised `LinAlgError: SVD did not converge` whenever a paired-delta axis had zero variance. Guarded with `np.std(x) > 0 and np.std(y) > 0`; degenerate axes now render the scatter and annotate `n=N (no variance)` instead of crashing. Defensive fix — production data won't usually hit this but small subgroups could.
 
-### pumpSettings dated before the segment window
-`_pump_settings_row` defaulted `setup_day=date(2023, 12, 31)`, one day before `SEG1_START`. The guardrails staging script joins pumpSettings to segments with `TRY_CAST(time_string AS DATE) BETWEEN seg1_start AND seg2_end` ([export_segments_within_guardrails.py:574-577](data_staging/export_segments_within_guardrails.py#L574-L577)) — the fixture row was silently dropped, leaving `valid_transition_guardrails` empty for `int_user_06` and letting the guardrail-violator archetype pass the cohort filter despite `bg_target_high = 200 mg/dL`. Anchored `setup_day=SEG1_START` and added a docstring note.
+### Archetypes (20 total)
+| Archetype | Role | Tests |
+|---|---|---|
+| `int_user_01..03` | TIR-improver / decliner / hypo-event | 8-1 |
+| `int_user_04..07` | Cohort-filter drops: Loop version, cbg coverage, guardrail, age | 8-1 |
+| `int_user_08` | Multi-preset (Workout/Sleep/Pre-meal × seg1/2/3, sparse cbg) | 8-2/3/4 |
+| `int_user_09` | Single-preset AB-only (fails validity gate) | 8-2/3 |
+| `int_user_12..14` | Carb-change strata (stable / +50% / -33%) | 8-8 |
+| `int_user_15..16` | Demographic reps (Children bin, Older Adults bin) | 8-5 |
+| `int_user_19..20` | Stable-AB cohort (JAEB-linked / not-linked) | 8-6 |
+| `int_user_21..23` | Adoption durability (sustained / discontinued / insufficient followup) | 8-7 |
+| `int_user_24` | Per-entry carb outlier (200 g rows exceed filter) | 8-8 |
 
-### TIR target unrepresentable with 288 readings × 14 days
-`_archetype_tir_decliner`'s seg2 target was 60% TIR, but `_cbg_day_at_target_tir(60.0)` produces 173/288 in-range = 60.0694…% (4032 isn't a multiple of 5). The test asserted exact equality to 60.0 and failed. Changed the decliner's seg2 to 62.5% (180/288 = exactly 0.625), preserving the ~12-point decline narrative. Updated [archetypes.md](testing/integration/archetypes.md) and [test_analysis_8_1.py](testing/integration/test_analysis_8_1.py) assertion + docstring + print message to match.
+To support 8-6's `uploadID` join, BDDP_SCHEMA gained a 33rd column (`uploadID string`) and `build_jaeb_link()` now writes a single row mapping `upload_19 → ptid_19`. `_set_upload_id()` stamps the column on int_user_19's rows post-build.
 
-### Test now self-contained
-`test_analysis_8_1.py` calls `run_pipeline.teardown(spark)` before `run()`, so every invocation starts from a clean catalog state and the `_all_terminal_tables_exist` idempotency guard doesn't masquerade stale fixture data as the current shape. Defeats per-session amortization across 8-2..8-8 tests; revisit when those tests land (move teardown to a shared setup or gate it behind an env flag).
+### Infrastructure
+- `run_pipeline.get_spark()` tries `SparkSession.builder.getOrCreate()` first (Databricks notebook) and falls back to `DatabricksSession.builder.getOrCreate()` (local Databricks Connect via `~/.databrickscfg`). Each test calls this so the same source runs in both environments.
+- `run_pipeline.session(spark)` is a thin context manager that calls `run(spark)` and yields — no automatic teardown. Tables persist across runs via the `_all_terminal_tables_exist` idempotency guard so sequential tests amortize the pipeline build. Explicit `run_pipeline.teardown(spark)` if you want a clean rebuild.
+- `run_all_tests.py` sequences all eight tests via `runpy.run_path` and prints a pass/fail summary.
 
-### Known gap (deferred follow-up)
-`export_segments_within_guardrails.py`'s `BETWEEN seg1_start AND seg2_end` join means users whose last pumpSettings event predates seg1_start (i.e. their existing settings haven't changed during the segment — common in production) get no row in `valid_transition_guardrails`. The analysis-side filter (`~seg_keys.isin(bad_segments)` where `bad_segments` requires `violation_count > 0`) treats "no record" as "no violation" and lets the user pass. The simulation-export pipeline at `export_single_user_day.py:343` already uses the right `MAX_BY` "latest as-of" pattern; the analysis-cohort path should mirror it. Same gap exists in stable-AB mode and in `isf_for_valid_transition.py`. Out of scope for this slice — affects production analysis output for 8-1 through 8-8 if changed.
+### Loosened 8-1 assertions
+Adding `int_user_12..16` (full-TIR shape) would have broken 8-1's exact-equality `user_ids == {01, 02, 03}` and `N == 3` assertions. Both are now containment-style: the three named survivors must be present, named drops (04/05/06/07/08/09) must be absent, and `tir_row["N"]` must equal the cohort size (whatever it is).
 
-### Architecture.md
-Added a `testing/integration/` entry under the `testing/` tree (the directory has existed since May 1 but was never indexed).
+### Still deferred
+- `int_user_10` (no-preset baseline), `_11` (heavy preset extreme), `_17`/`_18` (additional YLD demographic reps) — covered implicitly by existing archetypes; no test path currently exercises them.
+- The production staging gap where pumpSettings recorded before `seg1_start` are silently excluded from `valid_transition_guardrails`. The simulation-export pipeline at `export_single_user_day.py:343` already uses the right `MAX_BY` "latest as-of" pattern; the analysis-cohort path should mirror it. Affects 8-1 through 8-8 production output if changed.
 
 **Commit:** _not yet committed_
 

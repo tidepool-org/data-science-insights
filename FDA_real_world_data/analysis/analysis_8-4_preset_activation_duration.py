@@ -74,6 +74,7 @@ def load_data(spark) -> pd.DataFrame:
     overrides_df = (
         spark.table("dev.fda_510k_rwd.overrides_by_segment")
         .join(allowed_segments, on=["_userId", "tb_to_ab_seg1_start"], how="inner")
+        .filter("segment IN ('tb_to_ab_seg1', 'tb_to_ab_seg2')")
         .select("_userId", "dosing_mode", "duration")
         .toPandas()
     )

@@ -22,6 +22,7 @@ DAG order (mirrors `fda_analysis_pipeline.yml`):
 
 import os
 import sys
+from contextlib import contextmanager
 
 from . import build_synthetic_bddp
 
@@ -69,6 +70,24 @@ TERMINAL_TABLES = (
     "valid_transition_carbs",
     "autobolus_event_times",
 )
+
+
+def get_spark():
+    """Return a SparkSession that works on Databricks notebooks AND locally
+    via Databricks Connect.
+
+    Inside a Databricks notebook, `SparkSession.builder.getOrCreate()` returns
+    the runtime session. Locally, that call raises `RuntimeError("Only remote
+    Spark sessions using Databricks Connect are supported.")`; in that case
+    we fall back to `DatabricksSession.builder.getOrCreate()` which honors
+    `~/.databrickscfg`.
+    """
+    try:
+        from pyspark.sql import SparkSession  # type: ignore
+        return SparkSession.builder.getOrCreate()
+    except RuntimeError:
+        from databricks.connect import DatabricksSession  # type: ignore
+        return DatabricksSession.builder.getOrCreate()
 
 
 def _ensure_staging_on_path():
@@ -266,11 +285,22 @@ def run(spark, force=False):
 
 
 def teardown(spark):
-    """Drop every test table. Call from the bottom of an integration test
-    when you want a clean slate; not invoked automatically (tables are
-    cheap and reuse across tests is the point of the idempotency guard)."""
+    """Drop every test table. Call explicitly from a notebook cell when
+    you want a clean rebuild; never invoked automatically. Tables persist
+    across runs via the idempotency guard, so the test suite reuses
+    pipeline output even after a failure."""
     _drop_all(spark)
     print("[integration.run_pipeline] dropped all test tables")
+
+
+@contextmanager
+def session(spark):
+    """Build the pipeline up front; yield. No automatic teardown — tables
+    persist across runs via `_all_terminal_tables_exist`. Call
+    `run_pipeline.teardown(spark)` explicitly to force a rebuild.
+    """
+    run(spark)
+    yield
 
 
 # Map prod table name -> test table name. Used by RedirectingSpark to swap

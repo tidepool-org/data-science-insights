@@ -26,7 +26,9 @@ SEG1_START = date(2024, 1, 1)
 SEG1_END = date(2024, 1, 14)
 SEG2_START = date(2024, 1, 15)
 SEG2_END = date(2024, 1, 28)
-WINDOW_END = date(2024, 1, 28)
+SEG3_START = date(2024, 1, 29)
+SEG3_END = date(2024, 2, 11)
+WINDOW_END = date(2024, 2, 11)
 
 # Stable-AB and durability windows live later so they don't collide with
 # transition fixtures (a single _userId could in principle have both, but
@@ -76,6 +78,7 @@ BDDP_COLUMNS = [
     "bgSafetyLimit",
     "bgTargetPreprandial",
     "bgTargetPhysicalActivity",
+    "uploadID",
 ]
 
 BDDP_SCHEMA = (
@@ -110,7 +113,8 @@ BDDP_SCHEMA = (
     "`bolus` string, "
     "`bgSafetyLimit` double, "
     "`bgTargetPreprandial` string, "
-    "`bgTargetPhysicalActivity` string"
+    "`bgTargetPhysicalActivity` string, "
+    "`uploadID` string"
 )
 
 
@@ -446,6 +450,309 @@ def _archetype_guardrail_violator(user_id="int_user_06"):
     return rows
 
 
+def _archetype_age_filtered(user_id="int_user_07"):
+    """5y M — dropped by the age >= 6 cohort gate (COHORT_WHERE in
+    `analysis/utils/data_loading.py`). Full TIR shape so the user would
+    otherwise pass every other filter; isolates the age filter as the
+    sole reason for exclusion."""
+    rows = [_pump_settings_row(user_id)]
+    for d_idx in range(14):
+        day = SEG1_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(75.0)))
+        rows.extend(_temp_basal_day_rows(user_id, day, n_events=20))
+    for d_idx in range(14):
+        day = SEG2_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(75.0)))
+        rows.extend(_autobolus_day_rows(user_id, day, n_events=20))
+    return rows
+
+
+# Days within each segment (0-indexed) where int_user_08 / int_user_09 carry
+# cbg + override activations. Three days per segment → 864 cbg readings per
+# segment, well below 8-1's 2,822-reading coverage threshold, so 08/09 drop
+# out of 8-1's cohort while still providing per-activation glucose for 8-2.
+_PRESET_ACTIVATION_DAYS = (2, 7, 12)
+
+# Three preset names, each emitted twice per segment so all three satisfy
+# the `is_valid_name_only_seg{2,3}` ≥2-per-phase gate. Distributing two
+# presets per day across three days (rather than three presets per day on
+# fewer days) keeps activation windows non-overlapping (3 h each at 10:00
+# and 14:00). The 18 total activations per user give 8-2 three paired
+# groups in `_all` after aggregation, clearing build_datasets' ≥3 threshold.
+_PRESET_SLOTS = (
+    # (day_index_within_segment, hour, preset_name)
+    (2, 10, "Workout"),
+    (2, 14, "Sleep"),
+    (7, 10, "Workout"),
+    (7, 14, "Pre-meal"),
+    (12, 10, "Sleep"),
+    (12, 14, "Pre-meal"),
+)
+
+
+def _emit_workout_segment(user_id, seg_start, day_event_rows_fn):
+    """Build 14 days within one segment for int_user_08: events on every day
+    (for transition classification), cbg + preset activations on the three
+    activation days.
+    """
+    rows = []
+    for d_idx in range(14):
+        day = seg_start + timedelta(days=d_idx)
+        if d_idx in _PRESET_ACTIVATION_DAYS:
+            rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(100.0)))
+        for slot_day, slot_hour, preset in _PRESET_SLOTS:
+            if slot_day == d_idx:
+                rows.append(_override_row(
+                    user_id,
+                    when=datetime(day.year, day.month, day.day, slot_hour, 0, 0),
+                    preset=preset,
+                    br_sf=0.7,
+                    cr_isf_sf=0.7,
+                    duration_seconds=3600,
+                ))
+        rows.extend(day_event_rows_fn(user_id, day, n_events=20))
+    return rows
+
+
+def _archetype_multi_preset(user_id="int_user_08"):
+    """Three preset names (Workout, Sleep, Pre-meal), each with 2 activations
+    in seg1, seg2, and seg3 — so every preset satisfies both
+    is_valid_name_only_seg2 and is_valid_name_only_seg3. After aggregation,
+    8-2 sees three paired groups (one per preset name) in `_all`, clearing
+    build_datasets' ≥3 threshold. Sparse cbg (3 days / segment) drops 08 from
+    8-1's cohort via the 70% coverage gate.
+    """
+    rows = [_pump_settings_row(user_id)]
+    rows.extend(_emit_workout_segment(user_id, SEG1_START, _temp_basal_day_rows))
+    rows.extend(_emit_workout_segment(user_id, SEG2_START, _autobolus_day_rows))
+    rows.extend(_emit_workout_segment(user_id, SEG3_START, _autobolus_day_rows))
+    return rows
+
+
+def _archetype_single_preset_ab_only(user_id="int_user_09"):
+    """One Workout activation, in seg2 only — fails 8-2's name-validity gate.
+
+    is_valid_name_only_seg2=FALSE (0 seg1 activations); is_valid_name_only_seg3=FALSE.
+    Excluded from 8.2b and 8.2c primary tables. Shares 08's sparse-cbg pattern,
+    so likewise drops out of 8-1's cohort.
+    """
+    rows = [_pump_settings_row(user_id)]
+    # seg1: TB events + cbg on activation days, but no Workouts (this is the
+    # excluded archetype's defining characteristic).
+    for d_idx in range(14):
+        day = SEG1_START + timedelta(days=d_idx)
+        if d_idx in _PRESET_ACTIVATION_DAYS:
+            rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(100.0)))
+        rows.extend(_temp_basal_day_rows(user_id, day, n_events=20))
+    # seg2: one Workout, on the first activation day.
+    for d_idx in range(14):
+        day = SEG2_START + timedelta(days=d_idx)
+        if d_idx in _PRESET_ACTIVATION_DAYS:
+            rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(100.0)))
+        if d_idx == _PRESET_ACTIVATION_DAYS[0]:
+            rows.append(_override_row(
+                user_id,
+                when=datetime(day.year, day.month, day.day, 10, 0, 0),
+                preset="Workout",
+                br_sf=0.7,
+                cr_isf_sf=0.7,
+                duration_seconds=3600,
+            ))
+        rows.extend(_autobolus_day_rows(user_id, day, n_events=20))
+    # seg3: AB events + cbg on activation days, no Workouts.
+    for d_idx in range(14):
+        day = SEG3_START + timedelta(days=d_idx)
+        if d_idx in _PRESET_ACTIVATION_DAYS:
+            rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(100.0)))
+        rows.extend(_autobolus_day_rows(user_id, day, n_events=20))
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Carb-change archetypes (int_user_12, _13, _14 for 8-8)
+# ---------------------------------------------------------------------------
+
+
+_MEAL_HOURS = (8, 13, 19)  # breakfast / lunch / dinner
+
+
+def _transition_user_with_carbs(user_id, seg1_carbs_per_day, seg2_carbs_per_day):
+    """Shared shape: 14-day TB seg1 + 14-day AB seg2 + full CBG + three meal
+    rows per day (breakfast / lunch / dinner) splitting the daily total.
+    Splitting avoids 8-8's per-entry outlier filter at 150 g (single 180 g
+    rows would be dropped). Same TIR target both segments so 8-1's cohort
+    sees a stable user."""
+    rows = [_pump_settings_row(user_id)]
+    for d_idx in range(14):
+        day = SEG1_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(75.0)))
+        rows.extend(_temp_basal_day_rows(user_id, day, n_events=20))
+        for hour in _MEAL_HOURS:
+            rows.append(_food_row(user_id, day, hour=hour, carb_grams=seg1_carbs_per_day / 3.0))
+    for d_idx in range(14):
+        day = SEG2_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(75.0)))
+        rows.extend(_autobolus_day_rows(user_id, day, n_events=20))
+        for hour in _MEAL_HOURS:
+            rows.append(_food_row(user_id, day, hour=hour, carb_grams=seg2_carbs_per_day / 3.0))
+    return rows
+
+
+def _archetype_stable_carbs(user_id="int_user_12"):
+    """~150 g/day in seg1 and seg2 — 0% change, lands in 8-8 `Consistent` (≤25%) stratum."""
+    return _transition_user_with_carbs(user_id, seg1_carbs_per_day=150.0, seg2_carbs_per_day=150.0)
+
+
+def _archetype_increased_carbs(user_id="int_user_13"):
+    """seg1 ~120 g/day → seg2 ~180 g/day (+50%) — 8-8 `Inconsistent / Increased` stratum."""
+    return _transition_user_with_carbs(user_id, seg1_carbs_per_day=120.0, seg2_carbs_per_day=180.0)
+
+
+def _archetype_decreased_carbs(user_id="int_user_14"):
+    """seg1 ~180 g/day → seg2 ~120 g/day (-33%) — 8-8 `Inconsistent / Decreased` stratum."""
+    return _transition_user_with_carbs(user_id, seg1_carbs_per_day=180.0, seg2_carbs_per_day=120.0)
+
+
+def _archetype_carb_outlier(user_id="int_user_24"):
+    """Single 200 g food entry per day — exceeds 8-8's per-entry ≤150 g
+    outlier filter ([analysis_8-8_*.py:107-108]). Every carb row is
+    dropped by the filter; the user has no surviving carb data and is
+    excluded from 8-8's cohort via the INNER JOIN on
+    `valid_transition_carbs`. Full TIR data so 8-1's cohort still
+    includes them (and N grows by 1)."""
+    rows = [_pump_settings_row(user_id)]
+    for d_idx in range(14):
+        day = SEG1_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(75.0)))
+        rows.extend(_temp_basal_day_rows(user_id, day, n_events=20))
+        rows.append(_food_row(user_id, day, hour=12, carb_grams=200.0))
+    for d_idx in range(14):
+        day = SEG2_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(75.0)))
+        rows.extend(_autobolus_day_rows(user_id, day, n_events=20))
+        rows.append(_food_row(user_id, day, hour=12, carb_grams=200.0))
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Demographic representatives (int_user_15, _16 for 8-5)
+# ---------------------------------------------------------------------------
+
+
+def _transition_user_stable_tir(user_id, tir_pct=75.0):
+    """Bare transition user: TB seg1, AB seg2, full CBG at fixed TIR, no overrides.
+    Same shape for both demographic reps; bin assignment happens via _DEMOGRAPHICS."""
+    rows = [_pump_settings_row(user_id)]
+    for d_idx in range(14):
+        day = SEG1_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(tir_pct)))
+        rows.extend(_temp_basal_day_rows(user_id, day, n_events=20))
+    for d_idx in range(14):
+        day = SEG2_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(tir_pct)))
+        rows.extend(_autobolus_day_rows(user_id, day, n_events=20))
+    return rows
+
+
+def _archetype_demo_child(user_id="int_user_15"):
+    """8y M — Children (6–<12) age bin for 8-5; passes 8-1 cohort."""
+    return _transition_user_stable_tir(user_id)
+
+
+def _archetype_demo_senior(user_id="int_user_16"):
+    """70y F — Older Adults (≥65) age bin for 8-5; passes 8-1 cohort."""
+    return _transition_user_stable_tir(user_id)
+
+
+# ---------------------------------------------------------------------------
+# Stable-AB cohort archetypes (int_user_19, _20 for 8-6)
+# ---------------------------------------------------------------------------
+
+
+def _set_upload_id(rows, upload_id):
+    """Post-hoc set uploadID on every row. Used to link a stable-AB user to
+    a row in jaeb_upload_to_userid via the BDDP `uploadID` column."""
+    for r in rows:
+        r["uploadID"] = upload_id
+    return rows
+
+
+def _stable_ab_42_day_user(user_id):
+    """42 days of 100% AB starting 2024-06-01 — first-AB day = 2024-06-01,
+    stable 14-day window = days 28..41 (2024-06-29 to 2024-07-12). Full CBG
+    every day for 70%+ coverage. pumpSettings dated inside the stable window
+    so the guardrails staging script can match it."""
+    rows = [_pump_settings_row(user_id, setup_day=STABLE_START + timedelta(days=28))]
+    for d_idx in range(42):
+        day = STABLE_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(75.0)))
+        rows.extend(_autobolus_day_rows(user_id, day, n_events=20))
+    return rows
+
+
+def _archetype_stable_ab_jaeb(user_id="int_user_19"):
+    """Sustained 100% AB for 42 days + JAEB upload linkage. Lands in 8-6's
+    `glycemic_endpoints_by_jaeb_id` output via the INNER JOIN on `uploadID`."""
+    rows = _stable_ab_42_day_user(user_id)
+    return _set_upload_id(rows, "upload_19")
+
+
+def _archetype_stable_ab_no_jaeb(user_id="int_user_20"):
+    """Sustained 100% AB for 42 days WITHOUT JAEB linkage. Reaches
+    `stable_autobolus_segments` and `glycemic_endpoints_stable_autobolus`
+    but is excluded from 8-6's per-PtID output (no matching uploadID)."""
+    return _stable_ab_42_day_user(user_id)
+
+
+# ---------------------------------------------------------------------------
+# Durability cohort archetypes (int_user_21, _22, _23 for 8-7)
+# ---------------------------------------------------------------------------
+
+
+# Durability window — disjoint from the transition window
+# (2024-01-01..2024-02-11) and adjacent to the stable-AB window. 60 days
+# gives ≥56 days post-adoption for the sustain/discontinue archetypes;
+# 35 days fails the min_followup gate.
+
+
+def _archetype_adopt_sustain(user_id="int_user_21"):
+    """100% AB every day for 60 days. Adoption (rolling 3-day AB% ≥ 80%)
+    fires by day 2; final 28-day AB% = 100% → sustained in 8-7's Table 8.7a."""
+    rows = [_pump_settings_row(user_id, setup_day=STABLE_START)]
+    for d_idx in range(60):
+        day = STABLE_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(75.0)))
+        rows.extend(_autobolus_day_rows(user_id, day, n_events=20))
+    return rows
+
+
+def _archetype_adopt_discontinue(user_id="int_user_22"):
+    """Adopts day 2 (100% AB days 0..29), then discontinues — days 30..59
+    have temp-basal events only (AB% = 0%). Rolling 4-week AB% drops below
+    20% by day 50 → registers as event in 8-7's KM curve."""
+    rows = [_pump_settings_row(user_id, setup_day=STABLE_START)]
+    for d_idx in range(30):
+        day = STABLE_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(75.0)))
+        rows.extend(_autobolus_day_rows(user_id, day, n_events=20))
+    for d_idx in range(30, 60):
+        day = STABLE_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(75.0)))
+        rows.extend(_temp_basal_day_rows(user_id, day, n_events=20))
+    return rows
+
+
+def _archetype_insufficient_followup(user_id="int_user_23"):
+    """100% AB every day for 35 days. Adopts day 2 but only 33 days follow-up
+    < `min_followup_days` (56) → dropped by `autobolus_durability`'s gate."""
+    rows = [_pump_settings_row(user_id, setup_day=STABLE_START)]
+    for d_idx in range(35):
+        day = STABLE_START + timedelta(days=d_idx)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(75.0)))
+        rows.extend(_autobolus_day_rows(user_id, day, n_events=20))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Top-level fixture composition
 # ---------------------------------------------------------------------------
@@ -460,7 +767,21 @@ ARCHETYPES = {
     "int_user_04": _archetype_version_filtered,
     "int_user_05": _archetype_cbg_undercoverage,
     "int_user_06": _archetype_guardrail_violator,
-    # TODO: int_user_07..23 — see archetypes.md for the full catalog.
+    "int_user_07": _archetype_age_filtered,
+    "int_user_08": _archetype_multi_preset,
+    "int_user_09": _archetype_single_preset_ab_only,
+    "int_user_12": _archetype_stable_carbs,
+    "int_user_13": _archetype_increased_carbs,
+    "int_user_14": _archetype_decreased_carbs,
+    "int_user_15": _archetype_demo_child,
+    "int_user_16": _archetype_demo_senior,
+    "int_user_19": _archetype_stable_ab_jaeb,
+    "int_user_20": _archetype_stable_ab_no_jaeb,
+    "int_user_21": _archetype_adopt_sustain,
+    "int_user_22": _archetype_adopt_discontinue,
+    "int_user_23": _archetype_insufficient_followup,
+    "int_user_24": _archetype_carb_outlier,
+    # TODO: int_user_07, 10, 11, 17, 18 — see archetypes.md for the full catalog.
 }
 
 
@@ -497,6 +818,20 @@ _DEMOGRAPHICS = {
     "int_user_04": {"gender": "F", "age_years": 20, "yld_years": 8},
     "int_user_05": {"gender": "M", "age_years": 50, "yld_years": 20},
     "int_user_06": {"gender": "F", "age_years": 65, "yld_years": 30},
+    "int_user_07": {"gender": "M", "age_years": 5, "yld_years": 1},  # age <6 → dropped
+    "int_user_08": {"gender": "F", "age_years": 35, "yld_years": 10},
+    "int_user_09": {"gender": "M", "age_years": 28, "yld_years": 6},
+    "int_user_12": {"gender": "M", "age_years": 30, "yld_years": 5},
+    "int_user_13": {"gender": "F", "age_years": 40, "yld_years": 10},
+    "int_user_14": {"gender": "M", "age_years": 25, "yld_years": 3},
+    "int_user_15": {"gender": "M", "age_years": 8, "yld_years": 1},   # Children (6–<12) age bin
+    "int_user_16": {"gender": "F", "age_years": 70, "yld_years": 30}, # Older Adults (≥65) age bin
+    "int_user_19": {"gender": "F", "age_years": 35, "yld_years": 10},
+    "int_user_20": {"gender": "M", "age_years": 35, "yld_years": 10},
+    "int_user_21": {"gender": "F", "age_years": 30, "yld_years": 8},
+    "int_user_22": {"gender": "M", "age_years": 30, "yld_years": 8},
+    "int_user_23": {"gender": "F", "age_years": 30, "yld_years": 5},
+    "int_user_24": {"gender": "M", "age_years": 30, "yld_years": 5},
 }
 
 
@@ -523,9 +858,17 @@ def build_user_gender(spark, table_name):
 
 
 def build_jaeb_link(spark, table_name):
-    """Empty by default; analyses 8-6 / 8-7 will populate when their archetypes land."""
-    pdf = pd.DataFrame(columns=["_userId", "PtID"])
+    """One upload ↔ PtID row for int_user_19 (the JAEB-linked stable-AB
+    archetype). int_user_20 shares the same BDDP shape but has no row in
+    this table — 8-6's INNER JOIN on `uploadID` will exclude it.
+
+    Schema matches production: columns are `uploadID`, `PtID` (joined to
+    `bddp_sample_all_2.uploadID` per analysis_8-6_*.py:103-105 and
+    analysis_8-7_*.py:85-88).
+    """
+    rows = [{"uploadID": "upload_19", "PtID": "ptid_19"}]
+    pdf = pd.DataFrame(rows, columns=["uploadID", "PtID"])
     spark.createDataFrame(
-        pdf, schema="`_userId` string, `PtID` string"
-    ).write.mode("overwrite").saveAsTable(table_name)
-    print(f"Wrote 0 JAEB linkage rows to {table_name}")
+        pdf, schema="`uploadID` string, `PtID` string"
+    ).write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(table_name)
+    print(f"Wrote {len(rows)} JAEB linkage row(s) to {table_name}")

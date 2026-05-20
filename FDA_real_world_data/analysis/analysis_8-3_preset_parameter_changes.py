@@ -401,12 +401,16 @@ def create_figure_8_3c(df: pd.DataFrame, output_path: str):
         ax.axhline(0, color="lightgray", lw=0.8, ls="--")
         ax.axvline(0, color="lightgray", lw=0.8, ls="--")
 
-        if len(x) >= 3:
+        # Skip regression + correlation when either axis has zero variance —
+        # np.polyfit (SVD) and pearsonr both fail on degenerate input.
+        if len(x) >= 3 and np.std(x) > 0 and np.std(y) > 0:
             m, b = np.polyfit(x, y, 1)
             x_line = np.linspace(x.min(), x.max(), 100)
             ax.plot(x_line, m * x_line + b, color=COLORS_ACCENT, lw=1.5)
             r, p_r = pearsonr(x, y)
             annot = f"r={r:.2f}, {format_p(p_r)}\nn={len(x)}"
+        elif len(x) >= 3:
+            annot = f"n={len(x)} (no variance)"
         else:
             annot = f"n={len(x)} (insufficient)"
 
