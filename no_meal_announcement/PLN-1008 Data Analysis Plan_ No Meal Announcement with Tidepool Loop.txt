@@ -1,0 +1,896 @@
+﻿PLN: Data Analysis Plan: No Meal Announcement with Tidepool Loop
+	Doc ID: PLN-1008
+	Rev. 01
+	Effective Date: 2026-05-20
+	Page  of 
+	
+
+1. Purpose
+This data analysis plan describes a real-world data (RWD) evaluation of glycemic outcomes on days when Loop users effectively operated the system without announcing meals — that is, days with no carbohydrate entries (CE=0) — versus days on which the user entered carbohydrates as intended (CE>0). Three nested day classifications are pre-specified to span the range of no-meal-announcement (NMA)-like behavior: no carbohydrate entries and no bolus entries (CE=0 / BE=0), no carbohydrate entries and at most one bolus entry (CE=0 / BE≤1), and no carbohydrate entries with any number of boluses (CE=0 / BE≤∞). For each classification, glycemic outcomes on the NMA-like arm are compared against a within-user CE>0 comparator. The same NMA-vs-CE>0 contrasts are then re-examined as a function of the underlying Loop insulin delivery strategy (temp-basal-only vs. autobolus-on) to assess whether algorithmic behavior modifies the day-type effect. Finally, on NMA-like days, the effect of total daily insulin dose (TDD) is evaluated by stratifying each user's NMA-like days into Low-TDD and High-TDD relative to that user's personal average. Together, these analyses characterize Tidepool Loop 2.0 algorithmic performance in real-world scenarios where users disengage from meal announcement, complementing the autobolus performance evaluation in PLN-1001 by describing system behavior when stressed with varying degrees of uncertainty.
+2. References
+[1] B. P. Kovatchev et al., “Real-World Use of the Control-IQ Advanced Hybrid Closed-Loop System: Time in Closed Loop and Patterns of Use,” Diabetes Care, 2023.
+[2] J. W. Lum et al., “A Real-World Prospective Study of the Safety and Effectiveness of the Loop Open Source Automated Insulin Delivery System,” Diabetes Technology & Therapeutics, vol. 23, no. 5, pp. 367–375, May 2021, doi: 10.1089/dia.2020.0535.
+[3] F. Niu et al., “780G system achieved ADA-recommended time-in-range goals even on days users forgot to bolus,” Diabetes Care, January 7, 2026.
+[4] T. Battelino et al., “Clinical Targets for Continuous Glucose Monitoring Data Interpretation: Recommendations From the International Consensus on Time in Range,” Diabetes Care, vol. 42, no. 8, pp. 1593–1603, Aug. 2019.
+[5] PLN-1001 Data Analysis Plan: RWD Autobolus and Presets.
+3. Background
+Tidepool Loop is an interoperable Automated Glycemic Controller (iAGC) that modulates insulin delivery through an alternate controller enabled (ACE) insulin pump based on integrated continuous glucose monitor (iCGM) readings and user-configured therapy settings. In the predicate v1.0, the system delivered temporary basal rate modulation; v2.0 adds an automatic correction bolus (autobolus) dosing strategy. Both implementations are designed as hybrid closed-loop (HCL) systems, featuring an algorithm that accepts manual user inputs for meal announcements. However, in practice, the automated bolus dosing strategy is intended to respond more readily to rapidly rising glucose, meaning users may experience situations where light meals are effectively covered by automatic correction boluses without manual entry. As a result, the performance relationship of this feature amidst no meal announcement behavior is a necessary dynamic that must be explored. Characterizing these outcomes ensures adequate clinician and patient visibility into the system’s performance as it relates to varying daily eating and carbohydrate entry habits. 
+In real-world use, users may go for extended periods without announcing meals. Recent reports for commercial HCL systems describe meaningful glycemic outcomes on days when users do not announce meals (e.g., Kovatchev 2023 for Control-IQ; F. Niu 2026 for MiniMed 780G). The frequency, magnitude, and outcome of such no meal announcement behavior in the population using Loop has not yet been characterized. This analysis provides that characterization and is intended to inform benefit-risk discussion of Tidepool Loop 2.0 under conditions of reduced manual interaction.
+4. Overview and Objectives
+This analysis leverages data from the Tidepool Data Platform (TDP) to compare glycemic outcomes on no meal announcement days versus days with conventional user-initiated dosing. The unit of analysis is the user-day, pooled across users. The same Loop RWD cohort and time window used in PLN-1001 will be reused; no new data extraction is required.
+Primary Objectives
+* Compare time in glycemic ranges on no meal announcement days versus bolus days under each of the three pre-specified day classifications (CE=0 / BE=0, CE=0 / BE≤1, CE=0 / BE≤∞) (Analysis 1).
+Secondary Objectives
+* Evaluate whether the glycemic outcomes on NMA-like days depend on the underlying Loop delivery strategy (autobolus-on vs. temp-basal-only), under each of the three day classifications (Analysis 2).
+* Evaluate the effect of TDD on glycemic outcomes on NMA-like days (Analysis 3).
+* Describe the frequency and distribution of each no meal announcement day type in the Loop RWD cohort (proportion of users contributing any no meal announcement days; distribution of no meal announcement day counts per user, per classification).
+* Describe user behavior on bolus days (mean and median meal boluses per day; mean and median manual/correction boluses per day).
+
+
+Endpoints
+* Percent time in canonical glucose ranges: <54, <70, 70–180, >180, >250 mg/dL.
+* Mean sensor glucose.
+* Number of hypoglycemic events (defined as 3 consecutive CGM readings below 54 mg/dL, ending at 3 consecutive CGM readings ≥ 70 mg/dL).
+* Coefficient of variation (CV) of sensor glucose.
+* Day counts and user counts in each arm.
+
+
+5. Materials and Tools
+Data extraction and transformation will be performed using SQL and Python in a Databricks environment. Statistical analysis will be conducted in Python using standard scientific computing libraries (pandas, numpy, statsmodels, scipy). Code will be version-controlled and archived with the final analysis report. Where applicable, computational pipelines from PLN-1001 will be reused (e.g., day-level CGM aggregation, glycemic range calculation).
+6. Data Collection
+Data Source: Tidepool Data Platform (TDP), consisting of device data from DIY Loop users. The same cohort and data window described in PLN-1001 will be reused.
+Location: Databricks platform.
+Timeframe: All available data within the PLN-1001 window (November 4, 2022 to March 19, 2025). No new pull.
+Data Types:
+* CGM measurements.
+* Insulin dosing records with delivery-strategy labels (autobolus vs. temp basal).
+* Bolus event records labeled by source: meal (carb-announced), manual (user-initiated, no carbs), and correction (user-initiated correction).
+* Carbohydrate consumption records (announced carbohydrate amounts, in grams, linked to meal boluses).
+* Total daily insulin delivered (basal + bolus, units/day), required for the TDD computation in Analysis 3.
+* Loop version.
+* Age at time of measurement.
+Data Governance: All transformations will be performed using documented, version-controlled, and traceable tools. Methods, parameters, and versions used for each transformation will be recorded for reproducibility and auditability. Original and derived datasets are stored in secure, access-controlled locations and managed per least-privilege.
+
+
+7. Data Management Procedure
+As described in Section 6, the dataset for analysis is the same cohort and data window from PLN-1001, which includes the same procedures for data cleansing (remove duplicate records, correct timezone offsets).5 
+
+
+   1. Cohort and Day Inclusion
+
+
+* User inclusion: A user is eligible if they contribute at least 10 user-days of CGM data within the analysis window.[a]
+* Day inclusion: A user-day is included if at least 70% of the calendar day is covered by CGM readings (approximately 202 of 288 5-minute samples). Days below this threshold are excluded.
+
+
+   2. Day Classification
+Three pre-specified parallel day classifications are computed from each eligible user-day’s bolus event records. The three classifications are nested (CE=0 / BE=0 ⊆ CE=0 / BE≤1 ⊆ CE=0 / BE≤∞); each is analyzed in parallel and contrasted with a meal announcement day comparator consisting of meal-announcement days of the same users.
+* No Carb Entry (CE=0) and No Boluses Entry (BE=0): 0 meal announcements/boluses AND 0 manual bolus entry (no user dosing actions on the day).
+* No Carb Entry (CE=0) and Up to One Bolus Entry (BE≤1): 0 meal announcements/boluses AND ≤1 manual bolus entry (mirrors Kovatchev 2023 definition).
+* No Carb Entry (CE=0) and Free Bolus Entry (BE≤ ∞): 0 meal announcements/boluses, any number of manual bolus entries (isolates the absence of carbohydrate announcement from correction behavior).
+* Meal announcement-day comparator (CE>0): At least one meal announcement/bolus. For any user that has a day within the above three classifications, they will be included for comparison to their corresponding meal announcement days.
+
+
+   3. Delivery Strategy Labeling
+For each eligible user-day, the predominant Loop delivery strategy will be labeled as autobolus-on or temp-basal-on based on the user’s Loop configuration on that day, using the following recommendation-classification logic (at least 3 boluses without an associated carb or manual bolus entry → autobolus; otherwise → temp basal). Days where the dominant strategy cannot be unambiguously assigned will be excluded.
+   4. Per-Day Glycemic Metrics
+Per-day metrics are computed identically to PLN-1001: percent time in each canonical glucose range, mean sensor glucose, number of hypoglycemic events, and CV. 
+   5. Carbohydrate-Related Dosing Metrics and TDD Ratio
+For each eligible user-day, the following carbohydrate-related dosing metrics are computed from TDP records: announced carbohydrates per day (grams, sum of meal-bolus carb entries), meal boluses per day (count), manual/correction boluses per day (count), and total daily insulin delivered (units, sum of basal and bolus insulin).
+For each user, the mean total daily dose (TDD) is computed for all historical days. For each user day, the ratio, R_user_day, of the TDD to the overall mean of the TDD will be calculated R_user_day = TDD_user_day / mean_TDD_user. No carb entry-like days will be split into days where TDD is above and below the mean for the TDD Ratio analysis. As a secondary evaluation to account for drifts in TDD over time, the TDD will be calculated for the 30 days closest in time to the NMA-like day (Analysis 8.3)
+   6. Per-Day Age
+The age of the user on the day of measurement is calculated to assign the user-day as either pediatric (less than 18) or adult (18 or older). Pediatric data will be presented separately. The age classification for analysis will be dependent upon the user's age when the NMA-like day occurred. Data will be split into the corresponding adult or pediatric cohorts.
+
+
+8. Analytics
+   1. Analysis 1: Glycemic Outcomes on NMA-like Days vs. Carb Entry Days
+Objective: Characterize day-level glycemic outcomes when DIY Loop is operated in an NMA-like manner compared to days with conventional user-initiated dosing, under each of the three day classifications defined in §7.2 (CE=0 / BE=0, CE=0 / BE≤1, CE=0 / BE≤∞).
+Inclusion: All eligible user-days under §7.1, classified under §7.2.
+Methods: Two complementary analyses are reported for each glycemic endpoint and each of the three NMA-like classifications.
+Method A — Within-user paired analysis. For each user, each endpoint, and each classification, compute the user's within-arm mean by averaging the endpoint across that user's days in the arm. The within-user paired difference is the user's NMA-arm mean minus their CE>0-arm mean. Each user contributes a single paired difference per contrast; all users are weighted equally regardless of contributed day count.
+* Normality screen on the paired differences: Shapiro-Wilk.
+* Parametric: paired t-test on the per-user NMA-arm and bolus-arm means; mean paired difference with 95% CI from the t-distribution on the differences.
+* Non-parametric sensitivity: Wilcoxon signed-rank test on the pairs; median paired difference with cluster-bootstrap 95% CI (1,000 resamples, resampling users with replacement).
+Method B — Linear mixed-effects model. For each endpoint and each classification, fit a linear mixed-effects model with a fixed effect for arm (NMA-like vs. CE>0) and a random intercept by user to account for repeated user-day observations. Report the model-based estimate of the contrast between arms with a 95% CI. Non-parametric sensitivity: for each user, compute the within-arm median endpoint and take the paired difference (median of NMA-like days − median of CE>0 days). Report the median of these per-user differences with a cluster-bootstrap 95% CI (1,000 resamples, resampling users with replacement).
+Figures and Tables
+Table 8.1a. Day-Level Glycemic Outcomes by Day Classification: Per-user means and SDs of each day-level glycemic endpoint, computed within each user across their days in each arm and then averaged across users. Counts in the bottom two rows show the number of contributing users and total user-days per arm. The CE>0 arm is restricted to users who contributed ≥1 CE=0 day in at least one of the three NMA-like classifications.
+Outcome
+	CE=0 / BE=0
+	CE=0 / BE≤1
+	CE=0 / BE≤∞
+	CE>0
+	Time <54 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	Time <70 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	Time 70–180 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	Time >180 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	Time >250 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	Mean glucose (mg/dL)
+	
+
+	
+
+	
+
+	
+
+	Coefficient of variation (%)
+	
+
+	
+
+	
+
+	
+
+	Num. hypo events /day
+	
+
+	
+
+	
+
+	
+
+	User-days, n
+	
+
+	
+
+	
+
+	
+
+	Users contributing, n
+	
+
+	
+
+	
+
+	
+
+	
+
+Table 8.1b. NMA-like vs. CE>0 Day Contrasts (Mixed-Effects Estimate, 95% CI): Linear mixed-effects estimates of the day-type contrast (NMA-like arm minus CE>0 arm) for each glycemic endpoint, fit separately for each of the three day classifications. Each model includes a fixed effect for arm and a random intercept by user (§8.1 Method B). Cell entries are the estimated mean contrast with 95% CI and the corresponding Wald p-value. The three classifications are nested (§7.2), so estimates across the column groups are not independent.
+Outcome
+	CE=0/BE=0 
+− CE>0, 
+Est [95% CI]
+	p
+	CE=0/BE≤1 
+− CE>0, 
+Est [95% CI]
+	p
+	CE=0/BE≤∞ 
+− CE>0, 
+Est [95% CI]
+	p
+	Time <54 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	
+
+	Time <70 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	
+
+	Time 70–180 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	
+
+	Time >180 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	
+
+	Time >250 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	
+
+	Mean glucose (mg/dL)
+	
+
+	
+
+	
+
+	
+
+	
+
+	
+
+	Coefficient of Variation (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	
+
+	Num. hypo events / day
+	
+
+	
+
+	
+
+	
+
+	
+
+	
+
+	
+
+Table 8.1c. Carb Entry Day Arm Behavioral Summary: Per-user means of each behavioral metric, computed within each user across their CE>0 (bolus) days and then summarized across users as mean ± SD and median [IQR]. Provides descriptive context for the meal-announcement comparator arm used throughout §8.1 and §8.2; not part of the inferential analyses.
+Measure
+	Mean ± SD
+	Median [IQR]
+	Meal boluses per day
+	
+
+	
+
+	Manual/correction boluses per day
+	
+
+	
+
+	Announced carbohydrates per day (g)
+	
+
+	
+
+	Total daily insulin (U/day)
+	
+
+	
+
+	
+
+Figure 8.1a. Time in Ranges Stacked Bar Comparison: Stacked bar chart comparing mean percent time in each glycemic range (<54, 54–70, 70–180, 180–250, >250 mg/dL) across the four arms (CE=0 / BE=0, CE=0 / BE≤1, CE=0 / BE≤∞, CE>0), in the style of the Loop-figure reference (with per-bar day counts and user counts annotated).
+Figure 8.1b. Per-User TIR by Arm: Side-by-side combined violin and box plots of per-user mean TIR (70–180 mg/dL) for each of the four arms (CE=0 / BE=0, CE=0 / BE≤1, CE=0 / BE≤∞, CE>0), with individual user points overlaid as jittered scatter so each contributing user is visible.
+Figure 8.1c. Per-User Time Below Range by Arm: Same plot type as Figure 8.1b but for per-user mean time <70 mg/dL (and a separate subplot for <54 mg/dL), so the safety endpoint distributions are visible side-by-side across the four arms.
+
+
+
+
+   2. Analysis 2: NMA-Day Outcomes by Delivery Strategy 
+Objective: Determine whether the NMA-minus-bolus contrast depends on the underlying Loop delivery strategy (autobolus-on vs. temp-basal-on) by jointly modeling day type, delivery strategy, and their interaction, under each of the three day classifications (CE=0 / BE=0, CE=0 / BE≤1, CE=0 / BE≤∞).
+Inclusion: Eligible user-days under §7.1 with an unambiguous delivery-strategy label under §7.3.
+Methods: For each of the three day classifications, fit a single linear mixed-effects model on the pooled day-level data: outcome ~ day_type + delivery_strategy + day_type × delivery_strategy + (1 | user), where day_type is NMA-like vs. CE>0 and delivery_strategy is autobolus-on vs. temp-basal-only. Including the interaction term in a single joint model uses all available data, allows a formal test of whether the NMA-like effect differs by delivery strategy (the day_type × delivery_strategy coefficient), and provides marginal cell means with consistent standard errors. Report the main effect of day_type, the main effect of delivery_strategy, the interaction coefficient with 95% CI and p-value, and the four marginal cell means per classification (NMA-like × Autobolus, NMA-like × Temp Basal, CE>0 × Autobolus, CE>0 × Temp Basal) with 95% CIs. Day counts are reported per cell.
+Note on multiplicity: the interaction term is the pre-specified statistical test for this analysis. Three p-values are produced (one per day classification); these are correlated because the classifications are nested (§7.2). No multiplicity adjustment is applied; results are interpreted jointly. The primary outcome is TIR 70–180 mg/dL; other glycemic outcomes are reported descriptively.
+Figures and Tables
+Table 8.2a. Marginal Cell Means and Interaction Test, TIR (70–180 mg/dL): Marginal cell means (95% CI) of TIR 70–180 mg/dL for each combination of day type (NMA-like vs. CE>0) and delivery strategy (autobolus-on vs. temp-basal-only), shown separately for each day classification. The day_type × delivery_strategy interaction coefficient and p-value from the per-classification mixed-effects model (§8.2 Methods) are reported in the rightmost columns. User-days, n is the number of pooled day-level observations contributing to each cell.
+Day Classification
+	Day × Strategy
+	Mean TIR (95% CI)
+	User-days (n)
+	Interaction coef. (95% CI)
+	p-value
+	CE=0/BE=0 
+	NMA-like × Autobolus-on
+	
+
+	
+
+	
+
+	
+
+	
+
+	NMA-like × Temp Basal
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE>0 × Autobolus-on
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE>0 × Temp Basal
+	
+
+	
+
+	
+
+	
+
+	CE=0/BE≤1
+	NMA-like × Autobolus-on
+	
+
+	
+
+	
+
+	
+
+	
+
+	NMA-like × Temp Basal
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE>0 × Autobolus-on
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE>0 × Temp Basal
+	
+
+	
+
+	
+
+	
+
+	CE=0/BE≤∞
+	NMA-like × Autobolus-on
+	
+
+	
+
+	
+
+	
+
+	
+
+	NMA × Temp Basal
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE>0 × Autobolus-on
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE>0 × Temp Basal
+	
+
+	
+
+	
+
+	
+
+	
+
+Table 8.2b. Main Effects and Interaction Summary by Day Classification (TIR 70–180 mg/dL): Per-classification summary of the §8.2 mixed-effects model: main effect of day type (NMA-like − CE>0, marginal over delivery strategy), main effect of delivery strategy (Autobolus-on − Temp-Basal-only, marginal over day type), and the day_type × delivery_strategy interaction coefficient, each with 95% CI. The interaction p-value is the pre-specified test for this analysis. Estimates across rows are correlated through the nested classifications (§7.2); no formal multiplicity adjustment is applied (§8.4).
+Day Classification
+	Main effect: Day (NMA-like − CE>0)
+	Main effect: Strategy (AB − TB)
+	Interaction (Day × Strategy)
+	Interaction p
+	CE=0/BE=0
+	
+
+	
+
+	
+
+	
+
+	CE=0/BE≤1
+	
+
+	
+
+	
+
+	
+
+	CE=0/BE≤∞
+	
+
+	
+
+	
+
+	
+
+	
+
+Figure 8.2a. Per-User TIR by Day Classification and Delivery Strategy: Combined violin and box plots of per-user mean TIR (70–180 mg/dL), split into subplots with one subplot per day classification (CE=0 / BE=0, CE=0 / BE≤1, CE=0 / BE≤∞) and four groups per subplot (NMA × Autobolus, NMA × Temp Basal, CE>0 × Autobolus, CE>0 × Temp Basal). Individual user points overlaid as jittered scatter.
+Figure 8.2b. Per-User Time Below Range by Day Classification and Delivery Strategy: Same plot type as Figure 8.2a but for per-user mean time <70 mg/dL.
+Figure 8.2c. Interaction Plot: Day-Type Effect by Delivery Strategy: Line-with-points plot showing model-estimated mean TIR for NMA-like and CE>0 days on the x-axis, separately for each delivery strategy, with one subplot per day classification. Non-parallel lines indicate the day_type × delivery_strategy interaction visually.
+Figure 8.2d. Stacked Bar Comparison of Glycemic Ranges by Cell: Stacked bar chart of mean percent time in each glycemic range (<54, 54–70, 70–180, 180–250, >250 mg/dL) for the four cells (NMA-like × Autobolus, NMA-like × Temp Basal,  CE>0 × Autobolus, CE>0 × Temp Basal), with one subplot per day classification (CE=0 / BE=0, CE=0 / BE≤1, CE=0 / BE≤∞). Per-bar user-day counts annotated.
+   3. Analysis 3: Glycemic Outcomes on NMA-like Days, Stratified by Within-User TDD
+Objective. On no carb entry (CE=0) days, determine whether glycemic outcomes differ between days when total daily insulin dose (TDD) is below the user's personal average versus at or above it. The motivating hypothesis is that low-TDD CE=0 days predominantly reflect genuinely light/skipped intake (the algorithm should perform well), whereas high-TDD CE=0 days predominantly reflect unannounced meals that the controller responded to with autobolus or sustained temp-basal increases (the algorithm is being stress-tested without a carb signal). This is a within-user, paired contrast and is run for every user with eligible days in both strata.
+
+
+Inclusion. All eligible user-days under §7.1 classified under §7.2 as one of {CE=0/BE=0, CE=0/BE≤1, CE=0/BE≤∞}. Per-user inclusion in the paired contrast requires (a) ≥30 eligible user-days in the analysis window from which to compute a personal average TDD, and (b) ≥1 CE=0 day in each TDD stratum for the day classification under analysis. 
+
+
+Personal TDD reference. For each user, compute the mean and median TDD (units/day, basal + bolus) across all eligible user-days in the analysis window — i.e., the reference is the user's overall typical insulin requirement, not restricted to CE=0 days. The mean is the primary reference. As a sensitivity analysis, the same stratification is repeated using each user's median TDD. A rolling 30-day reference (per §7.5) is reported as a secondary sensitivity to address users whose insulin needs drift over the window.
+Stratification. For each CE=0 day, define the within-user TDD ratio R_user = TDD_day / mean_TDD_user. The day is classified as:
+* Low-TDD CE=0: R_user < 1.0 (TDD below the user's personal average), and
+* High-TDD CE=0: R_user ≥ 1.0 (TDD at or above the user's personal average).
+A sensitivity using terciles (bottom tercile vs. top tercile of each user's CE=0-day TDD distribution) is also reported to test the robustness of any contrast to the cutpoint.
+Methods. For each of the three day classifications (CE=0/BE=0, CE=0/BE≤1, CE=0/BE≤∞), and for each glycemic endpoint (% time <54, <70, 70–180, >180, >250 mg/dL; mean sensor glucose; CV; hypo events/day):
+1. Per-user aggregation. Within each user and each TDD stratum, compute the mean of the day-level endpoint across their CE=0 days in that stratum. Each eligible user contributes one paired observation: (endpoint_LowTDD, endpoint_HighTDD).
+2. Primary paired test. Wilcoxon signed-rank test on the per-user (Low − High) differences (non-parametric primary, consistent with PLN-1001 and §8.2). Paired t-test reported as parametric companion. Effect estimate is the median (and mean) of within-user differences with bootstrap 95% CI.
+3. Day-level sensitivity. Linear mixed-effects model on day-level data: outcome ~ tdd_stratum + (1 | user_id), restricted to CE=0 days under the day classification. The fixed-effect coefficient for tdd_stratum is reported with 95% CI.
+4. Joint stratification by delivery strategy. As a secondary, cross-tabulate Low/High TDD stratum × delivery strategy (autobolus-on vs. temp-basal-only, per §7.3) for descriptive cell means; not powered for a 2×2×2 interaction test.
+Figures and Tables.
+Table 8.3a. Per-User CE=0 Day Glycemic Outcomes by TDD Stratum and Day Classification: Per-user mean (SD) and median [IQR] of each day-level glycemic endpoint, computed within each user across their CE=0 / BE=0 days falling into the Low-TDD (R_user < 1.0) and High-TDD (R_user ≥ 1.0) strata, then summarized across users. Users, n is the number of users contributing ≥1 day in both strata (paired contributors); User-Days, n (Low / High) shows the total day count in each stratum across those users. This table is repeated for the other two day classifications (CE=0 / BE≤1 and CE=0 / BE≤∞).
+
+
+
+
+	Low-TDD Stratum
+	High-TDD Stratum
+	
+
+	
+
+	Endpoint
+	Mean (SD)
+	Median [IQR]
+	Mean (SD)
+	Median [IQR]
+	Users, n
+	User-Days, n (Low / High)
+	Time <54 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	/
+	Time <70 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	/
+	Time 70–180 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	/
+	Time >180 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	/
+	Time >250 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	/
+	Mean sensor glucose (mg/dL)
+	
+
+	
+
+	
+
+	
+
+	
+
+	/
+	CV (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	/
+	Hypo events / day
+	
+
+	
+
+	
+
+	
+
+	
+
+	/
+	Table 8.3b. Within-User Paired Contrasts (Low-TDD minus High-TDD): Within-user paired contrast of each day-level glycemic endpoint between a user's Low-TDD (R_user < 1.0) and High-TDD (R_user ≥ 1.0) CE=0 days, shown for each day classification. Median Diff and Mean Diff are summaries of the per-user (Low − High) differences with bootstrap 95% CI (1,000 user-resamples). Wilcoxon signed-rank p is the non-parametric primary test (§8.3 Methods); paired-t p is reported as a parametric companion. N pairs is the number of users contributing ≥1 day in each stratum. This table is repeated for the other two day classifications (CE=0 / BE≤1 and CE=0 / BE≤∞).
+
+
+	
+
+	Effect Estimate
+	P-Values
+	
+
+	Day Classification
+	Endpoint
+	Median Diff [95% CI]
+	Mean Diff [95% CI]
+	Wilcoxon signed-rank p
+	Paired-t p
+	N pairs (users)
+	CE=0 / BE=0
+	Time < 54 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	Time <70 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	Time 70–180 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	Time >180 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	Time >250 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	Mean sensor glucose (mg/dL)
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	CV (%)
+	
+
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	Hypo events / day
+	
+
+	
+
+	
+
+	
+
+	
+
+	Table 8.3c. Mixed-Effects Day-Level Sensitivity: Day-level linear mixed-effects sensitivity for the §8.3 paired contrast: outcome ~ tdd_stratum + (1 | user_id), restricted to CE=0 days in each day classification. Reports the fixed-effect coefficient on tdd_stratum (reference = High-TDD) with 95% CI and Wald p-value. User-Days, n is the total day count entering each model; Users, n is the number of contributing users (each with ≥1 day per stratum). This table is repeated for the other two day classifications (CE=0 / BE≤1 and CE=0 / BE≤∞).
+Day Classification
+	Endpoint
+	TDD-Stratum Fixed-Effect Coef. [95% CI]
+	p-value
+	User-Days, n
+	Users, n
+	CE=0 / BE=0
+	Time <54 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	Time <70 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	Time 70–180 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	Time >180 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	Time >250 mg/dL (%)
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	Mean sensor glucose (mg/dL)
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	CV (%)
+	
+
+	
+
+	
+
+	
+
+	CE=0 / BE=0
+	Hypo events / day
+	
+
+	
+
+	
+
+	
+
+	Figure 8.3a. Paired Differences in Glycemic Outcomes on CE=0 Days, by TDD Stratum: Combined violin and box plot showing glycemic outcomes (% time <54, <70, 70–180, >180, >250 mg/dL; mean sensor glucose; CV; hypo events/day) for each individual user on their Low-TDD vs. High-TDD CE=0 days with connecting lines, overlaid with density distributions for each stratum. One row of panels per day classification (CE=0/BE=0, CE=0/BE≤1, CE=0/BE≤∞).
+Figure 8.3b. Distribution of Paired Differences in Glycemic Outcomes on CE=0 Days: Panel of histograms showing the distribution of within-user differences (Low-TDD minus High-TDD) for each glycemic outcome (% time <54, <70, 70–180, >180, >250 mg/dL; mean sensor glucose; CV; hypo events/day), with vertical reference line at zero. One row of panels per day classification
+Figure 8.3c. Time in Ranges Stacked Bar Comparison on CE=0 Days, by TDD Stratum: Stacked bar charts comparing mean percent time in each glycemic range (<54, 54–70, 70–180, 180–250, >250 mg/dL) between Low-TDD and High-TDD CE=0 days, with the §8.1 meal-announcement-day comparator shown alongside. One panel per day classification.
+Figure 8.3d. Distribution of Within-User CE=0-Day TDD Ratio (R_user): Combined violin and box plot of R_user = TDD_day / mean_TDD_user across all CE=0 days in the cohort, with the R = 1.0 stratification threshold marked. One panel per day classification.
+   4. Multiple Comparisons
+TIR 70–180 mg/dL is the pre-specified primary glycemic endpoint, reported in Analysis 1 (NMA-like vs. CE>0 contrast under each of the three NMA classifications) and in Analysis 2 (day_type × delivery_strategy interaction). All other endpoints across Analyses 1–3 are descriptive. The three day classifications are nested (CE=0 / BE=0 ⊆ CE=0 / BE≤1 ⊆ CE=0 / BE≤∞), so the corresponding estimates are not independent; no formal multiplicity adjustment is applied across classifications, and results are interpreted jointly for directional consistency. 
+9. Tests for Quantitative Data
+While this analysis employs statistical modeling to evaluate data, there is no formal quantitative hypothesis test. Instead, statistical methods are used for estimation and characterization to establish confidence intervals around observed real-world no meal announcement behavior.
+10. Acceptance Criteria and Interpretation of Results
+   1. Glycemic Outcomes (Analyses 1, 2 and 3)
+These analyses are characterization-oriented rather than confirmatory. There is no pre-specified non-inferiority margin. Interpretation focuses on whether the magnitude and direction of glycemic outcomes on NMA-like days is consistent with published HCL NMA-mode results (Kovatchev 2023 reports TIR ≈ 68.7% on NMA-like days vs. ≈ 72.6% on HCL days under a definition analogous to CE=0 / BE≤1; F. Niu 2026 reports comparable findings for MiniMed 780G) and whether outcomes degrade in a clinically meaningful way relative to bolus-days, referenced to Battelino 2019 consensus targets.
+The three day classifications support a graded interpretation: CE=0 / BE=0 (no user dosing actions at all) is the most stringent test of unaided algorithmic performance; CE=0 / BE≤1 aligns with the Kovatchev definition and supports direct comparison with published HCL NMA-mode results; CE=0 / BE≤∞ isolates the absence of carbohydrate announcement from correction behavior and indicates the algorithm’s tolerance to missing meal announcements when corrections are still permitted. In Analysis 2, a non-significant day_type × delivery_strategy interaction term would support the conclusion that NMA-mode performance is similar under both Loop delivery strategies; a significant interaction would prompt examination of the marginal cell means to identify the direction and clinical magnitude of the modifying effect.
+The within-user TDD reference is computed across all eligible user-days (including meal-announcement days); users whose insulin needs change materially during the analysis window will have a reference that does not match either tail of their distribution — addressed by the rolling 30-day sensitivity. Stratification at R_user_day = 1.0 splits each user's CE=0-day distribution at a fixed point that may not be biologically meaningful for every user; the tercile sensitivity addresses this. As in §8.1, R is a dose-based proxy and is not validated against ground-truth meal records.
+The findings from this analysis are designed to provide empirical evidence for two distinct real-world scenarios:
+1. Inadvertent Omission: To characterize performance and set realistic clinical expectations regarding the glycemic outcomes users may observe if they simply forget to announce meals.
+2. Unintentional Misinterpretation: To evaluate the system’s clinical performance and safety boundaries if users misinterpret the introduction of the automated correction bolus feature as a complete replacement for manual dosing, and elect to purposefully cease meal announcements.
+By comparing these NMA-like days against the users’ own conventional bolus days, the resulting analytics will clarify the magnitude of performance difference (e.g. shifts in Time in Range) and the resilience of system guardrails. The real-world data derived from the Tidepool Data Platform (TDP) is considered sufficient to assess these intended real-world behavioral outcomes. However, should the characterization effort reveal unexpected safety signals, these findings will be synthesized alongside the primary autobolus performance evaluations (e.g. PLN-1001). Ultimately, this characterization supports clinical association and validation by generating the necessary real-world evidence to optimize user training, and ensure safe informed use of the device.
+
+
+11. Limitations
+The final interpretation of the data shall consider the following limitations:
+* NMA-like days are defined by user behavior, not by an algorithmic mode switch; the system is operating in HCL mode throughout. Due to the observational nature of this real-world data, any causal attribution of outcomes to closed-loop control during disengagement must be interpreted with caution, given the inherent risk of selection bias.
+* Users who contribute NMA-like days may systematically differ from the broader population (e.g., possessing better baseline glycemic control or more experience with Loop). 
+* The technical literacy or socioeconomic composition of the community-driven Loop population may not perfectly mirror the intended Tidepool Loop 2.0 user base. To appropriately contextualize this potential limitation, the interpretation of representativeness will be informed by previous analyses from this user base (LOOP Observational Study, PLN-1001 §6), to determine if a major effect signal should be expected linking specific demographic factors to glycemic outcomes.
+* Day-level pooling weights heavy contributors. User-level analyses (e.g., Kovatchev-style classification of users by % NMA days) are not included in this plan and are deferred to future evaluations.
+
+
+12. Appendices
+N/A
+[a]@mark.connolly@tidepool.org 
+Do these inclusion criteria from PLN-1001 also apply?
+DIY Loop users in TDP
+Loop version <3.4.0
+PAF = 0.4
+Minimum CGM coverage of 70% in each analysis segment
+Age 6 or above

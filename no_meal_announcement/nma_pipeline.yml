@@ -1,0 +1,48 @@
+# PLN-1008 No Meal Announcement Pipeline (Databricks asset bundle)
+#
+# Task DAG mirroring the FDA pipeline (fda_analysis_pipeline.yml). Filled in
+# during Phase C once each data_staging script is implemented. The DAG below
+# is illustrative — task definitions, cluster spec, and access mode TBD.
+#
+# Run via: `databricks bundle deploy && databricks bundle run nma_pipeline`
+
+resources:
+  jobs:
+    nma_pipeline:
+      name: PLN-1008 No Meal Announcement Pipeline
+      tasks:
+        # ── Staging layer ────────────────────────────────────────────────
+        - task_key: export_user_day_bolus_counts
+          # python_wheel_task / spark_python_task TBD in Phase C
+        - task_key: export_user_day_carb_grams
+        - task_key: export_user_day_tdd
+        - task_key: export_user_day_strategy
+        - task_key: export_nma_cbg
+        - task_key: compute_nma_glycemic_endpoints
+          depends_on:
+            - task_key: export_nma_cbg
+        - task_key: export_user_day_age
+        - task_key: export_user_day_classification
+          depends_on:
+            - task_key: export_user_day_bolus_counts
+            - task_key: export_user_day_carb_grams
+        - task_key: export_user_day_master
+          depends_on:
+            - task_key: export_user_day_classification
+            - task_key: export_user_day_strategy
+            - task_key: compute_nma_glycemic_endpoints
+            - task_key: export_user_day_tdd
+            - task_key: export_user_day_age
+        # ── Analysis layer ───────────────────────────────────────────────
+        - task_key: analysis_8_1_nma_vs_ce_outcomes
+          depends_on:
+            - task_key: export_user_day_master
+        - task_key: analysis_8_2_nma_by_delivery_strategy
+          depends_on:
+            - task_key: export_user_day_master
+        - task_key: analysis_8_3_nma_tdd_stratified
+          depends_on:
+            - task_key: export_user_day_master
+        - task_key: data_overview
+          depends_on:
+            - task_key: export_user_day_master
