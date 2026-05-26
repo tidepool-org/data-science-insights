@@ -48,7 +48,14 @@ __all__ = [
     "make_loop_recs",
     "make_bolus_events",
     "make_user_day_rows",
+    "make_cbg_rows",
+    "make_cbg_rows_at_target_tir",
+    "make_basal_row",
     "assert_day_type_flags",
+    "records_per_day",
+    "DEFAULT_VERSION",
+    "TZ_OFFSET_MIN",
+    "MMOL_PER_MGDL",
 ]
 
 
@@ -56,15 +63,17 @@ __all__ = [
 # stays usable without importing the FDA integration builder.
 DEFAULT_VERSION = "3.2.0"
 TZ_OFFSET_MIN = -300  # UTC-5
+MMOL_PER_MGDL = 1.0 / 18.018
 
 # Day-type archetypes for make_user_day_rows. Each emits the same per-day
 # shape for `days` consecutive days. Per-day bolus counts are minimal but
 # sufficient to make each NMA classification flag flip the expected way
 # downstream of export_user_day_bolus_counts + export_user_day_classification.
+# `ce0_beinf` uses 5 non-meal boluses to match PLN-1008 archetype "BE=5".
 _ARCHETYPES = {
     "ce0_be0":   {"n_meal": 0, "n_non_meal": 0, "n_autobolus": 5, "carbs_per_meal": 0.0},
     "ce0_bele1": {"n_meal": 0, "n_non_meal": 1, "n_autobolus": 5, "carbs_per_meal": 0.0},
-    "ce0_beinf": {"n_meal": 0, "n_non_meal": 4, "n_autobolus": 5, "carbs_per_meal": 0.0},
+    "ce0_beinf": {"n_meal": 0, "n_non_meal": 5, "n_autobolus": 5, "carbs_per_meal": 0.0},
     "ce_pos":    {"n_meal": 2, "n_non_meal": 0, "n_autobolus": 5, "carbs_per_meal": 30.0},
 }
 
@@ -94,6 +103,7 @@ def _row(**fields) -> dict:
         "reason": None,
         "normal": None,
         "nutrition": None,
+        "duration": None,
         "origin": _origin(),
     }
     base.update(fields)
@@ -179,7 +189,7 @@ def make_bolus_events(
     return rows
 
 
-def _cbg_rows(
+def make_cbg_rows(
     user_id: str,
     day: date,
     n_readings: int = 288,
@@ -187,7 +197,7 @@ def _cbg_rows(
     version: str = DEFAULT_VERSION,
 ) -> list[dict]:
     """CBG readings at 5-min cadence; `n_readings=288` = full coverage."""
-    mmol = mgdl_value / 18.018
+    mmol = mgdl_value * MMOL_PER_MGDL
     base = datetime(day.year, day.month, day.day, 0, 0, 0)
     return [
         _row(
@@ -199,6 +209,65 @@ def _cbg_rows(
         )
         for i in range(n_readings)
     ]
+
+
+def make_cbg_rows_at_target_tir(
+    user_id: str,
+    day: date,
+    tir_pct: float,
+    hypo_idxs: tuple = (),
+    version: str = DEFAULT_VERSION,
+) -> list[dict]:
+    """288 CBG readings where ~`tir_pct`% of values are in-range (100 mg/dL).
+
+    Out-of-range values split: half at 200 mg/dL (>180), half at 60 mg/dL (<70).
+    `hypo_idxs` overrides listed indices to 50 mg/dL (<54) for hypo-event tests.
+    Mirrors FDA's `_cbg_day_at_target_tir` pattern so analytic-design
+    archetypes (6.8, 6.9, 6.10) can bake in per-day TIR.
+    """
+    in_range_n = int(round(288 * tir_pct / 100.0))
+    high_n = (288 - in_range_n) // 2
+    low_n = 288 - in_range_n - high_n
+    mgdl_values = [100.0] * in_range_n + [200.0] * high_n + [60.0] * low_n
+    for i in hypo_idxs:
+        mgdl_values[i] = 50.0
+
+    base = datetime(day.year, day.month, day.day, 0, 0, 0)
+    return [
+        _row(
+            _userId=user_id,
+            time_string=_iso(base + timedelta(minutes=5 * i)),
+            type="cbg",
+            normal=mgdl_values[i] * MMOL_PER_MGDL,
+            origin=_origin(version),
+        )
+        for i in range(288)
+    ]
+
+
+def make_basal_row(
+    user_id: str,
+    day: date,
+    hour: int = 0,
+    duration_hours: int = 24,
+    rate_u_per_hr: float = 0.5,
+    version: str = DEFAULT_VERSION,
+) -> dict:
+    """Single `type='basal'` record covering `duration_hours` from `hour:00`.
+
+    `rate_u_per_hr` lands in `normal`; `duration_hours * 3600` lands in
+    `duration` (string per BDDP schema). Unit 9's TDD computation reads
+    these two fields to recover `tdd_basal_u`.
+    """
+    t = datetime(day.year, day.month, day.day, hour, 0, 0)
+    return _row(
+        _userId=user_id,
+        time_string=_iso(t),
+        type="basal",
+        normal=rate_u_per_hr,
+        duration=str(duration_hours * 3600),
+        origin=_origin(version),
+    )
 
 
 def make_user_day_rows(
@@ -233,7 +302,7 @@ def make_user_day_rows(
     for d in range(days):
         day = start_day + timedelta(days=d)
         if include_cbg:
-            rows.extend(_cbg_rows(user_id, day, n_readings=n_cbg_per_day, version=version))
+            rows.extend(make_cbg_rows(user_id, day, n_readings=n_cbg_per_day, version=version))
         rows.extend(make_bolus_events(
             user_id, day,
             n_meal=spec["n_meal"],
