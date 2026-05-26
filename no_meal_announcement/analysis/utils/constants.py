@@ -1,11 +1,51 @@
 """
 Shared constants for the PLN-1008 NMA analysis.
 
-Imports color and font conventions from `FDA_real_world_data.analysis.utils.constants`
-to keep figure styling consistent across the regulatory submission.
-
-Status: Phase A stub — constants defined; finalize in Phase C.
+Re-exports figure styling (FONT, COLORS_*) from
+`FDA_real_world_data.analysis.utils.constants` so plot styling stays consistent
+across the regulatory submission. PLN-1008-specific constants are defined below.
 """
+
+import os
+import sys
+
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/no_meal_announcement/analysis/utils"
+_fda_utils = os.path.normpath(
+    os.path.join(_here, "..", "..", "..", "FDA_real_world_data", "analysis", "utils")
+)
+if _fda_utils not in sys.path:
+    sys.path.insert(0, _fda_utils)
+
+from constants import (  # type: ignore # noqa: E402
+    FONT,
+    COLORS_PRIMARY,
+    COLORS_SECONDARY,
+    COLORS_ACCENT,
+    COLORS_STACKED_BAR,
+)
+
+__all__ = [
+    "FONT",
+    "COLORS_PRIMARY",
+    "COLORS_SECONDARY",
+    "COLORS_ACCENT",
+    "COLORS_STACKED_BAR",
+    "R_THRESHOLD",
+    "MIN_USER_DAYS",
+    "MIN_COVERAGE_PCT",
+    "MIN_AUTOBOLUS_COUNT",
+    "MIN_DAYS_FOR_TDD_PAIR",
+    "BOOTSTRAP_SEED",
+    "BOOTSTRAP_RESAMPLES",
+    "DAY_TYPE_ORDER",
+    "DELIVERY_STRATEGY_ORDER",
+    "GLYCEMIC_ENDPOINTS",
+    "PRIMARY_ENDPOINT",
+    "GLYCEMIC_RANGES_MGDL",
+]
 
 R_THRESHOLD: float = 1.0
 """Low/High TDD stratification cutpoint (PLN-1008 §7.5)."""

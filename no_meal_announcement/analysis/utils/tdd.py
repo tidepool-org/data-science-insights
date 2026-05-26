@@ -7,7 +7,9 @@ Pure-pandas helpers for:
     - Computing R_user_day = TDD_day / reference and labeling Low vs High.
     - Computing within-user CE=0-day terciles for the sensitivity analysis.
 
-Status: Phase A stub — signatures only. Implement in Phase C.
+Rolling-30d convention: for day N, reference = mean of days [N-30, N-1]
+(trailing window, exclusive of current day). Days with <30 days of trailing
+history return NaN.
 """
 
 from typing import Literal
@@ -35,7 +37,19 @@ def compute_personal_tdd(
         - method='mean' or 'median': Series indexed by user_col.
         - method='rolling_30d': Series indexed identically to per_day_tdd.
     """
-    raise NotImplementedError("Phase A stub — implement in Phase C")
+    if method == "mean":
+        return per_day_tdd.groupby(user_col)[tdd_col].mean()
+    if method == "median":
+        return per_day_tdd.groupby(user_col)[tdd_col].median()
+    if method == "rolling_30d":
+        sorted_df = per_day_tdd.sort_values([user_col, day_col])
+        rolling = (
+            sorted_df.groupby(user_col)[tdd_col]
+            .apply(lambda s: s.shift(1).rolling(window=30, min_periods=30).mean())
+            .reset_index(level=0, drop=True)
+        )
+        return rolling.reindex(per_day_tdd.index)
+    raise ValueError(f"Unknown method: {method!r}")
 
 
 def compute_r_user_day(
@@ -49,7 +63,11 @@ def compute_r_user_day(
     `personal_tdd` may be per-user (indexed by user_col) or per-row
     (rolling_30d).
     """
-    raise NotImplementedError("Phase A stub — implement in Phase C")
+    if personal_tdd.index.equals(per_day_tdd.index):
+        denom = personal_tdd
+    else:
+        denom = per_day_tdd[user_col].map(personal_tdd)
+    return per_day_tdd[tdd_col] / denom
 
 
 def stratify_low_high(
@@ -57,7 +75,10 @@ def stratify_low_high(
     threshold: float = 1.0,
 ) -> pd.Series:
     """Label each day Low (R < threshold) or High (R ≥ threshold)."""
-    raise NotImplementedError("Phase A stub — implement in Phase C")
+    return pd.Series(
+        ["Low" if r < threshold else "High" for r in r_user_day],
+        index=r_user_day.index,
+    )
 
 
 def stratify_terciles(
@@ -69,7 +90,9 @@ def stratify_terciles(
 
     For the §8.3 sensitivity analysis comparing bottom vs top tercile.
     """
-    raise NotImplementedError("Phase A stub — implement in Phase C")
+    return r_ce0_per_user.groupby(user_col)[r_col].transform(
+        lambda s: pd.qcut(s, q=3, labels=["T1", "T2", "T3"])
+    )
 
 
 def is_tdd_pair_eligible(
@@ -84,4 +107,18 @@ def is_tdd_pair_eligible(
     Eligible if: ≥`min_days` total eligible days for TDD reference computation
     AND ≥1 CE=0 day in each TDD stratum (Low and High).
     """
-    raise NotImplementedError("Phase A stub — implement in Phase C")
+    day_counts = per_day.groupby(user_col).size()
+    ce0_days = per_day[per_day[ce0_flag_col]]
+    has_low = (
+        ce0_days[ce0_days[stratum_col] == "Low"]
+        .groupby(user_col)
+        .size()
+        .reindex(day_counts.index, fill_value=0)
+    )
+    has_high = (
+        ce0_days[ce0_days[stratum_col] == "High"]
+        .groupby(user_col)
+        .size()
+        .reindex(day_counts.index, fill_value=0)
+    )
+    return (day_counts >= min_days) & (has_low >= 1) & (has_high >= 1)
