@@ -13,7 +13,7 @@ TDD (per user-day) = delivered basal + delivered bolus
 ## 1. BDDP data structure
 
 `dev.default.bddp_sample_all_2` is one row per device event. **Every column is a STRING**, so
-every numeric needs `TRY_CAST`. Event time is `time_string` (ISO `2023-08-07T12:00:03.909Z`);
+every numeric needs `TRY_CAST`. Event time is `time_string` (ISO `2024-03-15T14:30:07.421Z`);
 `created_timestamp` is the DB ingestion time (not event time).
 
 Insulin-relevant rows are `type IN ('basal','bolus')`. Relevant columns:
@@ -25,7 +25,7 @@ Insulin-relevant rows are `type IN ('basal','bolus')`. Relevant columns:
 | `deliveryType` | basal | `scheduled` / `temp` / `suspend` / `automated` |
 | `suppressed` | basal | JSON of the scheduled basal a temp replaced |
 | `payload` | basal | JSON; on Loop-direct rows contains `deliveredUnits` (the exact pulse amount) |
-| `normal` | bolus | delivered bolus units (plain number, e.g. `0.15`, `9.95`) |
+| `normal` | bolus | delivered bolus units (plain number, e.g. `0.20`, `7.40`) |
 | `subType` | bolus | `normal` = user bolus, `automated` = autobolus |
 | `origin` | both | JSON; `$.name` and `$.payload.sourceRevision.source.name` identify the upload path |
 
@@ -41,12 +41,12 @@ same basal segment under both origins — identical timestamp, duration, and sup
 
 ```
 time_string                origin              deliveryType  rate     duration  payload
-2023-08-07T12:00:03.909Z   com.loopkit.Loop    automated     4.1      59352     {"deliveredUnits":0.05, ...}
-2023-08-07T12:00:03.909Z   com.apple.HealthKit temp          3.0327…  59352     {... "ProgrammedTempBasalRate":"4.1 IU/hr" ...}
+2024-03-15T14:30:07.421Z   com.loopkit.Loop    automated     3.7      63912     {"deliveredUnits":0.05, ...}
+2024-03-15T14:30:07.421Z   com.apple.HealthKit temp          2.8164…  63912     {... "ProgrammedTempBasalRate":"3.7 IU/hr" ...}
 ```
 
-Boluses are mirrored the same way (the identical 3 boluses appear under both origins summing to
-9.95 U each). **Summing both origins double-counts.** Pick one origin per user-day.
+Boluses are mirrored the same way (the identical 5 boluses appear under both origins summing to
+7.40 U each). **Summing both origins double-counts.** Pick one origin per user-day.
 
 The two upload paths:
 
@@ -59,28 +59,28 @@ The two upload paths:
 
 ## 3. Basal: commanded ≠ delivered
 
-The same segment above shows `rate=4.1` (Loop) vs `rate=3.0327…` (HealthKit). They differ because:
+The same segment above shows `rate=3.7` (Loop) vs `rate=2.8164…` (HealthKit). They differ because:
 
-- **Loop `rate` (4.1) is the *commanded* temp rate** — a clean 0.05-step value, confirmed by the
-  HealthKit metadata `"ProgrammedTempBasalRate":"4.1 IU/hr"`. Loop sets a high temp but replaces
+- **Loop `rate` (3.7) is the *commanded* temp rate** — a clean 0.05-step value, confirmed by the
+  HealthKit metadata `"ProgrammedTempBasalRate":"3.7 IU/hr"`. Loop sets a high temp but replaces
   it ~1 min later, so the pump only delivers one 0.05 U pulse before the next command.
-- **HealthKit `rate` (3.0327…) is the *delivered* rate** — a high-precision value equal to
+- **HealthKit `rate` (2.8164…) is the *delivered* rate** — a high-precision value equal to
   `deliveredUnits / duration`:
 
   ```
-  3.0327346808524642 U/hr × (59352 ms / 3,600,000) = 0.0500 U  ==  payload.deliveredUnits (0.05)
+  2.8163724495557642 U/hr × (63912 ms / 3,600,000) = 0.0500 U  ==  payload.deliveredUnits (0.05)
   ```
 
 So over a full day, integrating the **commanded** rate overcounts vs **delivered**:
 
 | Method | This day |
 |---|---|
-| `SUM(Loop commanded rate × duration)` | **58.99 U** ← wrong (commanded) |
-| `SUM(HealthKit delivered rate × duration)` | **34.15 U** ← delivered |
-| `SUM(Loop payload.deliveredUnits)` | **34.15 U** ← delivered (same) |
+| `SUM(Loop commanded rate × duration)` | **41.27 U** ← wrong (commanded) |
+| `SUM(HealthKit delivered rate × duration)` | **28.84 U** ← delivered |
+| `SUM(Loop payload.deliveredUnits)` | **28.84 U** ← delivered (same) |
 
 Two more structural notes:
-- Each Loop cycle also writes a `0.0` rate / ~3 ms marker row (the segment boundary) — negligible.
+- Each Loop cycle also writes a `0.0` rate / ~5 ms marker row (the segment boundary) — negligible.
 - Within one origin stream the segment `duration`s tile the day (~24 h); the overlap only appears
   when the two streams are mixed. Clipping each segment to the next (`LEAST(gap_to_next, duration)`)
   bounds any real overlap or data gap.
@@ -114,8 +114,8 @@ source, with Loop-direct (`deliveredUnits`) as the fallback for the ~14% of days
 ## 6. The calculation
 
 > **Dedup first.** BDDP re-ingests the same logical record many times — observed up to
-> **~14,000 copies** of a single bolus (one user-day showed 103,661 bolus rows summing to
-> 462,116 U that deduped to 7 boluses / 31.2 U). On top of that, Loop's intermittent dual-sync
+> **~14,000 copies** of a single bolus (one illustrative user-day had ~72,000 bolus rows summing
+> to ~322,000 U that deduped to 5 boluses / 22.8 U). On top of that, Loop's intermittent dual-sync
 > writes the SAME bolus twice in the HealthKit stream at offsets of ~2.5 s and ~15 s — one row
 > with millisecond precision, the second copy rounded to the whole second.
 >
