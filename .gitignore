@@ -112,3 +112,8 @@ FDA_real_world_data/analysis/outputs/analysis_8_6/figure_8_6a_tir.png
 FDA_real_world_data/analysis/outputs/analysis_8_6/figure_8_6b_tbr.png
 FDA_real_world_data/analysis/outputs/analysis_8_6/figure_8_6c_hypo_rate.png
 FDA_real_world_data/analysis/outputs/analysis_8_7/figure_8_7d_subgroup_discontinuation.png
+# No Meal Announcement (PLN-1008): data snapshot + all generated analysis outputs
+# (contain user-level data / large / regenerable — never commit). Keep the dirs via .gitkeep.
+no_meal_announcement/outputs/
+no_meal_announcement/analysis/outputs/*
+!no_meal_announcement/analysis/outputs/.gitkeep
