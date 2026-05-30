@@ -1,13 +1,16 @@
-"""Denormalized master table joining every per-user-day signal — analysis handoff.
+"""Denormalized analysis-ready table joining every per-user-day signal — analysis handoff.
 
 Anchor is `nma_user_day_classification` (one row per (user, local_day) in the
 loop_recommendations valid-day universe). The §7.3 delivery strategy and Loop version
 come from `loop_recommendations` directly; endpoints and TDD are LEFT JOINed.
 
-The PLN-1001 Loop-version cohort filter is applied here: `version_int < 3_004_000`
-(Loop < 3.4.0) OR version_int IS NULL. Per-day `age_years` and `is_pediatric` come from
-`nma_user_day_age` (LEFT JOIN; NULL when DOB is unknown) — the §6 age-eligibility (>=6)
-and §7.6 pediatric/adult split are applied downstream by the analysis on these fields.
+The PLN-1001 Loop-version cohort filter is applied here:
+  - version known          → keep iff `version_int < 3_004_000` (Loop < 3.4.0)
+  - version unknown (NULL) → keep iff `local_day < 2024-07-13` (Loop 3.4.0 release date)
+Matches FDA `analysis/utils/data_loading.MAX_LOOP_VERSION_INT` and `MAX_SEG2_END_DATE`.
+Per-day `age_years` and `is_pediatric` come from `nma_user_day_age` (LEFT JOIN; NULL
+when DOB is unknown) — the §6 age-eligibility (>=6) and §7.6 pediatric/adult split are
+applied downstream by the analysis on these fields.
 
 §7.5 TDD reference is computed inline at this step (now that eligibility is known):
   mean_tdd_user / median_tdd_user / n_eligible_days_for_tdd  — over the user's
@@ -27,7 +30,7 @@ Inputs:
     nma_user_day_age                       (age_years, is_pediatric per §7.6)
 
 Outputs:
-    nma_user_day_master
+    nma_user_day_analysis_ready
         One row per (user, local_day) — classification flags, endpoints, TDD + ratio,
         delivery strategy, Loop version, eligibility. Analysis-ready for §8.1/§8.2/§8.3.
 
@@ -39,8 +42,13 @@ Maps to PLN-1008:
 
 import argparse
 
-# PLN-1001 / §6 cohort filter: Loop < 3.4.0. Matches FDA constants.MAX_LOOP_VERSION_INT.
+# PLN-1001 / §6 cohort filter:
+#   - Loop version known: keep version_int < MAX_LOOP_VERSION_INT (Loop < 3.4.0).
+#   - Loop version unknown: keep local_day < MAX_DAY_IF_VERSION_UNKNOWN (Loop 3.4.0
+#     release date — before this, undeclared versions can only be <3.4.0).
+# Matches FDA `analysis/utils/data_loading.{MAX_LOOP_VERSION_INT, MAX_SEG2_END_DATE}`.
 MAX_LOOP_VERSION_INT = 3_004_000
+MAX_DAY_IF_VERSION_UNKNOWN = "2024-07-13"
 
 # §7.3 strategy threshold (autobolus_on if dd_autobolus_count >= this).
 MIN_AUTOBOLUS_COUNT = 3
@@ -53,7 +61,7 @@ def run(
     endpoints_table="dev.fda_510k_rwd.nma_user_day_glycemic_endpoints",
     tdd_table="dev.fda_510k_rwd.nma_user_day_tdd",
     age_table="dev.fda_510k_rwd.nma_user_day_age",
-    output_table="dev.fda_510k_rwd.nma_user_day_master",
+    output_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
 ):
     spark.sql(f"""
 --begin-sql
@@ -115,8 +123,8 @@ WITH base AS (
   LEFT JOIN {age_table} age
     ON cls._userId = age._userId
     AND cls.local_day = age.local_day
-  WHERE lr.version_int IS NULL
-     OR lr.version_int < {MAX_LOOP_VERSION_INT}
+  WHERE (lr.version_int IS NOT NULL AND lr.version_int < {MAX_LOOP_VERSION_INT})
+     OR (lr.version_int IS NULL AND cls.local_day < DATE '{MAX_DAY_IF_VERSION_UNKNOWN}')
 ),
 
 -- §7.5 TDD reference: per-user mean / median / count of eligible days with TDD.
@@ -155,7 +163,7 @@ if __name__ == "__main__":
     _parser.add_argument("--endpoints_table", default="dev.fda_510k_rwd.nma_user_day_glycemic_endpoints")
     _parser.add_argument("--tdd_table", default="dev.fda_510k_rwd.nma_user_day_tdd")
     _parser.add_argument("--age_table", default="dev.fda_510k_rwd.nma_user_day_age")
-    _parser.add_argument("--output_table", default="dev.fda_510k_rwd.nma_user_day_master")
+    _parser.add_argument("--output_table", default="dev.fda_510k_rwd.nma_user_day_analysis_ready")
     _args, _ = _parser.parse_known_args()
 
     run(

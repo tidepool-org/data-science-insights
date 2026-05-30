@@ -28,9 +28,9 @@ the user-day grain, and the split reflects the age cohort relevant to the day's 
 The per-user random intercept in any LMM still correctly accounts for within-user correlation
 when the cohorts are pooled.
 
-## How master surfaces it
+## How the analysis-ready table surfaces it
 
-[`data_staging/export_user_day_master.py`](../data_staging/export_user_day_master.py) LEFT
+[`data_staging/export_user_day_analysis_ready.py`](../data_staging/export_user_day_analysis_ready.py) LEFT
 JOINs `nma_user_day_age` so the analysis-ready row carries `age_years` and `is_pediatric`
 alongside every other per-day signal. The analysis script splits on `is_pediatric` and
 emits its tables/figures per cohort.

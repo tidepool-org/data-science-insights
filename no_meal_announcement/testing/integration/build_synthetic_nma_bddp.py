@@ -133,7 +133,7 @@ def _archetype_low_coverage(uid="nma_user_low_coverage"):
 
 
 def _archetype_below_min_days(uid="nma_user_below_min_days"):
-    """6.4 — 8 days; user dropped by ≥10-user-day rule in export_user_day_master."""
+    """6.4 — 8 days; user dropped by ≥10-user-day rule in export_user_day_analysis_ready."""
     rows = []
     for d in range(8):
         day = START_DAY + timedelta(days=d)

@@ -18,8 +18,9 @@ module name (our analysis/ has its own `utils` package, so a bare `import utils`
 collide). Adds only the cluster-bootstrap median CI, which that module lacks.
 
 Inputs:
-    nma_user_day_classification        (arm flags + day_eligible + user_eligible)
-    nma_user_day_glycemic_endpoints    (per-day endpoints)
+    nma_user_day_analysis_ready        (arm flags + day_eligible + user_eligible + per-day endpoints;
+                                        PLN-1001 cohort filter already applied — version<3.4.0
+                                        when known, else local_day<2024-07-13)
 
 Outputs (analysis/outputs/analysis_8_1/):
     method_a_contrasts.csv              (per classification x endpoint paired stats)
@@ -128,11 +129,9 @@ def cluster_bootstrap_median_ci(diff, n_boot=BOOTSTRAP_N, seed=BOOTSTRAP_SEED):
     return float(np.percentile(medians, 2.5)), float(np.percentile(medians, 97.5))
 
 
-def load_day_level(spark, classification_table, endpoints_table):
+def load_day_level(spark, analysis_ready_table):
     """Eligible-day rows of eligible users, with arm flags + endpoints."""
-    cls = spark.table(classification_table)
-    ep = spark.table(endpoints_table)
-    pdf = cls.join(ep, ["_userId", "local_day"], "inner").toPandas()
+    pdf = spark.table(analysis_ready_table).toPandas()
 
     # Spark SQL `* 100.0` divisions come back as Decimal/object; scipy needs floats.
     for c in [col for col, _ in ENDPOINTS]:
@@ -302,8 +301,7 @@ def make_stacked_bar(pdf):
 
 def run(
     spark,
-    classification_table="dev.fda_510k_rwd.nma_user_day_classification",
-    endpoints_table="dev.fda_510k_rwd.nma_user_day_glycemic_endpoints",
+    analysis_ready_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
     output_dir=None,
 ):
     stats_mod, here = _load_fda_statistics()
@@ -311,7 +309,7 @@ def run(
         output_dir = os.path.join(here, "outputs", "analysis_8_1")
     os.makedirs(output_dir, exist_ok=True)
 
-    pdf = load_day_level(spark, classification_table, endpoints_table)
+    pdf = load_day_level(spark, analysis_ready_table)
 
     contrasts = contrasts_table(pdf, stats_mod)
     print(contrasts.to_string(index=False))
@@ -337,9 +335,8 @@ if __name__ == "__main__":
     spark = spark  # type: ignore[name-defined]  # noqa: F841
 
     _parser = argparse.ArgumentParser()
-    _parser.add_argument("--classification_table", default="dev.fda_510k_rwd.nma_user_day_classification")
-    _parser.add_argument("--endpoints_table", default="dev.fda_510k_rwd.nma_user_day_glycemic_endpoints")
+    _parser.add_argument("--analysis_ready_table", default="dev.fda_510k_rwd.nma_user_day_analysis_ready")
     _parser.add_argument("--output_dir", default=None)
     _args, _ = _parser.parse_known_args()
 
-    run(spark, _args.classification_table, _args.endpoints_table, _args.output_dir)
+    run(spark, _args.analysis_ready_table, _args.output_dir)

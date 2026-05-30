@@ -1,8 +1,8 @@
 # TDD Reference Choice
 
 For Analysis 3 (PLN-1008 §8.3), each CE=0 day is stratified into Low-TDD vs High-TDD
-relative to a per-user reference TDD. The reference is computed at the master step
-([`data_staging/export_user_day_master.py`](../data_staging/export_user_day_master.py));
+relative to a per-user reference TDD. The reference is computed at the analysis-ready step
+([`data_staging/export_user_day_analysis_ready.py`](../data_staging/export_user_day_analysis_ready.py));
 see [`tdd_calculation.md`](tdd_calculation.md) for how the per-day `tdd_units` itself
 is derived (delivered, deduped).
 

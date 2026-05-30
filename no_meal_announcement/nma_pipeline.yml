@@ -26,7 +26,7 @@ resources:
           depends_on:
             - task_key: export_user_day_bolus_counts
             - task_key: export_user_day_carb_grams
-        - task_key: export_user_day_master
+        - task_key: export_user_day_analysis_ready
           depends_on:
             - task_key: export_user_day_classification
             - task_key: export_user_day_strategy
@@ -36,13 +36,13 @@ resources:
         # ── Analysis layer ───────────────────────────────────────────────
         - task_key: analysis_8_1_nma_vs_ce_outcomes
           depends_on:
-            - task_key: export_user_day_master
+            - task_key: export_user_day_analysis_ready
         - task_key: analysis_8_2_nma_by_delivery_strategy
           depends_on:
-            - task_key: export_user_day_master
+            - task_key: export_user_day_analysis_ready
         - task_key: analysis_8_3_nma_tdd_stratified
           depends_on:
-            - task_key: export_user_day_master
+            - task_key: export_user_day_analysis_ready
         - task_key: data_overview
           depends_on:
-            - task_key: export_user_day_master
+            - task_key: export_user_day_analysis_ready

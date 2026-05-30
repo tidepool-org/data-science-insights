@@ -1,10 +1,10 @@
 """
-End-to-end test: synthetic BDDP → master table → analysis drivers.
+End-to-end test: synthetic BDDP → analysis-ready table → analysis drivers.
 
 Phase B test cases (planned):
     1. Build synthetic BDDP via `build_synthetic_nma_bddp.build_synthetic_nma_bddp`.
-    2. Run `run_pipeline.run(spark, bddp_table, ...)` → `user_day_master`.
-    3. Assert master table user/day counts match archetype design:
+    2. Run `run_pipeline.run(spark, bddp_table, ...)` → `user_day_analysis_ready`.
+    3. Assert analysis-ready table user/day counts match archetype design:
           - nma_user_low_coverage and nma_user_below_min_days excluded.
           - All other archetypes present with expected day counts.
     4. Drive `analysis_8-1.main(spark)` → Table 8.1a:
@@ -25,7 +25,7 @@ import pytest
 
 
 @pytest.mark.skip(reason="Phase A placeholder — implement in Phase B")
-def test_pipeline_builds_master_table():
+def test_pipeline_builds_analysis_ready_table():
     raise NotImplementedError("Phase B")
 
 

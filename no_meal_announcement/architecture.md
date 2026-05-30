@@ -33,7 +33,7 @@ no_meal_announcement/
 │   ├── export_user_day_tdd.py                          — delivered TDD per day (HealthKit rate×dur, fallback Loop deliveredUnits; bolus normal, one origin)
 │   ├── export_user_day_age.py                          — age at day + pediatric flag (cutoff 18); DOB from bddp_user_dates
 │   ├── export_user_day_classification.py               — apply three nested classifications + eligibility
-│   └── export_user_day_master.py                       — final denormalized join + §7.5 TDD reference / ratio + Loop<3.4.0 cohort filter
+│   └── export_user_day_analysis_ready.py               — final denormalized join + §7.5 TDD reference / ratio + Loop<3.4.0 cohort filter
 ├── analysis/                                — §8 analyses
 │   ├── analysis_8-1_glycemic_outcomes_nma_vs_carb_entry.py  — Method A (per-user paired) + figures
 │   ├── analysis_8-2_nma_by_delivery_strategy.py        — §8.2 scaffold (from prior scaffold; not yet rewired)
@@ -86,13 +86,13 @@ Phase 2: Per-user-day aggregations
     All streams dedup on (_userId, round-to-nearest-minute(timestamp), value) — collapses BDDP re-ingests AND Loop's dual-sync ~2.5s/~15s pairs.
   export_user_day_age                → nma_user_day_age  (age_years + is_pediatric per day; DOB from bddp_user_dates)
 
-Phase 3: Classification + master join
+Phase 3: Classification + analysis-ready join
   export_user_day_classification     → nma_user_day_classification  (CE/BE arm flags + eligibility)
     anchored on loop_recommendations; bolus/carb/coverage LEFT JOIN (counts => 0, is_eligible => day_eligible);
     nested arm membership flags (in_ce0_be0 / in_ce0_be_le1 / in_ce0_be_inf / in_ce_gt0);
     user_eligible = >=10 eligible days/user (window count)
-    └─ export_user_day_master        → nma_user_day_master          (denormalized, analysis-ready)
-       Anchor: classification INNER JOIN loop_recommendations; LEFT JOIN endpoints / tdd / age. Applies Loop<3.4.0 cohort filter (version_int < 3_004_000 OR NULL).
+    └─ export_user_day_analysis_ready → nma_user_day_analysis_ready (denormalized, analysis-ready)
+       Anchor: classification INNER JOIN loop_recommendations; LEFT JOIN endpoints / tdd / age. Applies PLN-1001 Loop-version cohort filter: version known → version_int < 3_004_000; version NULL → local_day < 2024-07-13 (Loop 3.4.0 release date).
        delivery_strategy (§7.3) computed inline as a CASE on loop_recommendations.dd_autobolus_count (>=3 -> autobolus_on else temp_basal_only).
        §7.5 TDD reference computed here over day_eligible days: mean_tdd_user, median_tdd_user (percentile_approx 0.5), n_eligible_days_for_tdd, tdd_ratio = tdd_units / mean_tdd_user.
 

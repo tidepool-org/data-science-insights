@@ -1,8 +1,8 @@
 """
-Tests for `data_staging/export_user_day_master.py`.
+Tests for `data_staging/export_user_day_analysis_ready.py`.
 
 Phase B test cases (planned):
-    - 1 user × 12 days mix → master has 12 rows; R_user_day hand-verified
+    - 1 user × 12 days mix → analysis-ready table has 12 rows; R_user_day hand-verified
     - User with 8 days → entire user excluded by ≥10-user-day rule
     - User with 35 days, 10 below R=1 and 15 above → tdd_pair_eligible=True
     - User with 35 days but 0 CE=0 days in High stratum → tdd_pair_eligible=False
@@ -17,7 +17,7 @@ import pytest
 
 
 @pytest.mark.skip(reason="Phase A placeholder — implement in Phase B")
-def test_master_row_count_and_r_user_day():
+def test_row_count_and_r_user_day():
     raise NotImplementedError("Phase B")
 
 
