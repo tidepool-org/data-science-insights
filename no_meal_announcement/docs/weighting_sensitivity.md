@@ -21,7 +21,7 @@ arm. `cv` is robustly lower on NMA days under both. The CE=0/BE≤∞ arm agrees
 ## Why they diverge (mechanism)
 Both methods average the **same** per-user paired differences (each user's mean endpoint on
 NMA days minus on CE>0 days); they differ only in the **weight** per user. The
-[weighting decomposition](../analysis/outputs/analysis_8_1/all/methodA_weighting_decomposition.csv)
+[weighting decomposition](../analysis/outputs/analysis_8_1/supplement/methodA_weighting_decomposition.csv)
 makes this exact and uses all the data (no subsampling):
 
 | weight on per-user diff | CE=0/BE=0 TIR |
@@ -57,8 +57,8 @@ LMM on only the 646 paired users leaves the coef unchanged at +2.60, ruling out 
 CE>0-only users and the arm imbalance.)
 
 And those heavy contributors have the *opposite* TIR contrast from everyone else
-([overrepresented_users.csv](../analysis/outputs/analysis_8_1/all/overrepresented_users.csv),
-[figure_nma_days_vs_tir.png](../analysis/outputs/analysis_8_1/all/figure_nma_days_vs_tir.png)):
+([overrepresented_users.csv](../analysis/outputs/analysis_8_1/supplement/overrepresented_users.csv),
+[figure_nma_days_vs_tir.png](../analysis/outputs/analysis_8_1/supplement/figure_nma_days_vs_tir.png)):
 
 | arm | top-5% users (mean TIR diff) | the rest (mean TIR diff) |
 |---|---|---|
@@ -89,8 +89,10 @@ overall; they just do relatively better on their NMA days vs their own CE>0 days
 
 ## Reproduce
 Script: [`exploratory/lmm_weighting_sensitivity.py`](../exploratory/lmm_weighting_sensitivity.py)
-(`python no_meal_announcement/exploratory/lmm_weighting_sensitivity.py`). Outputs (in
-`analysis/outputs/analysis_8_1/all/`): `methodA_weighting_decomposition.csv`,
+(`python no_meal_announcement/exploratory/lmm_weighting_sensitivity.py`). Reads §8.1's
+all-cohort `table_8_1b` from `analysis/outputs/analysis_8_1/all/`; writes its outputs to
+`analysis/outputs/analysis_8_1/supplement/` (a sibling dir analysis_8-1's per-cohort
+clearing leaves untouched): `methodA_weighting_decomposition.csv`,
 `overrepresented_users.csv` (per-user NMA-day count, share of arm-days, paired TIR/glucose diff,
 top-5% flag), `figure_nma_days_vs_tir.png` (NMA-day count vs TIR level and paired diff), plus the
 day-count distribution (printed). Findings independently verified three ways (code review,

@@ -1,5 +1,13 @@
 # PLN-1008 No Meal Announcement — Architecture
 
+## Current state (as of 2026-05-31)
+
+Data-staging pipeline and **§8.1 complete**: Method A (per-user paired) + Method B (LMM, Table 8.1b) + Tables 8.1a/8.1c + Figures 8.1a/8.1b/8.1c + adult/pediatric/all cohort split + **Sample Information (Table 1)**. Runs on Databricks, or **locally off the CSV snapshot** (`analysis_8-1_…py --csv_path`) that `data_staging/export_user_day_analysis_ready.py` writes. The age-stratified run is produced for all three cohorts (`outputs/analysis_8_1/{adult,pediatric,all}/`), each with a `sample_information.csv`, plus a combined `table_8_1_sample_information.csv`. The §8.1 LMM-vs-Method-A weighting caveat is documented in [docs/weighting_sensitivity.md](docs/weighting_sensitivity.md) (stringent NMA arms sign-fragile; CE=0/BE≤∞ robust).
+
+**Sex/gender:** `export_user_day_analysis_ready.py` LEFT JOINs `dev.default.user_gender`; the snapshot has been regenerated, so Sample Information sex rows are populated (overall ~40% M / 34% F / **26% Other/Unknown**). A `sex_missingness_sensitivity.csv` (FDA §8.5 analog) accompanies each cohort: missing-sex users contribute far fewer eligible days (322 vs 434, p≈6e-18) and have marginally lower TIR (73.4 vs 74.9, p=0.02); age and time-<70 don't differ — so the sex split is broadly representative on glycemic outcomes but tracks engagement. **Age gating (two-sided, see [docs/pediatric_split.md](docs/pediatric_split.md)):** the §6 floor is now **enabled by default** — `filter_cohort(min_age=MIN_AGE=6)` drops users known to be <6 (verified: pediatric 516→473) and retains unknown/nulled-age users (PLN-1001). Implausible-high ages (corrupt DOB, e.g. ~914 yr) are nulled at extraction (`export_user_day_age.MAX_PLAUSIBLE_AGE=120`); the snapshot has been regenerated, so this is **applied** — adult age max is now 95.9 (was 912), adult mean/SD 38.8 ± 13.2 (was 39.3 ± 24.7), and the corrupt-DOB user joins the 2 unknown-age users retained in `all`.
+
+**Next:** §8.2 (day-type × delivery-strategy interaction) and §8.3 (within-user TDD stratification) are still stubs — their LMM helpers in `analysis/utils/statistics.py` are ready to wire in. §8.1 tests (`testing/analysis/test_analysis_8_1.py`) are skipped placeholders. Rolling-30-day TDD reference and the high-TDD outlier follow-up remain open. See the latest `project_history.md` entries for detail.
+
 Plan doc: [PLN-1008 Data Analysis Plan_ No Meal Announcement with Tidepool Loop.txt](PLN-1008%20Data%20Analysis%20Plan_%20No%20Meal%20Announcement%20with%20Tidepool%20Loop.txt) (Rev 01, effective 2026-05-20).
 
 ## Scope
@@ -35,7 +43,7 @@ no_meal_announcement/
 │   ├── export_user_day_classification.py               — apply three nested classifications + eligibility
 │   └── export_user_day_analysis_ready.py               — final denormalized join + §7.5 TDD reference / ratio + Loop<3.4.0 cohort filter
 ├── analysis/                                — §8 analyses
-│   ├── analysis_8-1_glycemic_outcomes_nma_vs_carb_entry.py  — Method A + Method B (LMM) + Tables 8.1a/b/c + figures; adult/pediatric cohort split
+│   ├── analysis_8-1_glycemic_outcomes_nma_vs_carb_entry.py  — Method A + Method B (LMM) + Tables 8.1a/b/c + figures; adult/pediatric cohort split; Sample Information (Table 1)
 │   ├── analysis_8-2_nma_by_delivery_strategy.py        — §8.2 scaffold (from prior scaffold; not yet rewired)
 │   ├── analysis_8-3_nma_tdd_stratified.py              — §8.3 scaffold (from prior scaffold; not yet rewired)
 │   ├── data_overview.py                                — cohort/data overview (from prior scaffold)
@@ -90,7 +98,7 @@ Phase 2: Per-user-day aggregations
     basal: prefer HealthKit source=Loop (rate=delivered, rate×LEAST(gap,dur)); fall back to Loop-direct payload.deliveredUnits.
     Loop's two upload paths are duplicates — never summed; commanded Loop rate×dur (~1.7× delivered) is never used.
     All streams dedup on (_userId, round-to-nearest-minute(timestamp), value) — collapses BDDP re-ingests AND Loop's dual-sync ~2.5s/~15s pairs.
-  export_user_day_age                → nma_user_day_age  (age_years + is_pediatric per day; DOB from bddp_user_dates)
+  export_user_day_age                → nma_user_day_age  (age_years + is_pediatric per day; DOB from bddp_user_dates; ages >120 or negative nulled as corrupt DOB)
 
 Phase 3: Classification + analysis-ready join
   export_user_day_classification     → nma_user_day_classification  (CE/BE arm flags + eligibility)
@@ -98,7 +106,7 @@ Phase 3: Classification + analysis-ready join
     nested arm membership flags (in_ce0_be0 / in_ce0_be_le1 / in_ce0_be_inf / in_ce_gt0);
     user_eligible = >=10 eligible days/user (window count)
     └─ export_user_day_analysis_ready → nma_user_day_analysis_ready (denormalized, analysis-ready)
-       Anchor: classification INNER JOIN loop_recommendations; LEFT JOIN endpoints / tdd / age. Applies PLN-1001 Loop-version cohort filter: version known → version_int < 3_004_000; version NULL → local_day < 2024-07-13 (Loop 3.4.0 release date).
+       Anchor: classification INNER JOIN loop_recommendations; LEFT JOIN endpoints / tdd / age / user_gender (sex). Applies PLN-1001 Loop-version cohort filter: version known → version_int < 3_004_000; version NULL → local_day < 2024-07-13 (Loop 3.4.0 release date).
        delivery_strategy (§7.3) computed inline as a CASE on loop_recommendations.dd_autobolus_count (>=3 -> autobolus_on else temp_basal_only).
        §7.5 TDD reference computed here over day_eligible days: mean_tdd_user, median_tdd_user (percentile_approx 0.5), n_eligible_days_for_tdd, tdd_ratio = tdd_units / mean_tdd_user.
 
@@ -111,11 +119,18 @@ Phase 4: Analysis
       Wald CI/p, per-user-median non-parametric companion; degenerate fits flagged converged=False):
       table_8_1b_lmm_contrasts.csv.
     Tables: table_8_1a_per_user_means.csv (per-arm mean±SD + counts),
-      table_8_1c_behavioral_summary.csv (CE>0-day behavioral metrics; meal-bolus = carb_entry_count proxy).
+      table_8_1c_behavioral_summary.csv (CE>0-day behavioral metrics; meal-bolus = carb_entry_count proxy),
+      sample_information.csv (Table 1: per-cohort age + sex demographics, user/day counts; create_sample_information),
+      sex_missingness_sensitivity.csv (recorded-vs-missing-sex baseline comparison, Welch t; FDA §8.5 analog),
+      nma_day_frequency.csv (§4 secondary objective bullet 3: per-classification NMA-day-type frequency + per-user day-count distribution; create_nma_day_frequency).
+      main() concatenates the three per-cohort sample_information files into outputs/analysis_8_1/table_8_1_sample_information.csv.
+    run() clears its per-cohort dir (shutil.rmtree + recreate) before writing, so each reflects only the current run; the parent-level
+      combined Table 1 and the sibling outputs/analysis_8_1/supplement/ dir (exploratory weighting-sensitivity artifacts from
+      lmm_weighting_sensitivity.py) are left untouched.
     Figures: method_a_panel_a.png, method_a_panel_b_{central,lows,highs}.png (delta histograms),
       figure_8_1a_stacked_bars.png (4-arm time-in-range), figure_8_1b_tir_violin_box.png,
       figure_8_1c_tbr_violin_box.png.
-    §7.6 cohort split implemented; PLN-1001 age floor wired as a dormant run(min_age=...) hook (default off).
+    §7.6 cohort split implemented; PLN-1001 §6 age floor now enabled by default (run(min_age=MIN_AGE=6); drops known-<6, retains unknown-age); implausible-high ages nulled at extraction (export_user_day_age.MAX_PLAUSIBLE_AGE=120).
     Weighting sensitivity (see docs/weighting_sensitivity.md): Method B LMM ≈ precision-weighted Method A,
       so on the sparse stringent arms (CE=0/BE=0, CE=0/BE<=1) the TIR/glucose contrast is sign-fragile to
       user weighting and dominated by heavy-contributor users — report no directional claim there; the
@@ -133,6 +148,7 @@ Phase 4: Analysis
 | `FDA_real_world_data.data_staging.compute_glycemic_endpoints.compute_glycemic_endpoints` | Imported directly for per-user-day metrics. |
 | `FDA_real_world_data.analysis.utils.data_loading.COHORT_WHERE` | Single source of truth for cohort predicate. |
 | `FDA_real_world_data/data_staging/export_autobolus_durability.py` | DOB→age pattern. |
+| `dev.default.user_gender` | Per-user sex for §8.1 Sample Information; LEFT JOINed in `export_user_day_analysis_ready.py` (same source/pattern FDA `export_valid_transition_segments.py` uses). |
 | `FDA_real_world_data/data_staging/export_carbohydrates_from_transitions.py` | Food-extraction pattern (day-level adaptation). |
 | `FDA_real_world_data/analysis/utils/statistics.py` | Loaded by file path in analysis_8-1 (and re-exported by the local `analysis/utils/statistics.py`) for Shapiro / paired-t / Wilcoxon / p-formatting. |
 

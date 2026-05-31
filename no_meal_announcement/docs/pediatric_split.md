@@ -14,9 +14,11 @@ is_pediatric = age_years < 18
 ```
 
 DOB comes from `dev.default.bddp_user_dates.dob` (the same lookup FDA's
-`export_autobolus_durability.py` uses). When DOB is unknown, both `age_years` and
-`is_pediatric` are NULL — the analysis decides how to handle missing-DOB users (typically
-dropped, matching `COHORT_WHERE`'s `is_age_eligible OR dob IS NULL` behavior on the FDA side).
+`export_autobolus_durability.py` uses). When DOB is unknown — **or the computed age is
+implausible** (negative, or `> MAX_PLAUSIBLE_AGE = 120`, i.e. a corrupt DOB) — both
+`age_years` and `is_pediatric` are nulled at extraction. The analysis retains those
+unknown-age users (matching `COHORT_WHERE`'s `is_age_eligible OR dob IS NULL` on the FDA
+side) and applies the §6 lower floor itself (see Reporting).
 
 Age is evaluated **on the day of measurement**, not at cohort entry.
 
@@ -37,12 +39,34 @@ emits its tables/figures per cohort.
 
 ## Reporting
 
-- Analysis 1, 2, 3 tables and figures are emitted twice: one set per cohort
-  (`analysis/outputs/.../adult/` and `analysis/outputs/.../pediatric/`).
-- Sample sizes (users, user-days) are reported per cohort.
+- §8.1 tables and figures are emitted once per cohort, into
+  `analysis/outputs/analysis_8_1/{adult,pediatric,all}/`.
+- Each cohort dir also carries `sample_information.csv` (Table 1: per-user age + sex
+  demographics, user/day counts); `main()` concatenates the three into a combined
+  `analysis/outputs/analysis_8_1/table_8_1_sample_information.csv` with adult/pediatric/all
+  columns.
+- Sample sizes reconcile: standalone `adult` (≥1 adult day) and `pediatric` (≥1 pediatric
+  day) overlap on cross-over users, so adult + pediatric > all. The combined Table 1's
+  `all`-column composition rows classify each user by their **first eligible day**
+  (cohort-entry age), so a cross-over user counts as pediatric there.
 
-## Open
+## Status
 
-- Pediatric/adult split is **not yet wired** through `analysis_8-1` — Method A currently
-  runs on the pooled eligible cohort. Adding the split is a small change to the analysis's
-  load step (`pdf.groupby("is_pediatric")` then per-group outputs).
+- **Wired and run** in `analysis_8-1` via `filter_cohort()` → `run(cohort=…)` → `main()`
+  (loops `adult`/`pediatric`/`all`). Runs locally off the CSV snapshot:
+  `python analysis/analysis_8-1_…py --csv_path outputs/nma_user_day_analysis_ready.csv`.
+
+## Age gating (two-sided)
+
+Bad source DOBs produced implausible ages (1 eligible user at ~914 yr; 43 users < 6 yr).
+Gating is split:
+
+- **Upper bound — at extraction.** `export_user_day_age.py` nulls any age `> MAX_PLAUSIBLE_AGE
+  (120)` or negative (corrupt DOB), treating it like unknown DOB. **Applied** (snapshot
+  regenerated): the ~914-yr user's age is nulled → adult age max is now 95.9 (was 912), adult
+  mean/SD 38.8 ± 13.2 (was 39.3 ± 24.7), and that user is retained in `all` as unknown age (2 total).
+- **Lower bound — in analysis.** `filter_cohort(min_age=MIN_AGE=6)` (now the default in
+  `run()`/`main()`) drops users **known** to be younger than 6 and retains unknown/nulled-age
+  users (PLN-1001 `is_age_eligible OR dob IS NULL`). Verified effect: pediatric 516 → 473
+  users (43 sub-6 dropped), pediatric min age 0.1 → 6.0; the 1 null-DOB user stays in `all`
+  as "Unknown age". Pass `min_age=None` to disable.

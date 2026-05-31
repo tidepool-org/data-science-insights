@@ -10,7 +10,8 @@ The PLN-1001 Loop-version cohort filter is applied here:
 Matches FDA `analysis/utils/data_loading.MAX_LOOP_VERSION_INT` and `MAX_SEG2_END_DATE`.
 Per-day `age_years` and `is_pediatric` come from `nma_user_day_age` (LEFT JOIN; NULL
 when DOB is unknown) — the §6 age-eligibility (>=6) and §7.6 pediatric/adult split are
-applied downstream by the analysis on these fields.
+applied downstream by the analysis on these fields. Per-user `gender` comes from
+`dev.default.user_gender` (LEFT JOIN; NULL when unknown), for §8.1 Sample Information.
 
 §7.5 TDD reference is computed inline at this step (now that eligibility is known):
   mean_tdd_user / median_tdd_user / n_eligible_days_for_tdd  — over the user's
@@ -28,11 +29,12 @@ Inputs:
     nma_user_day_glycemic_endpoints        (per-day TIR / TBR / TAR / CV / mean glucose / hypo events)
     nma_user_day_tdd                       (delivered basal+bolus per day)
     nma_user_day_age                       (age_years, is_pediatric per §7.6)
+    dev.default.user_gender                (per-user sex for Sample Information; LEFT JOIN, null if unknown)
 
 Outputs:
     nma_user_day_analysis_ready
         One row per (user, local_day) — classification flags, endpoints, TDD + ratio,
-        delivery strategy, Loop version, eligibility. Analysis-ready for §8.1/§8.2/§8.3.
+        delivery strategy, Loop version, eligibility, age + sex. Analysis-ready for §8.1/§8.2/§8.3.
     <outputs>/nma_user_day_analysis_ready.csv
         A single-file CSV snapshot of the same table (pandas dump from the driver), for
         download / inspection. The estimated CSV size is always printed first; the file is
@@ -110,6 +112,7 @@ def run(
     endpoints_table="dev.fda_510k_rwd.nma_user_day_glycemic_endpoints",
     tdd_table="dev.fda_510k_rwd.nma_user_day_tdd",
     age_table="dev.fda_510k_rwd.nma_user_day_age",
+    user_gender_table="dev.default.user_gender",
     output_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
     output_csv=None,
 ):
@@ -154,6 +157,8 @@ WITH base AS (
     -- Age + pediatric flag (LEFT JOIN — null if DOB unknown)
     age.age_years,
     age.is_pediatric,
+    -- Sex (LEFT JOIN dev.default.user_gender — null if unknown; per-user constant; for §8.1 Sample Information)
+    g.gender,
     -- Strategy + Loop version (from loop_recommendations)
     lr.dd_autobolus_count,
     lr.loop_version,
@@ -173,6 +178,8 @@ WITH base AS (
   LEFT JOIN {age_table} age
     ON cls._userId = age._userId
     AND cls.local_day = age.local_day
+  LEFT JOIN {user_gender_table} g
+    ON cls._userId = g.userid
   WHERE (lr.version_int IS NOT NULL AND lr.version_int < {MAX_LOOP_VERSION_INT})
      OR (lr.version_int IS NULL AND cls.local_day < DATE '{MAX_DAY_IF_VERSION_UNKNOWN}')
 ),
@@ -226,6 +233,7 @@ if __name__ == "__main__":
     _parser.add_argument("--endpoints_table", default="dev.fda_510k_rwd.nma_user_day_glycemic_endpoints")
     _parser.add_argument("--tdd_table", default="dev.fda_510k_rwd.nma_user_day_tdd")
     _parser.add_argument("--age_table", default="dev.fda_510k_rwd.nma_user_day_age")
+    _parser.add_argument("--user_gender_table", default="dev.default.user_gender")
     _parser.add_argument("--output_table", default="dev.fda_510k_rwd.nma_user_day_analysis_ready")
     _parser.add_argument("--output_csv", default=None, help="CSV path (default: outputs/<table>.csv)")
     _parser.add_argument("--no_csv", action="store_true", help="print the CSV size only; skip the write")
@@ -238,6 +246,7 @@ if __name__ == "__main__":
         _args.endpoints_table,
         _args.tdd_table,
         _args.age_table,
+        _args.user_gender_table,
         _args.output_table,
         output_csv=False if _args.no_csv else _args.output_csv,
     )

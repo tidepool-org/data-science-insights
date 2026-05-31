@@ -33,8 +33,14 @@ def paf_distribution(df: pd.DataFrame, output_path: Path) -> None:
 
 
 def nma_day_frequency(df: pd.DataFrame, output_path: Path) -> None:
-    """Per-user counts of each NMA-like day type and CE>0 days."""
-    raise NotImplementedError("Phase A stub — implement in Phase C")
+    """Per-user counts of each NMA-like day type and CE>0 days.
+
+    SUPERSEDED — §4 secondary-objective bullet 3 is now implemented in
+    `analysis_8-1_glycemic_outcomes_nma_vs_carb_entry.create_nma_day_frequency`, emitted
+    per cohort as `outputs/analysis_8_1/<cohort>/nma_day_frequency.csv`. This prior-scaffold
+    stub is retained only until the `data_overview.py` reconciliation (see architecture.md
+    Open Questions)."""
+    raise NotImplementedError("superseded by analysis_8-1.create_nma_day_frequency")
 
 
 def main(spark, output_root: Path = Path("analysis/outputs")) -> None:

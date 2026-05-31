@@ -29,6 +29,9 @@ Inputs:
                                         applied — version<3.4.0 when known, else local_day<2024-07-13)
 
 Outputs (analysis/outputs/analysis_8_1/<cohort>/):
+    sample_information.csv              (Table 1: per-cohort age + sex demographics, user/day counts)
+    sex_missingness_sensitivity.csv     (recorded-vs-missing-sex baseline comparison; FDA §8.5 analog)
+    nma_day_frequency.csv               (§4 secondary obj. bullet 3: per-classification NMA-day-type frequency + per-user distribution)
     method_a_contrasts.csv              (per classification x endpoint paired stats)
     table_8_1a_per_user_means.csv       (per-user means ± SD by arm, with user/day counts)
     table_8_1b_lmm_contrasts.csv        (Method B LMM contrast NMA-CE>0 + np median sensitivity)
@@ -38,11 +41,16 @@ Outputs (analysis/outputs/analysis_8_1/<cohort>/):
     figure_8_1a_stacked_bars.png        (mean time in 5 glycemic ranges across the 4 arms)
     figure_8_1b_tir_violin_box.png      (per-user TIR violin+box across the 4 arms)
     figure_8_1c_tbr_violin_box.png      (per-user time <70 and <54 violin+box across the 4 arms)
+
+main() also writes the combined Sample Information across cohorts (run via the no-`--cohort`
+entry point):
+    analysis/outputs/analysis_8_1/table_8_1_sample_information.csv  (adult/pediatric/all columns)
 """
 
 import argparse
 import importlib.util
 import os
+import shutil
 import warnings
 from typing import Literal
 
@@ -121,6 +129,28 @@ BEHAVIORAL = [
     ("tdd_units", "Total daily insulin (U/day)"),
 ]
 
+# Sample Information (Table 1) sex categories. Raw `gender` from dev.default.user_gender
+# is normalized to these by _bin_sex (mirrors FDA analysis_8-5._bin_gender).
+SEX_CATEGORIES = ["Male", "Female", "Other/Unknown"]
+
+# §6 / PLN-1001 minimum age (years), applied in analysis via filter_cohort. Users KNOWN to
+# be younger are dropped; unknown/nulled-age users are retained (PLN-1001
+# `is_age_eligible OR dob IS NULL`). Implausible-high ages are already nulled at extraction
+# (export_user_day_age.MAX_PLAUSIBLE_AGE), so this floor + that bound together gate age.
+MIN_AGE = 6
+
+
+def _here():
+    """The analysis/ directory, with the Databricks-notebook fallback where __file__ is
+    undefined (mirrors the path handling in the data_staging scripts)."""
+    try:
+        return os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        return (
+            "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
+            "no_meal_announcement/analysis"
+        )
+
 
 def _load_fda_statistics():
     """Load FDA analysis/utils/statistics.py by path as `fda_statistics` (avoids the
@@ -192,10 +222,11 @@ def _default_analysis_ready_csv(here, analysis_ready_table):
     return os.path.normpath(os.path.join(here, "..", "outputs", fname))
 
 
-def filter_cohort(pdf, cohort: Literal["adult", "pediatric", "all"] = "all", min_age=None):
-    """§7.6 age cohort. NULL `is_pediatric` (DOB unknown) is excluded from both adult and
-    pediatric, retained in `all`. `min_age` (default off) is the dormant hook for the
-    open PLN-1001 age-floor question (footnote [a]); when set it requires age_years>=min_age."""
+def filter_cohort(pdf, cohort: Literal["adult", "pediatric", "all"] = "all", min_age=MIN_AGE):
+    """§7.6 age cohort. NULL `is_pediatric` (DOB unknown or implausible) is excluded from
+    both adult and pediatric, retained in `all`. `min_age` (§6 floor, default MIN_AGE=6)
+    drops users KNOWN to be younger than the floor; unknown/nulled-age users are retained
+    (PLN-1001 `is_age_eligible OR dob IS NULL`). Pass `min_age=None` to disable the floor."""
     out = pdf
     if cohort == "adult":
         out = out[out["is_pediatric"] == False]  # noqa: E712
@@ -204,7 +235,7 @@ def filter_cohort(pdf, cohort: Literal["adult", "pediatric", "all"] = "all", min
     elif cohort != "all":
         raise ValueError(f"unknown cohort: {cohort!r}")
     if min_age is not None:
-        out = out[out["age_years"].notna() & (out["age_years"] >= min_age)]
+        out = out[out["age_years"].isna() | (out["age_years"] >= min_age)]
     return out.copy()
 
 
@@ -378,6 +409,169 @@ def create_table_8_1c(pdf):
     df["display_median_iqr"] = df.apply(
         lambda r: f"{r['median']:.2f} [{r['q1']:.2f}, {r['q3']:.2f}]", axis=1)
     return df
+
+
+def _bin_sex(gender):
+    """Normalize raw gender to Male / Female / Other/Unknown (mirrors FDA
+    analysis_8-5._bin_gender). dev.default.user_gender stores single-char codes (M/F);
+    missing/blank/unrecognized fall to Other/Unknown."""
+    if pd.isna(gender) or str(gender).strip() == "":
+        return "Other/Unknown"
+    g = str(gender).strip().lower()
+    if g in ("male", "m"):
+        return "Male"
+    if g in ("female", "f"):
+        return "Female"
+    return "Other/Unknown"
+
+
+def create_sample_information(pdf):
+    """Sample Information (Table 1) for one age cohort: per-user demographics over the
+    cohort's eligible days (all arms — demographics describe the cohort, not an arm).
+    Collapses to one row per user at their first eligible day for age (age_years can drift
+    across a long window; the earliest day is the cohort-entry age) and the per-user-constant
+    sex. Returns a 2-column ['metric', 'value'] frame; main() concatenates the three cohorts
+    into table_8_1_sample_information.csv.
+
+    Sex degrades gracefully: until `gender` is in the analysis-ready snapshot (see
+    data_staging/export_user_day_analysis_ready.py), the sex rows read 'N/A (gender pending)'
+    so the run completes before the Databricks regeneration step."""
+    n_days = int(len(pdf))
+    first = pdf.sort_values("local_day").groupby("_userId", as_index=False).first()
+    n_users = int(len(first))
+    age = pd.to_numeric(first["age_years"], errors="coerce").dropna()
+
+    def pct(n):
+        return f"{n} ({100.0 * n / n_users:.1f}%)" if n_users else "0 (n/a)"
+
+    rows = [
+        ("Users, n", str(n_users)),
+        ("User-days, n", str(n_days)),
+        ("Age, mean ± SD", f"{age.mean():.1f} ± {age.std(ddof=1):.1f}" if len(age) > 1 else "N/A"),
+        ("Age, median [IQR]",
+         f"{age.median():.1f} [{age.quantile(0.25):.1f}, {age.quantile(0.75):.1f}]"
+         if len(age) else "N/A"),
+        ("Age, min-max", f"{age.min():.1f}-{age.max():.1f}" if len(age) else "N/A"),
+    ]
+    # Age composition (uniform across cohorts; a self-check row for the adult/pediatric
+    # cohorts, the real split for `all`). is_pediatric is NULL when DOB is unknown or the
+    # age was implausible and nulled at extraction.
+    ped = first["is_pediatric"]
+    rows += [
+        ("Pediatric (<18), n (%)", pct(int((ped == True).sum()))),  # noqa: E712
+        ("Adult (>=18), n (%)", pct(int((ped == False).sum()))),  # noqa: E712
+        ("Unknown age, n (%)", pct(int(ped.isna().sum()))),
+    ]
+    # Sex composition (guarded — gender may not be in the snapshot yet).
+    if "gender" in first.columns:
+        sex = first["gender"].apply(_bin_sex)
+        for cat in SEX_CATEGORIES:
+            rows.append((f"{cat}, n (%)", pct(int((sex == cat).sum()))))
+    else:
+        for cat in SEX_CATEGORIES:
+            rows.append((f"{cat}, n (%)", "N/A (gender pending)"))
+    return pd.DataFrame(rows, columns=["metric", "value"])
+
+
+def _combine_sample_information(here=None):
+    """Concatenate the three per-cohort sample_information.csv files into one Table-1 with
+    adult/pediatric/all columns at outputs/analysis_8_1/table_8_1_sample_information.csv.
+    Reads three tiny CSVs (not the snapshot); all three share the same metric rows in the
+    same order, so concat on the metric index preserves layout."""
+    if here is None:
+        here = _here()
+    root = os.path.join(here, "outputs", "analysis_8_1")
+    cols = []
+    for cohort in ("adult", "pediatric", "all"):
+        path = os.path.join(root, cohort, "sample_information.csv")
+        if not os.path.exists(path):
+            print(f"  sample_information.csv missing for '{cohort}'; skipping combined Table-1")
+            return
+        cols.append(pd.read_csv(path).set_index("metric")["value"].rename(cohort))
+    combined = pd.concat(cols, axis=1).reset_index()
+    out = os.path.join(root, "table_8_1_sample_information.csv")
+    combined.to_csv(out, index=False)
+    print(f"wrote combined Sample Information (Table 1) to {out}")
+
+
+def create_sex_missingness_sensitivity(pdf):
+    """Sex-missingness sensitivity (mirrors FDA analysis_8-5.run_sensitivity_gender_missing).
+    Compares users WITH a recorded sex against those WITHOUT, on per-user baseline
+    characteristics (age, mean TIR, mean time <70, eligible-day count), to gauge whether
+    gender missingness is associated with the cohort — i.e. whether the observed sex split
+    is likely representative. Welch t-test per variable (N/A if either group <3). 'Missing'
+    is null/blank raw gender (matches FDA), not the binned Other/Unknown category.
+
+    Degrades gracefully when `gender` is absent from the snapshot (single note row)."""
+    if "gender" not in pdf.columns:
+        return pd.DataFrame([{"variable": "gender not in snapshot — sensitivity pending Databricks regen"}])
+    from scipy import stats
+
+    srt = pdf.sort_values("local_day")
+    per_user = srt.groupby("_userId").agg(
+        gender=("gender", "first"),       # per-user constant
+        age_years=("age_years", "first"),  # age at first eligible day
+        tir=("tir", "mean"),
+        tbr=("tbr", "mean"),
+    )
+    per_user["n_days"] = pdf.groupby("_userId").size()
+    raw = per_user["gender"]
+    has = raw.notna() & (raw.astype(str).str.strip() != "")
+    known, missing = per_user[has], per_user[~has]
+    n_known, n_missing, n_tot = len(known), len(missing), len(per_user)
+
+    def cell(s):
+        s = pd.to_numeric(s, errors="coerce").dropna()
+        return f"{s.mean():.1f} ± {s.std(ddof=1):.1f}" if len(s) > 1 else "N/A"
+
+    def pval(col):
+        a = pd.to_numeric(known[col], errors="coerce").dropna()
+        b = pd.to_numeric(missing[col], errors="coerce").dropna()
+        if len(a) < 3 or len(b) < 3:
+            return "N/A"
+        return f"{stats.ttest_ind(a, b, equal_var=False).pvalue:.3g}"
+
+    kcol, mcol = f"Sex recorded (n={n_known})", f"Sex missing (n={n_missing})"
+    rows = [{"variable": "Users, n (% of cohort)",
+             kcol: f"{n_known} ({100.0 * n_known / n_tot:.1f}%)" if n_tot else "0",
+             mcol: f"{n_missing} ({100.0 * n_missing / n_tot:.1f}%)" if n_tot else "0",
+             "p (Welch t)": ""}]
+    for col, label in [("age_years", "Age (years)"), ("tir", "Mean TIR 70-180 (%)"),
+                       ("tbr", "Mean time <70 (%)"), ("n_days", "Eligible days, n")]:
+        rows.append({"variable": label, kcol: cell(known[col]), mcol: cell(missing[col]),
+                     "p (Welch t)": pval(col)})
+    return pd.DataFrame(rows)
+
+
+def create_nma_day_frequency(pdf):
+    """Secondary objective (PLN-1008 §4, bullet 3): frequency and per-user distribution of
+    each NMA-like day type in the cohort. Per nested classification: users contributing >=1
+    such day (n, % of the cohort's eligible users), total user-days, and the per-user
+    day-count distribution among contributors (mean ± SD, median [IQR], max). Descriptive;
+    uses only the three NMA classification flags, which the CE>0 comparator restriction does
+    not touch, so it is order-independent within run()."""
+    n_cohort = int(pdf["_userId"].nunique())
+    rows = []
+    for flag, label in CLASSIFICATIONS:
+        per_user = pdf[pdf[flag] == True].groupby("_userId").size()  # noqa: E712  days/user, contributors
+        n_contrib = int(len(per_user))
+        pct = f"{100.0 * n_contrib / n_cohort:.1f}%" if n_cohort else "n/a"
+        if n_contrib > 1:
+            mean_sd = f"{per_user.mean():.1f} ± {per_user.std(ddof=1):.1f}"
+            med_iqr = f"{per_user.median():.1f} [{per_user.quantile(0.25):.1f}, {per_user.quantile(0.75):.1f}]"
+        elif n_contrib == 1:
+            mean_sd, med_iqr = f"{per_user.mean():.1f}", f"{per_user.median():.1f}"
+        else:
+            mean_sd = med_iqr = "N/A"
+        rows.append({
+            "classification": label,
+            "Users contributing, n (%)": f"{n_contrib} ({pct})",
+            "Total user-days, n": int(per_user.sum()),
+            "Days/user (contributors), mean ± SD": mean_sd,
+            "Days/user, median [IQR]": med_iqr,
+            "Days/user, max": int(per_user.max()) if n_contrib else 0,
+        })
+    return pd.DataFrame(rows)
 
 
 def make_panel_a(pdf):
@@ -560,11 +754,13 @@ def run(
     analysis_ready_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
     output_dir=None,
     cohort: Literal["adult", "pediatric", "all"] = "all",
-    min_age=None,
+    min_age=MIN_AGE,
     csv_path=None,
 ):
     """Run Analysis 8.1 for one age cohort. Outputs land in
     outputs/analysis_8_1/<cohort>/ unless an explicit output_dir is given.
+
+    `min_age` defaults to the §6 floor (MIN_AGE=6); pass None to disable.
 
     Source priority: an explicit `csv_path`, else `spark.table(analysis_ready_table)` when
     a Spark session is given, else (running locally, no Spark) the CSV snapshot that
@@ -573,6 +769,12 @@ def run(
     nma_stats = _load_nma_statistics(here)
     if output_dir is None:
         output_dir = os.path.join(here, "outputs", "analysis_8_1", cohort)
+    # Clear this cohort's dir first so it reflects only the current run (no stale files from
+    # renamed/removed outputs). Only the per-cohort dir is wiped — the sibling `supplement/`
+    # dir (exploratory weighting-sensitivity artifacts) and the parent-level combined table
+    # are left untouched.
+    if os.path.isdir(output_dir):
+        shutil.rmtree(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     if csv_path is None and spark is None:
@@ -595,6 +797,16 @@ def run(
     contrasts = contrasts_table(pdf, fda_stats)
     print(contrasts.to_string(index=False))
     contrasts.to_csv(os.path.join(output_dir, "method_a_contrasts.csv"), index=False)
+
+    # Sample Information (Table 1) for this cohort — age + sex demographics.
+    create_sample_information(pdf).to_csv(
+        os.path.join(output_dir, "sample_information.csv"), index=False)
+    # Sex-missingness sensitivity (FDA §8.5 analog): recorded vs missing sex on baselines.
+    create_sex_missingness_sensitivity(pdf).to_csv(
+        os.path.join(output_dir, "sex_missingness_sensitivity.csv"), index=False)
+    # Secondary objective (§4 bullet 3): NMA-day-type frequency + per-user distribution.
+    create_nma_day_frequency(pdf).to_csv(
+        os.path.join(output_dir, "nma_day_frequency.csv"), index=False)
 
     # Tables 8.1a / 8.1b / 8.1c.
     create_table_8_1a(pdf).to_csv(os.path.join(output_dir, "table_8_1a_per_user_means.csv"), index=False)
@@ -621,15 +833,18 @@ def run(
 def main(
     spark=None,
     analysis_ready_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
-    min_age=None,
+    min_age=MIN_AGE,
     csv_path=None,
 ):
     """Orchestrate the §7.6 cohort split: adult and pediatric reported separately, plus a
-    pooled `all` sanity run. Each lands in its own outputs/analysis_8_1/<cohort>/ dir.
-    Pass `csv_path` to run locally off the analysis-ready CSV snapshot (no Spark)."""
+    pooled `all` sanity run. Each lands in its own outputs/analysis_8_1/<cohort>/ dir. The
+    §6 min-age floor (MIN_AGE=6) is applied to every cohort. Pass `csv_path` to run locally
+    off the analysis-ready CSV snapshot (no Spark)."""
     for cohort in ("adult", "pediatric", "all"):
         run(spark, analysis_ready_table, output_dir=None, cohort=cohort, min_age=min_age,
             csv_path=csv_path)
+    # Combined Sample Information (Table 1) across the three cohorts.
+    _combine_sample_information()
 
 
 if __name__ == "__main__":
@@ -640,7 +855,9 @@ if __name__ == "__main__":
                               "outputs/<table-name>.csv when no Spark session is present")
     _parser.add_argument("--output_dir", default=None)
     _parser.add_argument("--cohort", default=None, choices=["adult", "pediatric", "all"])
-    _parser.add_argument("--min_age", type=int, default=None)
+    _parser.add_argument("--min_age", type=int, default=MIN_AGE,
+                         help=f"§6 min-age floor in years (default {MIN_AGE}); known-younger "
+                              "users dropped, unknown-age retained")
     _args, _ = _parser.parse_known_args()
 
     # Databricks injects a `spark` global; a local run has none. Resolve it safely so

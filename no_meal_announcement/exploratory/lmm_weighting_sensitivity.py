@@ -3,7 +3,9 @@ NMA arms? The two estimators apply the SAME per-user paired differences (NMA mea
 mean) under different WEIGHTS — this script makes that explicit, exactly and with all the
 data (no subsampling).
 
-Produces, for cohort="all" (matching analysis/outputs/analysis_8_1/all/):
+Reads §8.1's all-cohort outputs (table_8_1b) from analysis/outputs/analysis_8_1/all/ and
+writes its own supplement artifacts to analysis/outputs/analysis_8_1/supplement/ (a sibling
+dir that analysis_8-1's per-cohort dir-clearing does not touch). Produces, for cohort="all":
   1. Per-user day-count distribution by arm + heavy-contributor concentration.
   2. Weighting decomposition of the per-user paired diff, NMA − CE>0:
        - equal           = each user one vote                          (= Method A, Table 8.1b)
@@ -39,7 +41,11 @@ ANALYSIS_DIR = os.path.normpath(
 CSV = os.path.normpath(
     os.path.join(ANALYSIS_DIR, "..", "outputs", "nma_user_day_analysis_ready.csv")
 )
-OUT_DIR = os.path.join(ANALYSIS_DIR, "outputs", "analysis_8_1", "all")
+# Read §8.1's all-cohort outputs (e.g. table_8_1b) from the cohort dir, but write the
+# supplement artifacts to a sibling `supplement/` dir — analysis_8-1's run() wipes each
+# cohort dir on every run, so supplementary outputs must live outside it to survive.
+COHORT_DIR = os.path.join(ANALYSIS_DIR, "outputs", "analysis_8_1", "all")
+OUT_DIR = os.path.join(ANALYSIS_DIR, "outputs", "analysis_8_1", "supplement")
 SEED = 20260520
 N_BOOT = 1000
 
@@ -106,7 +112,7 @@ def section_2_weighting_decomposition(pdf):
     print("   Same per-user differences, different weights. No subsampling.")
     print("   equal = Method A (Table 8.1b) ;  harmonic n_eff = within-user precision ~ LMM")
     print("=" * 80)
-    lmm = pd.read_csv(os.path.join(OUT_DIR, "table_8_1b_lmm_contrasts.csv"))
+    lmm = pd.read_csv(os.path.join(COHORT_DIR, "table_8_1b_lmm_contrasts.csv"))
     lmm_map = {(r.classification, r.endpoint): r.coef for r in lmm.itertuples()}
 
     rows = []
@@ -229,6 +235,7 @@ def plot_nma_days_vs_tir(tables):
 
 
 def main():
+    os.makedirs(OUT_DIR, exist_ok=True)
     print(f"reading {CSV}")
     pdf = a81.prepare_day_level(pd.read_csv(CSV, low_memory=False))
     pdf = a81.filter_cohort(pdf, "all")

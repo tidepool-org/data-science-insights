@@ -1,5 +1,11 @@
 # FDA Real World Data — Architecture
 
+## Current state (as of 2026-05-31)
+
+Analyses **§8-1 through §8-8 implemented** across the transition (TB→AB), stable-AB, preset-override, and adoption-durability pipelines; 8-6/8-7 use a partner-CSV handoff (`--mode export` on Databricks → partner summary CSV → `--mode figures` locally). Per-script + integration tests live under `testing/`.
+
+**Next** (full list in "Pending / In Progress" at the bottom of `project_history.md`): guardrail values are placeholders — need FDA-confirmed limits; wire day-level classification (`loop_recommendation_day`) into the pipeline YAML + downstream; evaluate combined `loop_recommendations` vs per-method tables and compare dosingDecision-vs-HealthKit coverage; apply the argparse/param refactor to `compute_glycemic_endpoints.py` / `export_valid_transition_segments.py`; expand the minimal `analysis_8-6`.
+
 ## Directory Structure
 
 ```
