@@ -76,6 +76,7 @@ if _ANALYSIS_DIR not in sys.path:
 from utils.data_loader import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
+    COMPARATOR_LABEL,
     ENDPOINTS,
     FIGURE_ARMS,
     MIN_AGE,
@@ -88,39 +89,25 @@ from utils.data_loader import (  # noqa: E402
     prepare_day_level,
     restrict_comparator,
 )
+from utils.plotting import (  # noqa: E402
+    GRAY,
+    GRIDS,
+    RANGE_COLORS,
+    RANGE_COLS,
+    endpoint_color,
+    overlay_hist_panel,
+    violin_box_panel,
+)
 
 BOOTSTRAP_N = 1000
 BOOTSTRAP_SEED = 20260520
 
-# Per-classification colors for the delta histograms (panel B).
-CLS_COLORS = ["#E03830", "#FF6D5C", "#607cff"]
-ZERO_LINE_COLOR = "#241144"
-
-# Panel B is split into three subfigures, grouped by endpoint type.
-ENDPOINT_GROUPS = [
-    ("central", [("tir", "Time 70-180 mg/dL (%)"), ("mean_glucose", "Mean glucose (mg/dL)")]),
-    ("lows", [("tbr", "Time <70 mg/dL (%)"), ("tbr_very_low", "Time <54 mg/dL (%)"),
-              ("hypo_events", "Hypo events / day")]),
-    ("highs", [("tar", "Time >180 mg/dL (%)"), ("tar_very_high", "Time >250 mg/dL (%)"),
-               ("cv", "CV (%)")]),
-]
-
-# Disjoint glycemic ranges for the stacked bar (sum to ~100% per day), derived from the
-# cumulative endpoints, with their stacked-bar colors.
-RANGE_COLS = [
-    ("r_lt54", "<54"),
-    ("r_54_70", "54-70"),
-    ("r_70_180", "70-180"),
-    ("r_180_250", "180-250"),
-    ("r_gt250", ">250"),
-]
-RANGE_COLORS = {
-    "<54": "#E03830",
-    "54-70": "#FF6D5C",
-    "70-180": "#5AC692",
-    "180-250": "#AA85DE",
-    ">250": "#7046CC",
-}
+# Per-user violin grids show the 4 arms (3 nested NMA + CE>0). NMA arms carry the endpoint's
+# glycemic-range colour, graded light→dark by breadth (BE=0 ⊂ BE≤1 ⊂ BE≤∞); CE>0 is grey.
+# Colours, the 2×2 metric grids, RANGE_COLORS/RANGE_COLS and the violin/histogram panel helpers
+# are shared across §8.1–§8.3 via utils.plotting.
+NMA_ARM_ALPHAS = [0.30, 0.50, 0.78]   # BE=0 / BE≤1 / BE≤∞, graded by breadth
+COMPARATOR_ALPHA = 0.65
 
 # Behavioral metrics for Table 8.1c (CE>0 days). PLN-1008 §7.5 lists meal boluses,
 # manual/correction boluses, announced carbs, and TDD. There is no dedicated meal-bolus
@@ -474,71 +461,6 @@ def create_nma_day_frequency(pdf):
     return pd.DataFrame(rows)
 
 
-def make_panel_a(pdf):
-    """Panel A: per endpoint, box plot of per-user means across the 4 arms (3 NMA + CE>0),
-    with jittered per-user points."""
-    n = len(ENDPOINTS)
-    ncols = 4
-    nrows = int(np.ceil(n / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4.5 * nrows))
-    axes = np.atleast_1d(axes).ravel()
-    rng = np.random.default_rng(BOOTSTRAP_SEED)
-
-    for ax, (col, label) in zip(axes, ENDPOINTS):
-        data, labels = [], []
-        for flag, arm_label in FIGURE_ARMS:
-            data.append(per_user_arm_mean(pdf, col, flag).dropna().to_numpy())
-            labels.append(arm_label)
-        ax.boxplot(data, positions=range(1, len(data) + 1), widths=0.5, showfliers=False)
-        for pos, vals in enumerate(data, start=1):
-            ax.scatter(rng.normal(pos, 0.05, size=len(vals)), vals, s=5, alpha=0.2, color="#607cff")
-        ax.set_xticks(range(1, len(data) + 1))
-        ax.set_xticklabels([f"{lab}\n(n={len(d)})" for lab, d in zip(labels, data)], fontsize=8)
-        ax.set_title(label, fontsize=11)
-
-    for ax in axes[n:]:
-        ax.set_visible(False)
-
-    fig.suptitle("Analysis 8.1 Method A (a): per-user mean endpoints by arm (NMA-like vs CE>0)",
-                 fontsize=14)
-    fig.tight_layout(rect=[0, 0, 1, 0.97])
-    return fig
-
-
-def make_panel_b(pdf, group_label, group_endpoints):
-    """Panel B subfigure for one endpoint group: within-user paired delta (NMA - CE>0)
-    histograms, the three nested classifications stacked as rows, one endpoint per column;
-    x-axis shared down each column so the deltas align."""
-    nrows = len(CLASSIFICATIONS)
-    ncols = len(group_endpoints)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 3.2 * nrows),
-                             sharex="col", squeeze=False)
-
-    for j, (col, label) in enumerate(group_endpoints):
-        comparator = per_user_arm_mean(pdf, col, COMPARATOR_FLAG)
-        for i, ((nma_flag, cls_label), color) in enumerate(zip(CLASSIFICATIONS, CLS_COLORS)):
-            ax = axes[i][j]
-            nma = per_user_arm_mean(pdf, col, nma_flag)
-            paired = pd.DataFrame({"NMA": nma, "CMP": comparator}).dropna()
-            delta = paired["NMA"] - paired["CMP"]
-            if len(delta) > 0:
-                ax.hist(delta, bins=20, color=color, edgecolor="black", alpha=0.8)
-                ax.text(0.03, 0.95, f"n={len(delta)}\nmean={delta.mean():.1f}",
-                        transform=ax.transAxes, va="top", fontsize=7)
-            ax.axvline(0, color=ZERO_LINE_COLOR, ls="--", lw=1.5)
-            if i == 0:
-                ax.set_title(label, fontsize=10)
-            if j == 0:
-                ax.set_ylabel(f"{cls_label}\nUsers", fontsize=9)
-            if i == nrows - 1:
-                ax.set_xlabel("Δ (NMA − CE>0)", fontsize=8)
-
-    fig.suptitle(f"Analysis 8.1 Method A (b): paired differences (NMA-like − CE>0) — {group_label}",
-                 fontsize=13)
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
-    return fig
-
-
 def make_stacked_bar(pdf):
     """Figure 8.1a: stacked bar of mean % time in each glycemic range (<54, 54-70, 70-180,
     180-250, >250) across the four arms. Per-user mean within arm, then averaged across
@@ -595,58 +517,61 @@ def make_stacked_bar(pdf):
     return fig
 
 
-def _violin_box_by_arm(ax, pdf, endpoint, title):
-    """Per-user mean `endpoint` for each of the 4 arms as overlaid violin + box with
-    jittered per-user scatter. Empty/singleton arms are skipped so sparse cohorts (e.g.
-    pediatric) don't raise."""
-    data, labels = [], []
-    for flag, arm_label in FIGURE_ARMS:
-        data.append(per_user_arm_mean(pdf, endpoint, flag).dropna().to_numpy())
-        labels.append(arm_label)
-    positions = list(range(1, len(data) + 1))
-
-    violin = [(p, d) for p, d in zip(positions, data) if len(d) > 1]
-    if violin:
-        vp = ax.violinplot([d for _, d in violin], positions=[p for p, _ in violin],
-                           showextrema=False, widths=0.8)
-        for body in vp["bodies"]:
-            body.set_alpha(0.25)
-            body.set_facecolor("#607cff")
-    box = [(p, d) for p, d in zip(positions, data) if len(d) > 0]
-    if box:
-        ax.boxplot([d for _, d in box], positions=[p for p, _ in box], widths=0.25,
-                   showfliers=False)
-
-    rng = np.random.default_rng(BOOTSTRAP_SEED)
-    for pos, vals in zip(positions, data):
-        if len(vals):
-            ax.scatter(rng.normal(pos, 0.05, size=len(vals)), vals, s=6, alpha=0.25,
-                       color="#607cff")
-    ax.set_xticks(positions)
-    ax.set_xticklabels([f"{lab}\n(n={len(d)})" for lab, d in zip(labels, data)], fontsize=8)
-    ax.set_title(title, fontsize=11)
+def arm_violin_groups(pdf, endpoint, *, base=None):
+    """Per-user-mean violin groups for the 4 arms (3 nested NMA + CE>0) of one column, in the
+    shape utils.plotting.violin_box_panel expects: (label, values, colour, alpha). NMA arms carry
+    `base` (default the endpoint's glycemic-range colour) graded light→dark by breadth; CE>0 is
+    grey. `base` is overridable for non-glycemic columns (e.g. the supplement's TDD/bolus)."""
+    base = base or endpoint_color(endpoint)
+    groups = [
+        (lab, per_user_arm_mean(pdf, endpoint, flag).dropna().to_numpy(), base, alpha)
+        for (flag, lab), alpha in zip(CLASSIFICATIONS, NMA_ARM_ALPHAS)
+    ]
+    cmp_vals = per_user_arm_mean(pdf, endpoint, COMPARATOR_FLAG).dropna().to_numpy()
+    groups.append((COMPARATOR_LABEL, cmp_vals, GRAY, COMPARATOR_ALPHA))
+    return groups
 
 
-def make_figure_8_1b(pdf):
-    """Figure 8.1b: per-user mean TIR (70-180 mg/dL) violin+box across the 4 arms."""
-    fig, ax = plt.subplots(figsize=(9, 6))
-    _violin_box_by_arm(ax, pdf, "tir", "Figure 8.1b: Per-user mean TIR (70-180 mg/dL) by arm")
-    ax.set_ylabel("Per-user mean TIR (%)")
-    fig.tight_layout()
-    return fig
+def make_violin_grids(pdf):
+    """Figure 8.1b: per-user mean endpoints across the 4 arms (3 nested NMA + CE>0), as the two
+    shared 2×2 metric grids (all 8 endpoints). Returns {filename: figure}. Endpoint colour =
+    glycemic range (Tidepool brand for the 3 non-range metrics); NMA arms graded light→dark by
+    breadth, CE>0 grey; a separator divides the NMA arms from the comparator."""
+    out = {}
+    for key, gtitle, eps in GRIDS:
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+        for ax, (col, label) in zip(axes.ravel(), eps):
+            base = endpoint_color(col)
+            violin_box_panel(ax, arm_violin_groups(pdf, col, base=base),
+                             title=label, title_color=base, separators=(3.5,))
+        fig.suptitle(f"Figure 8.1b — {gtitle}\nper-user mean endpoints by arm "
+                     "(NMA arms coloured light→dark by breadth, CE>0 grey)", fontsize=10)
+        fig.tight_layout(rect=[0, 0, 1, 0.92])
+        out[f"figure_8_1b_violin_{key}.png"] = fig
+    return out
 
 
-def make_figure_8_1c(pdf):
-    """Figure 8.1c: per-user mean time below range violin+box across the 4 arms — <70 in
-    the left subplot, <54 in the right."""
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    _violin_box_by_arm(axes[0], pdf, "tbr", "Time <70 mg/dL")
-    axes[0].set_ylabel("Per-user mean time <70 (%)")
-    _violin_box_by_arm(axes[1], pdf, "tbr_very_low", "Time <54 mg/dL")
-    axes[1].set_ylabel("Per-user mean time <54 (%)")
-    fig.suptitle("Figure 8.1c: Per-user time below range by arm", fontsize=13)
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
-    return fig
+def make_paired_delta_grids(pdf):
+    """Figure 8.1c: within-user paired differences (NMA − CE>0) for the broadest arm (CE=0/BE≤∞,
+    the headline), as the two shared 2×2 metric grids (all 8 endpoints). Returns {filename:
+    figure}. Stricter-arm contrasts are in Tables 8.1a/8.1b. Endpoint range colour; solid line =
+    mean, dashed = 0."""
+    headline_flag = CLASSIFICATIONS[-1][0]  # in_ce0_be_inf
+    out = {}
+    for key, gtitle, eps in GRIDS:
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+        for ax, (col, label) in zip(axes.ravel(), eps):
+            base = endpoint_color(col)
+            nma = per_user_arm_mean(pdf, col, headline_flag)
+            cmp = per_user_arm_mean(pdf, col, COMPARATOR_FLAG)
+            delta = pd.DataFrame({"NMA": nma, "CMP": cmp}).dropna().eval("NMA - CMP").to_numpy()
+            overlay_hist_panel(ax, [(delta, "NMA − CE>0", base)],
+                               xlabel="per-user Δ (NMA − CE>0)", title=label, title_color=base)
+        fig.suptitle(f"Figure 8.1c — {gtitle}\nwithin-user paired differences (NMA − CE>0), "
+                     "CE=0/BE≤∞ arm (solid = mean, dashed = 0)", fontsize=10)
+        fig.tight_layout(rect=[0, 0, 1, 0.92])
+        out[f"figure_8_1c_paired_delta_{key}.png"] = fig
+    return out
 
 
 def run(
@@ -714,15 +639,11 @@ def run(
     create_table_8_1b(pdf, nma_stats).to_csv(os.path.join(output_dir, "table_8_1b_lmm_contrasts.csv"), index=False)
     create_table_8_1c(pdf).to_csv(os.path.join(output_dir, "table_8_1c_behavioral_summary.csv"), index=False)
 
-    # Figures: Method A panels (extras) + spec figures 8.1a/8.1b/8.1c.
-    figures = {
-        "method_a_panel_a.png": make_panel_a(pdf),
-        "figure_8_1a_stacked_bars.png": make_stacked_bar(pdf),
-        "figure_8_1b_tir_violin_box.png": make_figure_8_1b(pdf),
-        "figure_8_1c_tbr_violin_box.png": make_figure_8_1c(pdf),
-    }
-    for group_label, group_endpoints in ENDPOINT_GROUPS:
-        figures[f"method_a_panel_b_{group_label}.png"] = make_panel_b(pdf, group_label, group_endpoints)
+    # Figures (shared NMA conventions): 8.1a stacked ranges by arm; 8.1b per-user violin grids
+    # (all 8 endpoints, 4 arms); 8.1c paired-difference grids (all 8, broadest arm).
+    figures = {"figure_8_1a_stacked_bars.png": make_stacked_bar(pdf)}
+    figures.update(make_violin_grids(pdf))         # figure_8_1b_violin_grid{1,2}_*.png
+    figures.update(make_paired_delta_grids(pdf))   # figure_8_1c_paired_delta_grid{1,2}_*.png
     for fname, fig in figures.items():
         fig.savefig(os.path.join(output_dir, fname), dpi=150)
         plt.close(fig)

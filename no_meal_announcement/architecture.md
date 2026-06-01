@@ -10,7 +10,11 @@ Data-staging pipeline and **§8.1 complete**: Method A (per-user paired) + Metho
 
 **Autobolus reclassification (2026-06-01) — pending Databricks regen.** Loop records autoboluses as `type='bolus'`, `subType='normal'` (≈43% of all boluses), so the old BE (`subType='normal'`) silently counted them and the old `delivery_strategy` (dd-only) missed ~97% of them — emptying the CE=0/BE=0–BE≤1 arms of autobolus users and labeling only ~2% of days `autobolus_on` (truly ~72% in-cohort). New staging script **`export_user_day_bolus_classification.py`** classifies every bolus manual vs automatic — HealthKit `AutomaticallyIssued` flag (HK-first), with a dosingDecision fallback for the ~50% HK-silent boluses — the single source of truth feeding **BE** (`manual_normal_bolus_count`) and **delivery_strategy** (`automatic_bolus_count >= 3`). Wired into `export_user_day_bolus_counts.py` + `export_user_day_analysis_ready.py` + the DAG, but **not yet re-run on Databricks** — §8.1 stringent arms and §8.2 are superseded until the snapshot is regenerated. Docs: [docs/manual_bolus_identification.md](docs/manual_bolus_identification.md), [docs/dosing_strategy_classification.md](docs/dosing_strategy_classification.md).
 
-**Next:** §8.3 (within-user TDD stratification) is still a stub — its LMM helper in `analysis/utils/statistics.py` is ready to wire in. §8.1 tests (`testing/analysis/test_analysis_8_1.py`) are skipped placeholders. Rolling-30-day TDD reference and the high-TDD outlier follow-up remain open. See the latest `project_history.md` entries for detail.
+**§8.3 + finding-explanation supplement (2026-06-01).** §8.3 (within-user TDD stratification of CE=0 days) is now implemented (`analysis_8-3_nma_tdd_stratified.py`), and a new `analysis_8-supp_nma_finding_explanation.py` characterizes the counterintuitive "higher TIR on CE=0 days" finding (S1 intake / S2 carb dose-response / S3 decomposition+safety / C1–C4 confounders). Headline: the aggregate CE=0 TIR benefit is an **intake effect** — Low-TDD CE=0 days (light intake) drive it, while **High-TDD CE=0 days (likely unannounced meals) show much WORSE TIR (~49 vs ~64 comparator)**. The weighting-sensitivity supplement is retired (superseded by the autobolus fix; see its banner).
+
+**Figure conventions unified (2026-06-01).** §8.1/§8.2/§8.3 (+ supplement) now share one figure vocabulary in **`analysis/utils/plotting.py`**: every endpoint is coloured by its glycemic range (TIR green, <70/<54 coral/red, >180/>250 light/dark purple; mean glucose, CV, hypo events use the Tidepool brand blue), the treatment arm (NMA / CE=0) carries the colour and the CE>0 comparator is grey, and every per-user figure is the same two 2×2 metric grids spanning all 8 endpoints (Grid 1 target+safety: TIR/<70/<54/hypo; Grid 2 hyper+overall: >180/>250/mean/CV). Violins use dots-behind / box-on-top (orange median); paired-difference histograms use shared bin edges + mean lines. This renamed the per-user figures (§8.1: 8.1b→violin grids, 8.1c→paired-delta grids, dropping `method_a_panel_*`; §8.2: 8.2a→violin grids, 8.2c→interaction grids, dropping the TIR/TBR-only 8.2a/8.2b) — flag for the report editor.
+
+**Next:** high-TDD outlier winsorization before strong High-stratum claims; §8.1/§8.2/§8.3 tests remain skipped placeholders. See the latest `project_history.md` entries.
 
 Plan doc: [PLN-1008 Data Analysis Plan_ No Meal Announcement with Tidepool Loop.txt](PLN-1008%20Data%20Analysis%20Plan_%20No%20Meal%20Announcement%20with%20Tidepool%20Loop.txt) (Rev 01, effective 2026-05-20).
 
@@ -50,11 +54,13 @@ no_meal_announcement/
 ├── analysis/                                — §8 analyses
 │   ├── analysis_8-1_glycemic_outcomes_nma_vs_carb_entry.py  — Method A + Method B (LMM) + Tables 8.1a/b/c + figures; adult/pediatric cohort split; Sample Information (Table 1)
 │   ├── analysis_8-2_nma_by_delivery_strategy.py        — §8.2 day-type × delivery-strategy interaction LMM (Tables 8.2a/b + Figures 8.2a–d); per-cohort run()/main()
-│   ├── analysis_8-3_nma_tdd_stratified.py              — §8.3 scaffold (from prior scaffold; not yet rewired)
+│   ├── analysis_8-3_nma_tdd_stratified.py              — §8.3 within-user TDD stratification of CE=0 days (Low/High R=tdd/mean; Tables 8.3a/b/c + Figures 8.3b/c/d); per-cohort run()/main()
+│   ├── analysis_8-supp_nma_finding_explanation.py      — supplement: explains higher-TIR-on-CE=0 (S1 intake / S2 carb dose-response / S3 decomposition+safety / C1–C4); → outputs/analysis_8_supp/<cohort>/
 │   ├── data_overview.py                                — cohort/data overview (from prior scaffold)
 │   └── utils/                                          — shared analysis helpers
 │       ├── data_loader.py                              — shared snapshot loader, §7.6 cohort filter, CE>0 comparator restriction, endpoint/classification constants (ENDPOINTS, CLASSIFICATIONS, MIN_AGE, …), by-path statistics loaders; consumed by §8.1 + §8.2
-│       └── statistics.py                               — cluster_bootstrap_ci, paired_within_user, lmm_arm_contrast (§8.1 Method B), lmm_day_strategy_interaction (§8.2), lmm_tdd_stratum (§8.3); wraps FDA statistics by path
+│       ├── statistics.py                               — cluster_bootstrap_ci, paired_within_user, lmm_arm_contrast (§8.1 Method B), lmm_day_strategy_interaction (§8.2), lmm_tdd_stratum (§8.3); wraps FDA statistics by path
+│       └── plotting.py                                 — shared figure conventions for §8.1–§8.3 + supplement: range-based ENDPOINT_COLORS (Tidepool brand for the 3 non-range metrics), the two 2×2 metric GRIDS (target+safety / hyper+overall), violin_box_panel (dots-behind/box-on-top), overlay_hist_panel (shared bin edges + mean lines)
 ├── exploratory/                             — ad-hoc investigation queries
 │   ├── autobolus_as_normal_bolus.py                    — confirms autoboluses are subType='normal' → leak into BE; sizes HK vs dd coverage
 │   ├── autobolus_hk_vs_dd_gap.sql                      — dd-only vs GREATEST(dd,hk) autobolus-day gap on the snapshot
@@ -142,9 +148,10 @@ Phase 4: Analysis
     run() clears its per-cohort dir (shutil.rmtree + recreate) before writing, so each reflects only the current run; the parent-level
       combined Table 1 and the sibling outputs/analysis_8_1/supplement/ dir (exploratory weighting-sensitivity artifacts from
       lmm_weighting_sensitivity.py) are left untouched.
-    Figures: method_a_panel_a.png, method_a_panel_b_{central,lows,highs}.png (delta histograms),
-      figure_8_1a_stacked_bars.png (4-arm time-in-range), figure_8_1b_tir_violin_box.png,
-      figure_8_1c_tbr_violin_box.png.
+    Figures (shared NMA conventions, utils/plotting.py): figure_8_1a_stacked_bars.png (4-arm time-in-range),
+      figure_8_1b_violin_grid{1,2}_*.png (per-user means, 4 arms × all 8 endpoints, two 2×2 grids;
+        NMA arms in the endpoint's glycemic-range colour graded light→dark by breadth, CE>0 grey),
+      figure_8_1c_paired_delta_grid{1,2}_*.png (within-user NMA−CE>0 paired-difference histograms, broadest arm, all 8).
     §7.6 cohort split implemented; PLN-1001 §6 age floor now enabled by default (run(min_age=MIN_AGE=6); drops known-<6, retains unknown-age); implausible-high ages nulled at extraction (export_user_day_age.MAX_PLAUSIBLE_AGE=120).
     Weighting sensitivity (see docs/weighting_sensitivity.md): Method B LMM ≈ precision-weighted Method A,
       so on the sparse stringent arms (CE=0/BE=0, CE=0/BE<=1) the TIR/glucose contrast is sign-fragile to
@@ -156,10 +163,20 @@ Phase 4: Analysis
     Reference levels (alphabetical): main day_type = NMA-CE>0, main strategy = temp_basal_only-autobolus_on, interaction = how the NMA-CE>0 contrast shifts on temp_basal_only vs autobolus_on days.
     Run per age cohort (run(cohort=...)) via main(); outputs in outputs/analysis_8_2/<cohort>/. Reuses utils/data_loader (loader/cohort/comparator) + CE>0 comparator restriction (§8.1).
     Table 8.2b (per classification x endpoint: main day-type/strategy + interaction coef/CI/p, n_users/n_days, converged),
-      Table 8.2a (per classification x endpoint x cell: observed mean±SD + model-estimated marginal mean),
-      Figures 8.2a-d (TIR / time<70 violin+box by cell, model interaction plot, stacked glycemic ranges).
+      Table 8.2a (per classification x endpoint x cell: observed mean±SD + model-estimated marginal mean).
+    Figures (shared NMA conventions, utils/plotting.py): figure_8_2a_violin_grid{1,2}_*.png (per-user means by
+      strategy×day-type, broadest arm, all 8 endpoints, two 2×2 grids; NMA coloured by range, CE>0 grey),
+      figure_8_2c_interaction_grid{1,2}_*.png (model marginal-mean interaction lines, broadest arm, all 8),
+      figure_8_2d_stacked_bars.png (stacked glycemic ranges per cell, all three classifications). The per-endpoint
+      figures use the broadest classification (CE=0/BE<=inf); the stricter arms' interaction coefficients stay in Table 8.2b.
     autobolus_on is sparse (~2% of user-days), so stringent NMA x autobolus_on cells are degenerate — guarded (>=2 users/cell + try/except) and emitted converged=False.
-  §8.3 Within-user TDD stratification on CE=0 days — deferred (stub + utils/statistics.lmm_tdd_stratum ready).
+  §8.3 Within-user TDD stratification on CE=0 days — implemented in analysis_8-3_nma_tdd_stratified.py.
+    On CE=0 days (per nested classification, users with n_eligible_days_for_tdd>=30), stratify by R=tdd_units/mean_tdd_user cut at 1.0 (Low<1.0 light intake; High>=1.0 likely unannounced meal).
+    Within-user Low-High paired per endpoint (paired_within_user, Wilcoxon + boot CI + paired-t) → Table 8.3b; per-user-by-stratum means → Table 8.3a; day-level LMM outcome ~ tdd_stratum + (1|user) via lmm_tdd_stratum → Table 8.3c.
+    Sensitivities: tercile cutpoints + median-TDD + rolling-30-day reference (rolling computed in-analysis from per-day tdd_units + local_day; trailing 30-calendar-day mean).
+    Figures (shared NMA conventions, utils/plotting.py): figure_8_3a_grid{1,2}_*.png (per-user means by stratum, CE=0 Low/High vs CE>0 Low/High, all 8 endpoints, two 2×2 grids), figure_8_3b_grid{1,2}_*.png (within-user Low−High delta histograms, CE=0 vs CE>0), figure_8_3c_stacked_ranges.png, figure_8_3d_R_distribution.png. Outputs in outputs/analysis_8_3/<cohort>/.
+    Finding: Low-TDD CE=0 days TIR ~68 vs High-TDD ~49 — the aggregate §8.1 CE=0 benefit is driven by light-intake days; unannounced-meal (High-TDD) days are much worse.
+  §8-supp Finding-explanation supplement — analysis_8-supp_nma_finding_explanation.py. Reuses §8.1 contrast/figure machinery + utils. S1 CE=0-vs-CE>0 intake characterization; S2 carbohydrate dose-response (CE=0 as 0g anchor + within-user slope LMM); S3 glycemic decomposition (TAR vs TBR) + safety; C1–C4 confounder checks (selection, clustering, CGM coverage, weighting). Outputs in outputs/analysis_8_supp/<cohort>/. Exploratory/explanatory; §8.1 audit trail untouched.
 ```
 
 ## Reused FDA Components

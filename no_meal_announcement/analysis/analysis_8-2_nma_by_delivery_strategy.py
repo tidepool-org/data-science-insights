@@ -75,6 +75,14 @@ from utils.data_loader import (  # noqa: E402
     prepare_day_level,
     restrict_comparator,
 )
+from utils.plotting import (  # noqa: E402
+    GRAY,
+    GRIDS,
+    RANGE_COLORS,
+    RANGE_COLS,
+    endpoint_color,
+    violin_box_panel,
+)
 
 # §7.3 delivery strategies: (column value, short label). Any other / null strategy is
 # "ambiguous" and excluded (the staging CASE currently only emits these two values).
@@ -86,24 +94,10 @@ PRIMARY_ENDPOINT = "tir"
 
 BOOTSTRAP_SEED = 20260520
 
-# Disjoint glycemic ranges for the stacked bar (sum to ~100% per day), derived from the
-# cumulative endpoints, with their stacked-bar colors (matches §8.1).
-RANGE_COLS = [
-    ("r_lt54", "<54"),
-    ("r_54_70", "54-70"),
-    ("r_70_180", "70-180"),
-    ("r_180_250", "180-250"),
-    ("r_gt250", ">250"),
-]
-RANGE_COLORS = {
-    "<54": "#E03830",
-    "54-70": "#FF6D5C",
-    "70-180": "#5AC692",
-    "180-250": "#AA85DE",
-    ">250": "#7046CC",
-}
-# Day-type colors for the violin / interaction plots.
-DAY_TYPE_COLORS = {NMA_LABEL: "#607cff", COMPARATOR_LABEL: "#E0A030"}
+# Colours (RANGE_COLORS/RANGE_COLS for the stacked bars, endpoint range colours for the violins/
+# interaction lines) and the violin panel helper are shared across §8.1–§8.3 via utils.plotting.
+# In the per-endpoint figures the NMA day-type carries the endpoint's range colour and the CE>0
+# comparator is rendered grey.
 
 
 def build_day_type_frame(pdf, nma_flag):
@@ -250,101 +244,78 @@ def build_table_8_2a(frames, records):
     return df
 
 
-def _cell_per_user_means(frame, endpoint):
-    """The four cells in plot order: (label, day_type, per-user-mean array)."""
-    out = []
+# The per-endpoint figures (8.2a violins, 8.2c interaction) use the broadest classification
+# (CE=0/BE≤∞, the most-populated headline arm), consistent with §8.3's broadest-arm choice; the
+# stricter arms' interaction coefficients remain in table_8_2b and the stacked bars (8.2d) keep
+# all three. NMA cells carry the endpoint range colour, CE>0 cells grey.
+HEADLINE_CLS = CLASSIFICATIONS[-1][1]   # "CE=0/BE<=inf"
+
+
+def _cell_violin_groups(frame, endpoint, base):
+    """Violin groups for the 4 (strategy × day_type) cells of one endpoint, in the shape
+    utils.plotting.violin_box_panel expects: (label, values, colour, alpha). NMA cells carry
+    `base` (the endpoint range colour), CE>0 cells grey; ordered AB-NMA, AB-CE>0 | TB-NMA, TB-CE>0."""
+    groups = []
     for s_name, s_short in STRATEGIES:
         for d in [NMA_LABEL, COMPARATOR_LABEL]:
             cell = frame[(frame[STRATEGY_COL] == s_name) & (frame[DAY_TYPE_COL] == d)]
             vals = cell.groupby("_userId")[endpoint].mean().dropna().to_numpy()
-            out.append((f"{s_short}\n{d}", d, vals))
+            is_nma = d == NMA_LABEL
+            groups.append((f"{s_short}\n{d}", vals, base if is_nma else GRAY,
+                           0.7 if is_nma else 0.55))
+    return groups
+
+
+def make_violin_grids(frames):
+    """Figure 8.2a: per-user mean endpoints by delivery strategy × day type (NMA vs CE>0) on the
+    broadest classification (CE=0/BE≤∞), as the two shared 2×2 metric grids (all 8). Returns
+    {filename: figure}. NMA cells carry the endpoint range colour, CE>0 grey; a separator divides
+    the AB strategy from TB."""
+    frame = frames[HEADLINE_CLS]
+    out = {}
+    for key, gtitle, eps in GRIDS:
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+        for ax, (col, label) in zip(axes.ravel(), eps):
+            base = endpoint_color(col)
+            violin_box_panel(ax, _cell_violin_groups(frame, col, base),
+                             title=label, title_color=base, separators=(2.5,))
+        fig.suptitle(f"Figure 8.2a — {gtitle}\nper-user means by delivery strategy × day type, "
+                     "CE=0/BE≤∞ (NMA coloured, CE>0 grey)", fontsize=10)
+        fig.tight_layout(rect=[0, 0, 1, 0.92])
+        out[f"figure_8_2a_violin_{key}.png"] = fig
     return out
 
 
-def _violin_box_cells(ax, frame, endpoint, title):
-    """Per-user mean `endpoint` for each (strategy × day_type) cell as overlaid violin + box
-    with jittered scatter, colored by day_type. Empty/singleton cells are skipped."""
-    cells = _cell_per_user_means(frame, endpoint)
-    positions = list(range(1, len(cells) + 1))
-    data = [v for _, _, v in cells]
-
-    violin = [(p, v) for p, v in zip(positions, data) if len(v) > 1]
-    if violin:
-        vp = ax.violinplot([v for _, v in violin], positions=[p for p, _ in violin],
-                           showextrema=False, widths=0.8)
-        for body, (p, _) in zip(vp["bodies"], violin):
-            body.set_facecolor(DAY_TYPE_COLORS.get(cells[p - 1][1], "#607cff"))
-            body.set_alpha(0.25)
-    box = [(p, v) for p, v in zip(positions, data) if len(v) > 0]
-    if box:
-        ax.boxplot([v for _, v in box], positions=[p for p, _ in box], widths=0.25,
-                   showfliers=False)
-
-    rng = np.random.default_rng(BOOTSTRAP_SEED)
-    for (lbl, d, vals), pos in zip(cells, positions):
-        if len(vals):
-            ax.scatter(rng.normal(pos, 0.05, size=len(vals)), vals, s=6, alpha=0.25,
-                       color=DAY_TYPE_COLORS.get(d, "#607cff"))
-    ax.set_xticks(positions)
-    ax.set_xticklabels([f"{lbl}\n(n={len(v)})" for (lbl, _, v) in cells], fontsize=8)
-    ax.set_title(title, fontsize=10)
-
-
-def _violin_box_figure(frames, endpoint, ylabel, suptitle):
-    """One row of violin+box subplots, one per classification."""
-    fig, axes = plt.subplots(1, len(CLASSIFICATIONS),
-                             figsize=(6 * len(CLASSIFICATIONS), 6), squeeze=False)
-    for ax, (nma_flag, cls_label) in zip(axes[0], CLASSIFICATIONS):
-        _violin_box_cells(ax, frames[cls_label], endpoint, cls_label)
-    axes[0][0].set_ylabel(ylabel)
-    fig.suptitle(suptitle, fontsize=13)
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
-    return fig
-
-
-def make_figure_8_2a(frames):
-    """Figure 8.2a: per-user mean TIR by classification × delivery strategy (NMA vs CE>0)."""
-    return _violin_box_figure(
-        frames, "tir", "Per-user mean TIR (%)",
-        "Figure 8.2a: Per-user TIR by classification × delivery strategy (NMA vs CE>0)")
-
-
-def make_figure_8_2b(frames):
-    """Figure 8.2b: per-user mean time <70 by classification × delivery strategy."""
-    return _violin_box_figure(
-        frames, "tbr", "Per-user mean time <70 (%)",
-        "Figure 8.2b: Per-user time <70 by classification × delivery strategy (NMA vs CE>0)")
-
-
-def make_figure_8_2c(records):
-    """Figure 8.2c: model-estimated marginal-mean TIR interaction plot — strategy on x, one
-    line per day_type, a subplot per classification. Degenerate classifications show a note."""
-    fig, axes = plt.subplots(1, len(CLASSIFICATIONS),
-                             figsize=(6 * len(CLASSIFICATIONS), 5), squeeze=False, sharey=True)
+def make_interaction_grids(records):
+    """Figure 8.2c: model-estimated marginal-mean interaction (strategy on x, NMA vs CE>0 lines)
+    on the broadest classification (CE=0/BE≤∞), as the two shared 2×2 metric grids (all 8).
+    Returns {filename: figure}. Degenerate fits show a note; NMA = endpoint colour, CE>0 = grey."""
     strat_names = [s for s, _ in STRATEGIES]
     strat_short = [sh for _, sh in STRATEGIES]
-    primary = {r["classification"]: r for r in records if r["endpoint"] == PRIMARY_ENDPOINT}
-
-    for ax, (nma_flag, cls_label) in zip(axes[0], CLASSIFICATIONS):
-        rec = primary.get(cls_label)
-        mc = rec["marginal_cells"] if rec else None
-        if mc:
-            for d in [NMA_LABEL, COMPARATOR_LABEL]:
-                ys = [mc.get((d, s), {}).get("mean", np.nan) for s in strat_names]
-                ax.plot(range(len(strat_names)), ys, marker="o", label=d,
-                        color=DAY_TYPE_COLORS.get(d, "#607cff"))
-            ax.legend(fontsize=8)
-        else:
-            ax.text(0.5, 0.5, "model not fit\n(degenerate)", ha="center", va="center",
-                    transform=ax.transAxes, fontsize=9, color="gray")
-        ax.set_xticks(range(len(strat_names)))
-        ax.set_xticklabels(strat_short)
-        ax.set_title(cls_label, fontsize=10)
-    axes[0][0].set_ylabel("Model-estimated mean TIR (%)")
-    fig.suptitle("Figure 8.2c: day-type × delivery-strategy interaction (model marginal means, TIR)",
-                 fontsize=13)
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
-    return fig
+    by_ep = {r["endpoint"]: r for r in records if r["classification"] == HEADLINE_CLS}
+    out = {}
+    for key, gtitle, eps in GRIDS:
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+        for ax, (col, label) in zip(axes.ravel(), eps):
+            base = endpoint_color(col)
+            rec = by_ep.get(col)
+            mc = rec["marginal_cells"] if rec else None
+            if mc:
+                for d, color in [(NMA_LABEL, base), (COMPARATOR_LABEL, GRAY)]:
+                    ys = [mc.get((d, s), {}).get("mean", np.nan) for s in strat_names]
+                    ax.plot(range(len(strat_names)), ys, marker="o", label=d, color=color)
+                ax.legend(fontsize=7)
+            else:
+                ax.text(0.5, 0.5, "model not fit\n(degenerate)", ha="center", va="center",
+                        transform=ax.transAxes, fontsize=9, color="gray")
+            ax.set_xticks(range(len(strat_names)))
+            ax.set_xticklabels(strat_short)
+            ax.set_title(label, fontsize=10, color=base)
+        fig.suptitle(f"Figure 8.2c — {gtitle}\nday-type × delivery-strategy interaction "
+                     "(model marginal means), CE=0/BE≤∞", fontsize=10)
+        fig.tight_layout(rect=[0, 0, 1, 0.92])
+        out[f"figure_8_2c_interaction_{key}.png"] = fig
+    return out
 
 
 def make_figure_8_2d(frames):
@@ -450,12 +421,13 @@ def run(
     build_table_8_2a(frames, fits).to_csv(
         os.path.join(output_dir, "table_8_2a_marginal_cells.csv"), index=False)
 
-    figures = {
-        "figure_8_2a_tir_violin_box.png": make_figure_8_2a(frames),
-        "figure_8_2b_tbr_violin_box.png": make_figure_8_2b(frames),
-        "figure_8_2c_interaction.png": make_figure_8_2c(fits),
-        "figure_8_2d_stacked_bars.png": make_figure_8_2d(frames),
-    }
+    # Figures (shared NMA conventions): 8.2a per-user violin grids (all 8, strategy × day type,
+    # broadest arm); 8.2c interaction-marginal-mean grids (all 8, broadest arm); 8.2d stacked
+    # glycemic ranges per cell across all three classifications.
+    figures = {}
+    figures.update(make_violin_grids(frames))       # figure_8_2a_violin_grid{1,2}_*.png
+    figures.update(make_interaction_grids(fits))    # figure_8_2c_interaction_grid{1,2}_*.png
+    figures["figure_8_2d_stacked_bars.png"] = make_figure_8_2d(frames)
     for fname, fig in figures.items():
         fig.savefig(os.path.join(output_dir, fname), dpi=150)
         plt.close(fig)

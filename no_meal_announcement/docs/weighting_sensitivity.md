@@ -1,5 +1,15 @@
 # §8.1 weighting sensitivity: LMM vs Method A on the stringent NMA arms
 
+> **SUPERSEDED (2026-06-01) — historical note; no longer a deliverable.** The Method A vs
+> Method B sign disagreement on the stringent arms was an artifact of those arms being emptied
+> of autobolus users: autoboluses were miscounted as manual bolus entries (BE), so CE=0
+> autobolus days never qualified for CE=0/BE=0 or CE=0/BE≤1, leaving the stringent arms
+> dominated by a few heavy temp-basal-only contributors. The autobolus reclassification
+> ([manual_bolus_identification.md](manual_bolus_identification.md)) repopulates these arms, so
+> the two methods are expected to agree — **re-confirm on the regenerated snapshot.** The
+> `exploratory/lmm_weighting_sensitivity.py` script and `outputs/.../supplement/` artifacts are
+> retired as a deliverable; this note is kept for historical context.
+
 **TL;DR.** On the two stringent NMA arms (CE=0/BE=0 and CE=0/BE≤1) the §8.1 Method B
 mixed model (Table 8.1b) and Method A (Table 8.1a, per-user paired) **disagree in sign** for
 TIR, TAR, and mean glucose. The disagreement is not a bug — it is a **weighting choice**, and
