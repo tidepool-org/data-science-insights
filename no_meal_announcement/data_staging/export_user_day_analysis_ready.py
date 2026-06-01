@@ -18,10 +18,13 @@ applied downstream by the analysis on these fields. Per-user `gender` comes from
   day_eligible days (any arm; PLN-1008 §7.5 specifies the overall mean).
   tdd_ratio = tdd_units / mean_tdd_user, for §8.3 stratification.
 
-The §7.3 delivery strategy is computed inline from loop_recommendations — a threshold
-on dd_autobolus_count, so it has no dedicated table:
-    delivery_strategy = CASE WHEN dd_autobolus_count >= 3 THEN 'autobolus_on'
-                             ELSE 'temp_basal_only' END
+The §7.3 delivery strategy is computed inline from loop_recommendations — a threshold on
+the COMBINED autobolus count, so it has no dedicated table:
+    delivery_strategy = CASE WHEN GREATEST(dd_autobolus_count, hk_autobolus_count) >= 3
+                             THEN 'autobolus_on' ELSE 'temp_basal_only' END
+Both autobolus detection methods are combined (dosingDecision-match + HealthKit
+MetadataKeyAutomaticallyIssued); keying on dd_autobolus_count alone mislabels ~97% of
+autobolus days (HealthKit-tagged) as temp_basal_only.
 
 Inputs:
     dev.fda_510k_rwd.loop_recommendations  (delivery_strategy via §7.3 threshold; loop_version)
@@ -58,7 +61,9 @@ import os
 MAX_LOOP_VERSION_INT = 3_004_000
 MAX_DAY_IF_VERSION_UNKNOWN = "2024-07-13"
 
-# §7.3 strategy threshold (autobolus_on if dd_autobolus_count >= this).
+# §7.3 strategy threshold: autobolus_on if GREATEST(dd_autobolus_count, hk_autobolus_count)
+# >= this. Both autobolus detection methods are combined (dosingDecision-match + HealthKit
+# AutomaticallyIssued); dd alone misses ~97% of HealthKit-tagged autobolus days.
 MIN_AUTOBOLUS_COUNT = 3
 
 
@@ -159,11 +164,16 @@ WITH base AS (
     age.is_pediatric,
     -- Sex (LEFT JOIN dev.default.user_gender — null if unknown; per-user constant; for §8.1 Sample Information)
     g.gender,
-    -- Strategy + Loop version (from loop_recommendations)
+    -- Strategy + Loop version (from loop_recommendations). delivery_strategy combines BOTH
+    -- autobolus detection methods via GREATEST: dosingDecision-match (dd) + HealthKit
+    -- MetadataKeyAutomaticallyIssued (hk), matching loop_recommendations' own contract and
+    -- the FDA transition pipeline. dd alone misses ~97% of HealthKit-tagged autobolus days,
+    -- which mislabels the majority of autobolus days as temp_basal_only.
     lr.dd_autobolus_count,
+    lr.hk_autobolus_count,
     lr.loop_version,
     lr.version_int AS loop_version_int,
-    CASE WHEN lr.dd_autobolus_count >= {MIN_AUTOBOLUS_COUNT}
+    CASE WHEN GREATEST(COALESCE(lr.dd_autobolus_count, 0), COALESCE(lr.hk_autobolus_count, 0)) >= {MIN_AUTOBOLUS_COUNT}
          THEN 'autobolus_on' ELSE 'temp_basal_only' END AS delivery_strategy
   FROM {classification_table} cls
   JOIN {loop_recommendations_table} lr

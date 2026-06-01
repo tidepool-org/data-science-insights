@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python3 -c \"import pandas as pd; print\\(pd.__version__\\)\")"
+      "Bash(python3 -c \"import pandas as pd; print\\(pd.__version__\\)\")",
+      "Bash(awk 'NR>=160 && NR<=190 {printf \"%d\\\\t%s\\\\n\", NR, $0}' /Users/mconn/tidepool/repositories/data-science-insights/no_meal_announcement/data_staging/export_user_day_analysis_ready.py)"
     ]
   }
 }

@@ -6,7 +6,9 @@ Data-staging pipeline and **§8.1 complete**: Method A (per-user paired) + Metho
 
 **Sex/gender:** `export_user_day_analysis_ready.py` LEFT JOINs `dev.default.user_gender`; the snapshot has been regenerated, so Sample Information sex rows are populated (overall ~40% M / 34% F / **26% Other/Unknown**). A `sex_missingness_sensitivity.csv` (FDA §8.5 analog) accompanies each cohort: missing-sex users contribute far fewer eligible days (322 vs 434, p≈6e-18) and have marginally lower TIR (73.4 vs 74.9, p=0.02); age and time-<70 don't differ — so the sex split is broadly representative on glycemic outcomes but tracks engagement. **Age gating (two-sided, see [docs/pediatric_split.md](docs/pediatric_split.md)):** the §6 floor is now **enabled by default** — `filter_cohort(min_age=MIN_AGE=6)` drops users known to be <6 (verified: pediatric 516→473) and retains unknown/nulled-age users (PLN-1001). Implausible-high ages (corrupt DOB, e.g. ~914 yr) are nulled at extraction (`export_user_day_age.MAX_PLAUSIBLE_AGE=120`); the snapshot has been regenerated, so this is **applied** — adult age max is now 95.9 (was 912), adult mean/SD 38.8 ± 13.2 (was 39.3 ± 24.7), and the corrupt-DOB user joins the 2 unknown-age users retained in `all`.
 
-**Next:** §8.2 (day-type × delivery-strategy interaction) and §8.3 (within-user TDD stratification) are still stubs — their LMM helpers in `analysis/utils/statistics.py` are ready to wire in. §8.1 tests (`testing/analysis/test_analysis_8_1.py`) are skipped placeholders. Rolling-30-day TDD reference and the high-TDD outlier follow-up remain open. See the latest `project_history.md` entries for detail.
+**§8.2 complete** (day-type × delivery-strategy interaction — `analysis_8-2_nma_by_delivery_strategy.py`): per nested classification, a day-level LMM `outcome ~ day_type * delivery_strategy + (1|user)` (day_type = the classification's NMA days vs CE>0 comparator; strategy = autobolus_on vs temp_basal_only), via `utils/statistics.lmm_day_strategy_interaction`. Tables 8.2a/8.2b + Figures 8.2a–d, adult/pediatric/all split, per-cohort `run()`/`main()` + output-clearing mirroring §8.1. Shared loader/cohort/comparator/constants now live in **`analysis/utils/data_loader.py`** (consumed by both §8.1 and §8.2).
+
+**Next:** §8.3 (within-user TDD stratification) is still a stub — its LMM helper in `analysis/utils/statistics.py` is ready to wire in. §8.1 tests (`testing/analysis/test_analysis_8_1.py`) are skipped placeholders. Rolling-30-day TDD reference and the high-TDD outlier follow-up remain open. See the latest `project_history.md` entries for detail.
 
 Plan doc: [PLN-1008 Data Analysis Plan_ No Meal Announcement with Tidepool Loop.txt](PLN-1008%20Data%20Analysis%20Plan_%20No%20Meal%20Announcement%20with%20Tidepool%20Loop.txt) (Rev 01, effective 2026-05-20).
 
@@ -44,10 +46,11 @@ no_meal_announcement/
 │   └── export_user_day_analysis_ready.py               — final denormalized join + §7.5 TDD reference / ratio + Loop<3.4.0 cohort filter
 ├── analysis/                                — §8 analyses
 │   ├── analysis_8-1_glycemic_outcomes_nma_vs_carb_entry.py  — Method A + Method B (LMM) + Tables 8.1a/b/c + figures; adult/pediatric cohort split; Sample Information (Table 1)
-│   ├── analysis_8-2_nma_by_delivery_strategy.py        — §8.2 scaffold (from prior scaffold; not yet rewired)
+│   ├── analysis_8-2_nma_by_delivery_strategy.py        — §8.2 day-type × delivery-strategy interaction LMM (Tables 8.2a/b + Figures 8.2a–d); per-cohort run()/main()
 │   ├── analysis_8-3_nma_tdd_stratified.py              — §8.3 scaffold (from prior scaffold; not yet rewired)
 │   ├── data_overview.py                                — cohort/data overview (from prior scaffold)
 │   └── utils/                                          — shared analysis helpers
+│       ├── data_loader.py                              — shared snapshot loader, §7.6 cohort filter, CE>0 comparator restriction, endpoint/classification constants (ENDPOINTS, CLASSIFICATIONS, MIN_AGE, …), by-path statistics loaders; consumed by §8.1 + §8.2
 │       └── statistics.py                               — cluster_bootstrap_ci, paired_within_user, lmm_arm_contrast (§8.1 Method B), lmm_day_strategy_interaction (§8.2), lmm_tdd_stratum (§8.3); wraps FDA statistics by path
 ├── exploratory/                             — ad-hoc investigation queries
 │   ├── test_bolus.sql                                  — per-user valid days / bolus / cbg sanity check
@@ -66,7 +69,7 @@ no_meal_announcement/
 ```
 
 > **Heads up — prior-scaffold material:** several files moved over from the earlier project
-> (`testing/`, `analysis_8-2.py`, `analysis_8-3.py`, `data_overview.py`, the exploratory `.py`
+> (`testing/`, `analysis_8-3.py`, `data_overview.py`, the exploratory `.py`
 > files, and the three other `docs/*.md`) predate the current pipeline. They reference script
 > names that no longer exist (`export_nma_cbg.py`, `export_user_day_strategy.py`,
 > `export_user_day_carb_grams.py`, `compute_nma_glycemic_endpoints.py`). The output table
@@ -135,7 +138,15 @@ Phase 4: Analysis
       so on the sparse stringent arms (CE=0/BE=0, CE=0/BE<=1) the TIR/glucose contrast is sign-fragile to
       user weighting and dominated by heavy-contributor users — report no directional claim there; the
       CE=0/BE<=inf arm is robust (NMA modestly better across all weightings). exploratory/lmm_weighting_sensitivity.py.
-  §8.2 Day-type x delivery-strategy interaction — deferred (stub + utils/statistics.lmm_day_strategy_interaction ready).
+  §8.2 Day-type x delivery-strategy interaction — implemented in analysis_8-2_nma_by_delivery_strategy.py.
+    Per nested classification, day-level LMM outcome ~ day_type * delivery_strategy + (1|user) via utils/statistics.lmm_day_strategy_interaction
+      (day_type = NMA class days vs CE>0 comparator; delivery_strategy = autobolus_on vs temp_basal_only; ambiguous strategy excluded §7.3).
+    Reference levels (alphabetical): main day_type = NMA-CE>0, main strategy = temp_basal_only-autobolus_on, interaction = how the NMA-CE>0 contrast shifts on temp_basal_only vs autobolus_on days.
+    Run per age cohort (run(cohort=...)) via main(); outputs in outputs/analysis_8_2/<cohort>/. Reuses utils/data_loader (loader/cohort/comparator) + CE>0 comparator restriction (§8.1).
+    Table 8.2b (per classification x endpoint: main day-type/strategy + interaction coef/CI/p, n_users/n_days, converged),
+      Table 8.2a (per classification x endpoint x cell: observed mean±SD + model-estimated marginal mean),
+      Figures 8.2a-d (TIR / time<70 violin+box by cell, model interaction plot, stacked glycemic ranges).
+    autobolus_on is sparse (~2% of user-days), so stringent NMA x autobolus_on cells are degenerate — guarded (>=2 users/cell + try/except) and emitted converged=False.
   §8.3 Within-user TDD stratification on CE=0 days — deferred (stub + utils/statistics.lmm_tdd_stratum ready).
 ```
 
