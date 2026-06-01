@@ -88,6 +88,7 @@ WITH typed_boluses AS (
     COALESCE(subType, '<null>') AS sub_type,
     {SOURCE_NAME_EXPR} AS source_name,
     CASE WHEN {AUTO_FLAG_EXPR} = 1 THEN 1 ELSE 0 END AS is_automatic,
+    {AUTO_FLAG_EXPR} AS hk_flag_raw,   -- raw flag: 1=auto, 0=explicit manual, NULL=no HK metadata
     COALESCE(
       TRY_CAST(get_json_object(normal, '$.value') AS DOUBLE),
       TRY_CAST(normal AS DOUBLE)
@@ -98,7 +99,7 @@ WITH typed_boluses AS (
     AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
 ),
 deduped_boluses AS (
-  SELECT _userId, day, ts, sub_type, source_name, is_automatic, bolus_units, loop_version_int
+  SELECT _userId, day, ts, sub_type, source_name, is_automatic, hk_flag_raw, bolus_units, loop_version_int
   FROM (
     SELECT t.*,
       ROW_NUMBER() OVER (
@@ -292,11 +293,109 @@ ORDER BY 1
     )
 
 
+# ---------------------------------------------------------------------------
+# 5. Residual: subType='normal' boluses the dd-dosingDecision signal calls automatic
+#    but HealthKit does NOT flag — the only population a dd fallback would add to BE.
+# ---------------------------------------------------------------------------
+
+def explore_dd_residual(spark, bddp_table=BDDP_TABLE, loop_recs_table=LOOP_RECS_TABLE):
+    print("\n" + "=" * 70)
+    print("5. dd-dosingDecision residual beyond the HealthKit flag")
+    print("=" * 70)
+    print("(Heaviest section: correlated EXISTS over dosingDecisions; scoped to NMA-cohort")
+    print(" users via loop_recommendations + a same-day guard. May be slow.)")
+
+    # dd 'automatic' = a loop dosingDecision in the prior 5s AND no normalBolus DD within
+    # +/-15s (mirrors export_loop_recommendations.py's dd_filtered logic), restricted to
+    # subType='normal' boluses of NMA-cohort users. Same-day guard bounds the EXISTS.
+    base = f"""
+{_deduped_boluses_cte(bddp_table)},
+nma_users AS (
+  SELECT DISTINCT _userId FROM {loop_recs_table}
+  WHERE COALESCE(version_int, 0) > 0 AND version_int < {LOOP_VERSION_MAX_INT}
+),
+loop_dds AS (
+  SELECT b._userId, CAST(LEFT(b.time_string, 10) AS DATE) AS dd_day,
+         TRY_CAST(b.time_string AS TIMESTAMP) AS dd_ts
+  FROM {bddp_table} b JOIN nma_users u ON b._userId = u._userId
+  WHERE b.type = 'dosingDecision' AND b.reason = 'loop'
+    AND TRY_CAST(b.time_string AS TIMESTAMP) IS NOT NULL
+),
+normal_bolus_dds AS (
+  SELECT b._userId, CAST(LEFT(b.time_string, 10) AS DATE) AS nb_day,
+         TRY_CAST(b.time_string AS TIMESTAMP) AS nb_ts
+  FROM {bddp_table} b JOIN nma_users u ON b._userId = u._userId
+  WHERE b.type = 'dosingDecision' AND b.reason = 'normalBolus'
+    AND TRY_CAST(b.time_string AS TIMESTAMP) IS NOT NULL
+),
+classified AS (
+  SELECT
+    d._userId, d.day, d.hk_flag_raw,
+    CASE WHEN EXISTS (
+      SELECT 1 FROM loop_dds dd
+      WHERE dd._userId = d._userId AND dd.dd_day = d.day
+        AND TIMESTAMPDIFF(SECOND, dd.dd_ts, d.ts) BETWEEN 0 AND 5
+    ) AND NOT EXISTS (
+      SELECT 1 FROM normal_bolus_dds nbd
+      WHERE nbd._userId = d._userId AND nbd.nb_day = d.day
+        AND ABS(TIMESTAMPDIFF(SECOND, nbd.nb_ts, d.ts)) <= 15
+    ) THEN 1 ELSE 0 END AS dd_automatic
+  FROM deduped_boluses d
+  INNER JOIN nma_users u ON d._userId = u._userId
+  WHERE d.sub_type = 'normal'
+)"""
+
+    print("\n-- Bolus-level: HealthKit flag x dd signal overlap --")
+    df = spark.sql(base + """
+SELECT
+  COUNT(*)                                                                  AS n_normal_boluses,
+  SUM(CASE WHEN hk_flag_raw = 1 THEN 1 ELSE 0 END)                          AS n_hk_auto,
+  SUM(CASE WHEN hk_flag_raw = 0 THEN 1 ELSE 0 END)                          AS n_hk_manual_explicit,
+  SUM(CASE WHEN hk_flag_raw IS NULL THEN 1 ELSE 0 END)                      AS n_hk_silent,
+  SUM(dd_automatic)                                                         AS n_dd_auto,
+  SUM(CASE WHEN hk_flag_raw IS NULL AND dd_automatic = 1 THEN 1 ELSE 0 END) AS n_residual_silent_dd_auto,
+  SUM(CASE WHEN hk_flag_raw = 0    AND dd_automatic = 1 THEN 1 ELSE 0 END)  AS n_disagree_hk0_dd_auto,
+  ROUND(100.0 * SUM(CASE WHEN hk_flag_raw IS NULL AND dd_automatic = 1 THEN 1 ELSE 0 END)
+              / COUNT(*), 4)                                                AS pct_residual_of_normal
+FROM classified
+""").toPandas()
+    print(df.to_string(index=False))
+
+    print("\n-- Day-level: extra BE=0 days a dd fallback would add beyond the HK-only fix --")
+    df2 = spark.sql(base + """,
+per_day AS (
+  SELECT _userId, day,
+    SUM(CASE WHEN COALESCE(hk_flag_raw, 0) <> 1 THEN 1 ELSE 0 END) AS be_hk_only,
+    SUM(CASE WHEN COALESCE(hk_flag_raw, 0) <> 1
+              AND NOT (hk_flag_raw IS NULL AND dd_automatic = 1) THEN 1 ELSE 0 END) AS be_hk_then_dd
+  FROM classified
+  GROUP BY _userId, day
+)
+SELECT
+  COUNT(*)                                                              AS bolus_days,
+  SUM(CASE WHEN be_hk_only = 0 THEN 1 ELSE 0 END)                       AS days_be0_hk_only,
+  SUM(CASE WHEN be_hk_then_dd = 0 THEN 1 ELSE 0 END)                    AS days_be0_hk_then_dd,
+  SUM(CASE WHEN be_hk_only > 0 AND be_hk_then_dd = 0 THEN 1 ELSE 0 END) AS extra_days_flipped_by_dd
+FROM per_day
+""").toPandas()
+    print(df2.to_string(index=False))
+    print(
+        "\nInterpretation: 'n_residual_silent_dd_auto' = normal boluses where HealthKit is SILENT "
+        "(no flag) yet the dosingDecision signal says automatic — the ONLY boluses an HK-first / "
+        "dd-fallback rule would additionally drop from BE. 'n_disagree_hk0_dd_auto' = boluses "
+        "HealthKit explicitly marks manual (flag=0) but dd would call automatic — dd's "
+        "false-positive risk (HK is trusted there, so they stay manual). "
+        "'extra_days_flipped_by_dd' is the decision number: if it's tiny next to the ~20k BE=0 "
+        "days the HK-only fix already adds (section 4), the dd fallback isn't worth the precision risk."
+    )
+
+
 def main(spark, bddp_table=BDDP_TABLE):
     explore_subtype_x_automatic(spark, bddp_table)
     explore_be_leak_per_day(spark, bddp_table)
     explore_be_on_autobolus_days(spark)
     explore_arm_impact(spark, bddp_table)
+    explore_dd_residual(spark, bddp_table)
 
 
 if __name__ == "__main__":

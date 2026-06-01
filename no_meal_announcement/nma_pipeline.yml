@@ -12,11 +12,16 @@ resources:
       name: PLN-1008 No Meal Announcement Pipeline
       tasks:
         # ── Staging layer ────────────────────────────────────────────────
+        - task_key: export_user_day_bolus_classification
+          # Classifies every bolus manual vs automatic (HealthKit AutomaticallyIssued flag +
+          # dosingDecision fallback) — the source of truth for BE (manual) and delivery_strategy
+          # (automatic). Reads bddp + loop_recommendations. spark_python_task TBD.
         - task_key: export_user_day_bolus_counts
-          # python_wheel_task / spark_python_task TBD in Phase C
+          # BE = manual_normal_bolus_count projected from the classifier.
+          depends_on:
+            - task_key: export_user_day_bolus_classification
         - task_key: export_user_day_carb_grams
         - task_key: export_user_day_tdd
-        - task_key: export_user_day_strategy
         - task_key: export_nma_cbg
         - task_key: compute_nma_glycemic_endpoints
           depends_on:
@@ -29,7 +34,7 @@ resources:
         - task_key: export_user_day_analysis_ready
           depends_on:
             - task_key: export_user_day_classification
-            - task_key: export_user_day_strategy
+            - task_key: export_user_day_bolus_classification
             - task_key: compute_nma_glycemic_endpoints
             - task_key: export_user_day_tdd
             - task_key: export_user_day_age

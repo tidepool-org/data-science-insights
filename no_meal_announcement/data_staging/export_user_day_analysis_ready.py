@@ -18,16 +18,18 @@ applied downstream by the analysis on these fields. Per-user `gender` comes from
   day_eligible days (any arm; PLN-1008 §7.5 specifies the overall mean).
   tdd_ratio = tdd_units / mean_tdd_user, for §8.3 stratification.
 
-The §7.3 delivery strategy is computed inline from loop_recommendations — a threshold on
-the COMBINED autobolus count, so it has no dedicated table:
-    delivery_strategy = CASE WHEN GREATEST(dd_autobolus_count, hk_autobolus_count) >= 3
+The §7.3 delivery strategy uses the central bolus classifier's per-day automatic_bolus_count
+(nma_user_day_bolus_classification):
+    delivery_strategy = CASE WHEN automatic_bolus_count >= 3
                              THEN 'autobolus_on' ELSE 'temp_basal_only' END
-Both autobolus detection methods are combined (dosingDecision-match + HealthKit
-MetadataKeyAutomaticallyIssued); keying on dd_autobolus_count alone mislabels ~97% of
-autobolus days (HealthKit-tagged) as temp_basal_only.
+automatic_bolus_count combines the HealthKit AutomaticallyIssued flag with a dosingDecision
+fallback over ALL subType='normal' boluses, so it also catches subType='normal' + HK-silent +
+dd-automatic boluses that loop_recommendations.dd_autobolus_count / hk_autobolus_count each
+miss. Loop version still comes from loop_recommendations.
 
 Inputs:
-    dev.fda_510k_rwd.loop_recommendations  (delivery_strategy via §7.3 threshold; loop_version)
+    dev.fda_510k_rwd.loop_recommendations  (loop_version + version_int; day-anchor join + cohort filter)
+    nma_user_day_bolus_classification      (delivery_strategy via §7.3 automatic_bolus_count threshold)
     nma_user_day_classification            (anchor — arm flags, eligibility, BE/CE counts/grams)
     nma_user_day_glycemic_endpoints        (per-day TIR / TBR / TAR / CV / mean glucose / hypo events)
     nma_user_day_tdd                       (delivered basal+bolus per day)
@@ -61,9 +63,9 @@ import os
 MAX_LOOP_VERSION_INT = 3_004_000
 MAX_DAY_IF_VERSION_UNKNOWN = "2024-07-13"
 
-# §7.3 strategy threshold: autobolus_on if GREATEST(dd_autobolus_count, hk_autobolus_count)
-# >= this. Both autobolus detection methods are combined (dosingDecision-match + HealthKit
-# AutomaticallyIssued); dd alone misses ~97% of HealthKit-tagged autobolus days.
+# §7.3 strategy threshold: autobolus_on if automatic_bolus_count (from the bolus classifier)
+# >= this. The classifier combines the HealthKit AutomaticallyIssued flag with a dosingDecision
+# fallback; dd alone (loop_recommendations) misses ~97% of HealthKit-tagged autobolus days.
 MIN_AUTOBOLUS_COUNT = 3
 
 
@@ -114,6 +116,7 @@ def run(
     spark,
     loop_recommendations_table="dev.fda_510k_rwd.loop_recommendations",
     classification_table="dev.fda_510k_rwd.nma_user_day_classification",
+    bolus_classification_table="dev.fda_510k_rwd.nma_user_day_bolus_classification",
     endpoints_table="dev.fda_510k_rwd.nma_user_day_glycemic_endpoints",
     tdd_table="dev.fda_510k_rwd.nma_user_day_tdd",
     age_table="dev.fda_510k_rwd.nma_user_day_age",
@@ -164,21 +167,25 @@ WITH base AS (
     age.is_pediatric,
     -- Sex (LEFT JOIN dev.default.user_gender — null if unknown; per-user constant; for §8.1 Sample Information)
     g.gender,
-    -- Strategy + Loop version (from loop_recommendations). delivery_strategy combines BOTH
-    -- autobolus detection methods via GREATEST: dosingDecision-match (dd) + HealthKit
-    -- MetadataKeyAutomaticallyIssued (hk), matching loop_recommendations' own contract and
-    -- the FDA transition pipeline. dd alone misses ~97% of HealthKit-tagged autobolus days,
-    -- which mislabels the majority of autobolus days as temp_basal_only.
-    lr.dd_autobolus_count,
-    lr.hk_autobolus_count,
+    -- Strategy + Loop version. delivery_strategy uses the central bolus classifier's per-day
+    -- automatic_bolus_count (HealthKit flag OR dosingDecision fallback, over subType='normal'
+    -- boluses too) — this also catches subType='normal' + HK-silent + dd-automatic boluses that
+    -- loop_recommendations.dd_autobolus_count / hk_autobolus_count each miss. Loop version still
+    -- comes from loop_recommendations.
+    bc.automatic_bolus_count,
+    bc.auto_hk_count,
+    bc.auto_dd_count,
     lr.loop_version,
     lr.version_int AS loop_version_int,
-    CASE WHEN GREATEST(COALESCE(lr.dd_autobolus_count, 0), COALESCE(lr.hk_autobolus_count, 0)) >= {MIN_AUTOBOLUS_COUNT}
+    CASE WHEN COALESCE(bc.automatic_bolus_count, 0) >= {MIN_AUTOBOLUS_COUNT}
          THEN 'autobolus_on' ELSE 'temp_basal_only' END AS delivery_strategy
   FROM {classification_table} cls
   JOIN {loop_recommendations_table} lr
     ON cls._userId = lr._userId
     AND cls.local_day = lr.day
+  LEFT JOIN {bolus_classification_table} bc
+    ON cls._userId = bc._userId
+    AND cls.local_day = bc.local_day
   LEFT JOIN {endpoints_table} ep
     ON cls._userId = ep._userId
     AND cls.local_day = ep.local_day
@@ -240,6 +247,8 @@ if __name__ == "__main__":
     _parser = argparse.ArgumentParser()
     _parser.add_argument("--loop_recommendations_table", default="dev.fda_510k_rwd.loop_recommendations")
     _parser.add_argument("--classification_table", default="dev.fda_510k_rwd.nma_user_day_classification")
+    _parser.add_argument("--bolus_classification_table",
+                         default="dev.fda_510k_rwd.nma_user_day_bolus_classification")
     _parser.add_argument("--endpoints_table", default="dev.fda_510k_rwd.nma_user_day_glycemic_endpoints")
     _parser.add_argument("--tdd_table", default="dev.fda_510k_rwd.nma_user_day_tdd")
     _parser.add_argument("--age_table", default="dev.fda_510k_rwd.nma_user_day_age")
@@ -253,6 +262,7 @@ if __name__ == "__main__":
         spark,
         _args.loop_recommendations_table,
         _args.classification_table,
+        _args.bolus_classification_table,
         _args.endpoints_table,
         _args.tdd_table,
         _args.age_table,

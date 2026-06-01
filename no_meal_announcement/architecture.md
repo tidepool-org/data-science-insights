@@ -1,12 +1,14 @@
 # PLN-1008 No Meal Announcement — Architecture
 
-## Current state (as of 2026-05-31)
+## Current state (as of 2026-06-01)
 
 Data-staging pipeline and **§8.1 complete**: Method A (per-user paired) + Method B (LMM, Table 8.1b) + Tables 8.1a/8.1c + Figures 8.1a/8.1b/8.1c + adult/pediatric/all cohort split + **Sample Information (Table 1)**. Runs on Databricks, or **locally off the CSV snapshot** (`analysis_8-1_…py --csv_path`) that `data_staging/export_user_day_analysis_ready.py` writes. The age-stratified run is produced for all three cohorts (`outputs/analysis_8_1/{adult,pediatric,all}/`), each with a `sample_information.csv`, plus a combined `table_8_1_sample_information.csv`. The §8.1 LMM-vs-Method-A weighting caveat is documented in [docs/weighting_sensitivity.md](docs/weighting_sensitivity.md) (stringent NMA arms sign-fragile; CE=0/BE≤∞ robust).
 
 **Sex/gender:** `export_user_day_analysis_ready.py` LEFT JOINs `dev.default.user_gender`; the snapshot has been regenerated, so Sample Information sex rows are populated (overall ~40% M / 34% F / **26% Other/Unknown**). A `sex_missingness_sensitivity.csv` (FDA §8.5 analog) accompanies each cohort: missing-sex users contribute far fewer eligible days (322 vs 434, p≈6e-18) and have marginally lower TIR (73.4 vs 74.9, p=0.02); age and time-<70 don't differ — so the sex split is broadly representative on glycemic outcomes but tracks engagement. **Age gating (two-sided, see [docs/pediatric_split.md](docs/pediatric_split.md)):** the §6 floor is now **enabled by default** — `filter_cohort(min_age=MIN_AGE=6)` drops users known to be <6 (verified: pediatric 516→473) and retains unknown/nulled-age users (PLN-1001). Implausible-high ages (corrupt DOB, e.g. ~914 yr) are nulled at extraction (`export_user_day_age.MAX_PLAUSIBLE_AGE=120`); the snapshot has been regenerated, so this is **applied** — adult age max is now 95.9 (was 912), adult mean/SD 38.8 ± 13.2 (was 39.3 ± 24.7), and the corrupt-DOB user joins the 2 unknown-age users retained in `all`.
 
 **§8.2 complete** (day-type × delivery-strategy interaction — `analysis_8-2_nma_by_delivery_strategy.py`): per nested classification, a day-level LMM `outcome ~ day_type * delivery_strategy + (1|user)` (day_type = the classification's NMA days vs CE>0 comparator; strategy = autobolus_on vs temp_basal_only), via `utils/statistics.lmm_day_strategy_interaction`. Tables 8.2a/8.2b + Figures 8.2a–d, adult/pediatric/all split, per-cohort `run()`/`main()` + output-clearing mirroring §8.1. Shared loader/cohort/comparator/constants now live in **`analysis/utils/data_loader.py`** (consumed by both §8.1 and §8.2).
+
+**Autobolus reclassification (2026-06-01) — pending Databricks regen.** Loop records autoboluses as `type='bolus'`, `subType='normal'` (≈43% of all boluses), so the old BE (`subType='normal'`) silently counted them and the old `delivery_strategy` (dd-only) missed ~97% of them — emptying the CE=0/BE=0–BE≤1 arms of autobolus users and labeling only ~2% of days `autobolus_on` (truly ~72% in-cohort). New staging script **`export_user_day_bolus_classification.py`** classifies every bolus manual vs automatic — HealthKit `AutomaticallyIssued` flag (HK-first), with a dosingDecision fallback for the ~50% HK-silent boluses — the single source of truth feeding **BE** (`manual_normal_bolus_count`) and **delivery_strategy** (`automatic_bolus_count >= 3`). Wired into `export_user_day_bolus_counts.py` + `export_user_day_analysis_ready.py` + the DAG, but **not yet re-run on Databricks** — §8.1 stringent arms and §8.2 are superseded until the snapshot is regenerated. Docs: [docs/manual_bolus_identification.md](docs/manual_bolus_identification.md), [docs/dosing_strategy_classification.md](docs/dosing_strategy_classification.md).
 
 **Next:** §8.3 (within-user TDD stratification) is still a stub — its LMM helper in `analysis/utils/statistics.py` is ready to wire in. §8.1 tests (`testing/analysis/test_analysis_8_1.py`) are skipped placeholders. Rolling-30-day TDD reference and the high-TDD outlier follow-up remain open. See the latest `project_history.md` entries for detail.
 
@@ -38,12 +40,13 @@ no_meal_announcement/
 ├── data_staging/                            — per-user-day aggregations (current pipeline)
 │   ├── export_user_day_cbg.py                          — slice FDA loop_cbg to (user, local_day); coverage flag
 │   ├── compute_user_day_glycemic_endpoints.py          — wrap FDA compute_glycemic_endpoints
-│   ├── export_user_day_bolus_counts.py                 — bolus_entry_count per valid day (0 when none); anchored on loop_recommendations; type=bolus, subType=normal
+│   ├── export_user_day_bolus_classification.py         — classify every bolus manual vs automatic (HK AutomaticallyIssued flag + dosingDecision fallback); source of truth for BE + delivery_strategy
+│   ├── export_user_day_bolus_counts.py                 — BE per valid day = manual_normal_bolus_count projected from the bolus classifier
 │   ├── export_user_day_carbs.py                        — carb grams + entry count per valid day (0 when none); anchored on loop_recommendations
 │   ├── export_user_day_tdd.py                          — delivered TDD per day (HealthKit rate×dur, fallback Loop deliveredUnits; bolus normal, one origin)
 │   ├── export_user_day_age.py                          — age at day + pediatric flag (cutoff 18); DOB from bddp_user_dates
 │   ├── export_user_day_classification.py               — apply three nested classifications + eligibility
-│   └── export_user_day_analysis_ready.py               — final denormalized join + §7.5 TDD reference / ratio + Loop<3.4.0 cohort filter
+│   └── export_user_day_analysis_ready.py               — final denormalized join + §7.5 TDD reference / ratio + Loop<3.4.0 cohort filter; delivery_strategy from classifier's automatic_bolus_count
 ├── analysis/                                — §8 analyses
 │   ├── analysis_8-1_glycemic_outcomes_nma_vs_carb_entry.py  — Method A + Method B (LMM) + Tables 8.1a/b/c + figures; adult/pediatric cohort split; Sample Information (Table 1)
 │   ├── analysis_8-2_nma_by_delivery_strategy.py        — §8.2 day-type × delivery-strategy interaction LMM (Tables 8.2a/b + Figures 8.2a–d); per-cohort run()/main()
@@ -53,6 +56,8 @@ no_meal_announcement/
 │       ├── data_loader.py                              — shared snapshot loader, §7.6 cohort filter, CE>0 comparator restriction, endpoint/classification constants (ENDPOINTS, CLASSIFICATIONS, MIN_AGE, …), by-path statistics loaders; consumed by §8.1 + §8.2
 │       └── statistics.py                               — cluster_bootstrap_ci, paired_within_user, lmm_arm_contrast (§8.1 Method B), lmm_day_strategy_interaction (§8.2), lmm_tdd_stratum (§8.3); wraps FDA statistics by path
 ├── exploratory/                             — ad-hoc investigation queries
+│   ├── autobolus_as_normal_bolus.py                    — confirms autoboluses are subType='normal' → leak into BE; sizes HK vs dd coverage
+│   ├── autobolus_hk_vs_dd_gap.sql                      — dd-only vs GREATEST(dd,hk) autobolus-day gap on the snapshot
 │   ├── test_bolus.sql                                  — per-user valid days / bolus / cbg sanity check
 │   ├── tdd_explore.sql                                 — TDD investigation (basal/bolus structure, dual streams, dedup mechanism)
 │   ├── tdd_distribution.sql                            — per-user-day TDD distribution + per-user means + dedup-option comparison
@@ -60,6 +65,9 @@ no_meal_announcement/
 │   ├── nma_day_frequency.py                            — NMA day frequency (from prior scaffold)
 │   └── tdd_drift_visualization.py                      — TDD drift visualization (from prior scaffold)
 ├── docs/
+│   ├── manual_bolus_identification.md                  — BE = manual boluses; autobolus detection (HK flag + dd fallback) via the bolus classifier
+│   ├── dosing_strategy_classification.md               — delivery_strategy (AB vs TB) from the classifier's automatic_bolus_count
+│   ├── carb_entry_identification.md                    — CE definition + open questions (stub)
 │   ├── tdd_calculation.md                              — TDD data structure, dual-stream issue, delivered-vs-commanded, dedup
 │   ├── day_type_classification.md                      — day classification notes (from prior scaffold)
 │   ├── pediatric_split.md                              — pediatric/adult split notes (from prior scaffold)
@@ -93,8 +101,12 @@ Phase 2: Per-user-day aggregations
   export_user_day_cbg                → nma_user_day_cbg, nma_user_day_coverage
     slices FDA loop_cbg; coverage ungated — day intersection happens at classification
     └─ compute_user_day_glycemic_endpoints → nma_user_day_glycemic_endpoints
+  export_user_day_bolus_classification → nma_user_day_bolus_classification  (per day: manual / automatic bolus counts)
+    classify every bolus manual vs automatic — HK AutomaticallyIssued flag (HK-first), dosingDecision fallback
+    (loop-DD prior 5s, no normalBolus DD ±15s) for HK-silent boluses; dedup on (user, nearest-min, units),
+    automatic signal MAX-aggregated across duplicate representations. Source of truth for BE + delivery_strategy.
   export_user_day_bolus_counts       → nma_user_day_bolus_counts  (BE per valid day; 0 when no bolus)
-    anchored on loop_recommendations (LEFT JOIN deduped BDDP counts, coalesce 0)
+    BE = manual_normal_bolus_count projected from nma_user_day_bolus_classification
   export_user_day_carbs              → nma_user_day_carbs  (CE per valid day; 0 when no carbs)
     anchored on loop_recommendations (LEFT JOIN deduped BDDP food totals, coalesce 0)
   export_user_day_tdd                → nma_user_day_tdd  (delivered basal+bolus per day)
@@ -109,8 +121,8 @@ Phase 3: Classification + analysis-ready join
     nested arm membership flags (in_ce0_be0 / in_ce0_be_le1 / in_ce0_be_inf / in_ce_gt0);
     user_eligible = >=10 eligible days/user (window count)
     └─ export_user_day_analysis_ready → nma_user_day_analysis_ready (denormalized, analysis-ready)
-       Anchor: classification INNER JOIN loop_recommendations; LEFT JOIN endpoints / tdd / age / user_gender (sex). Applies PLN-1001 Loop-version cohort filter: version known → version_int < 3_004_000; version NULL → local_day < 2024-07-13 (Loop 3.4.0 release date).
-       delivery_strategy (§7.3) computed inline as a CASE on loop_recommendations.dd_autobolus_count (>=3 -> autobolus_on else temp_basal_only).
+       Anchor: classification INNER JOIN loop_recommendations; LEFT JOIN bolus_classification / endpoints / tdd / age / user_gender (sex). Applies PLN-1001 Loop-version cohort filter: version known → version_int < 3_004_000; version NULL → local_day < 2024-07-13 (Loop 3.4.0 release date).
+       delivery_strategy (§7.3) = CASE on nma_user_day_bolus_classification.automatic_bolus_count (>=3 -> autobolus_on else temp_basal_only); carries automatic_bolus_count / auto_hk_count / auto_dd_count.
        §7.5 TDD reference computed here over day_eligible days: mean_tdd_user, median_tdd_user (percentile_approx 0.5), n_eligible_days_for_tdd, tdd_ratio = tdd_units / mean_tdd_user.
 
 Phase 4: Analysis
@@ -154,7 +166,7 @@ Phase 4: Analysis
 
 | Artifact | Reuse |
 |---|---|
-| `dev.fda_510k_rwd.loop_recommendations` | The valid-day universe (one row per user-day with a known dosing decision) AND source for §7.3 delivery strategy. |
+| `dev.fda_510k_rwd.loop_recommendations` | The valid-day universe (one row per user-day with a known dosing decision); Loop-version source + anchor for the bolus classifier. (§7.3 delivery strategy now derives from the classifier, not loop_recommendations' dd/hk columns.) |
 | `dev.fda_510k_rwd.loop_cbg` | Cleaned 5-min CGM source (sliced to day grain by export_user_day_cbg). |
 | `FDA_real_world_data.data_staging.compute_glycemic_endpoints.compute_glycemic_endpoints` | Imported directly for per-user-day metrics. |
 | `FDA_real_world_data.analysis.utils.data_loading.COHORT_WHERE` | Single source of truth for cohort predicate. |
