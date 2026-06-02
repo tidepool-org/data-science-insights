@@ -59,10 +59,10 @@ ENDPOINT_COLORS = {
 
 # Two semantically-grouped 2×2 grids spanning all 8 endpoints: (key, grid title, [(col, label)]).
 GRIDS = [
-    ("grid1_target_safety", "Grid 1 — Time in range & hypoglycemia (target + safety)",
+    ("grid1_target_safety", "Time in range & hypoglycemia",
      [("tir", "Time 70-180 (%)"), ("tbr", "Time <70 (%)"),
       ("tbr_very_low", "Time <54 (%)"), ("hypo_events", "Hypo events / day")]),
-    ("grid2_hyper_overall", "Grid 2 — Hyperglycemia & overall glycemia",
+    ("grid2_hyper_overall", "Hyperglycemia & overall glycemia",
      [("tar", "Time >180 (%)"), ("tar_very_high", "Time >250 (%)"),
       ("mean_glucose", "Mean glucose (mg/dL)"), ("cv", "CV (%)")]),
 ]

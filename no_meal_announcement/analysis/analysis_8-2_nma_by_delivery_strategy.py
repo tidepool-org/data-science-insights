@@ -283,8 +283,8 @@ def make_violin_grids(frames):
             base = endpoint_color(col)
             violin_box_panel(ax, _cell_violin_groups(frame, col, base),
                              title=label, title_color=base, separators=(2.5,))
-        fig.suptitle(f"Figure 8.2a — {gtitle}\nper-user means by delivery strategy × day type, "
-                     "CE=0/BE≤∞ (NMA coloured, CE>0 grey)", fontsize=SUPTITLE_FS)
+        fig.suptitle(f"Figure 8.2a — {gtitle}\nper-user means by strategy × day type (BE≤∞)",
+                     fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.91])
         out[f"figure_8_2a_violin_{key}.png"] = fig
     return out
@@ -315,8 +315,8 @@ def make_interaction_grids(records):
             ax.set_xticks(range(len(strat_names)))
             ax.set_xticklabels(strat_short)
             ax.set_title(label, fontsize=TITLE_FS, color=base)
-        fig.suptitle(f"Figure 8.2c — {gtitle}\nday-type × delivery-strategy interaction "
-                     "(model marginal means), CE=0/BE≤∞", fontsize=SUPTITLE_FS)
+        fig.suptitle(f"Figure 8.2c — {gtitle}\nday-type × strategy interaction (marginal means)",
+                     fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.92])
         out[f"figure_8_2c_interaction_{key}.png"] = fig
     return out

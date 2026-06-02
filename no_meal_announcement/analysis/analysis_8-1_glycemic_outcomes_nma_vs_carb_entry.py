@@ -545,8 +545,7 @@ def make_violin_grids(pdf):
             base = endpoint_color(col)
             violin_box_panel(ax, arm_violin_groups(pdf, col, base=base),
                              title=label, title_color=base, separators=(3.5,))
-        fig.suptitle(f"Figure 8.1b — {gtitle}\nper-user mean endpoints by arm "
-                     "(NMA arms coloured light→dark by breadth, CE>0 grey)", fontsize=SUPTITLE_FS)
+        fig.suptitle(f"Figure 8.1b — {gtitle}\nper-user means by arm", fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.91])
         out[f"figure_8_1b_violin_{key}.png"] = fig
     return out
@@ -568,8 +567,8 @@ def make_paired_delta_grids(pdf):
             delta = pd.DataFrame({"NMA": nma, "CMP": cmp}).dropna().eval("NMA - CMP").to_numpy()
             overlay_hist_panel(ax, [(delta, "NMA − CE>0", base)],
                                xlabel="per-user Δ (NMA − CE>0)", title=label, title_color=base)
-        fig.suptitle(f"Figure 8.1c — {gtitle}\nwithin-user paired differences (NMA − CE>0), "
-                     "CE=0/BE≤∞ arm (solid = mean, dashed = 0)", fontsize=SUPTITLE_FS)
+        fig.suptitle(f"Figure 8.1c — {gtitle}\nwithin-user differences (NMA − CE>0, BE≤∞)",
+                     fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.92])
         out[f"figure_8_1c_paired_delta_{key}.png"] = fig
     return out

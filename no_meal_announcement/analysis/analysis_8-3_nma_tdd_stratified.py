@@ -215,8 +215,8 @@ def figure_8_3b_paired_delta(strata_by_cls, cmp_strata):
                 [(_stratum_delta(df, col), "CE=0", base),
                  (_stratum_delta(cmp_strata, col), "CE>0", GRAY)],
                 xlabel="per-user Low−High Δ", title=label, title_color=base)
-        fig.suptitle(f"Figure 8.3b — {gtitle}\nwithin-user Low−High deltas, CE=0/BE≤∞ · "
-                     "solid = mean, dashed = 0", fontsize=SUPTITLE_FS)
+        fig.suptitle(f"Figure 8.3b — {gtitle}\nwithin-user Low − High differences (BE≤∞)",
+                     fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.92])
         out[f"figure_8_3b_{key}.png"] = fig
     return out
@@ -315,8 +315,7 @@ def figure_8_3a_violin(strata_inf, cmp_strata):
         fig, axes = plt.subplots(2, 2, figsize=(10, 8.6))
         for ax, (col, label) in zip(axes.ravel(), eps):
             _violin_panel(ax, col, label, strata_inf, cmp_strata)
-        fig.suptitle(f"Figure 8.3a — {gtitle}\nper-user means by TDD stratum — "
-                     "CE=0 coloured, CE>0 grey; light = Low, dark = High", fontsize=SUPTITLE_FS)
+        fig.suptitle(f"Figure 8.3a — {gtitle}\nper-user means by TDD stratum", fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.91])
         out[f"figure_8_3a_{key}.png"] = fig
     return out
