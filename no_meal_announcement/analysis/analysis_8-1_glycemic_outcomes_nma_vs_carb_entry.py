@@ -94,6 +94,7 @@ from utils.plotting import (  # noqa: E402
     GRIDS,
     RANGE_COLORS,
     RANGE_COLS,
+    SUPTITLE_FS,
     endpoint_color,
     overlay_hist_panel,
     violin_box_panel,
@@ -498,10 +499,10 @@ def make_stacked_bar(pdf):
                 # second-lowest range is thin and crowds the bottom: offset the label
                 # upward with a thin leader line.
                 ax.annotate(f"{v:.1f}%", xy=(xi, cen), xytext=(0, 16),
-                            textcoords="offset points", ha="center", va="bottom", fontsize=12,
+                            textcoords="offset points", ha="center", va="bottom", fontsize=13,
                             arrowprops=dict(arrowstyle="-", lw=0.6, color="gray"))
             else:
-                ax.text(xi, cen, f"{v:.1f}%", ha="center", va="center", fontsize=12)
+                ax.text(xi, cen, f"{v:.1f}%", ha="center", va="center", fontsize=13)
         bottom += vals
 
     ax.set_xticks(x)
@@ -510,9 +511,9 @@ def make_stacked_bar(pdf):
     ax.set_ylim(0, 108)
     ax.legend(title="Glucose (mg/dL)", bbox_to_anchor=(1.01, 1), loc="upper left")
     for xi, (u, dd) in enumerate(zip(user_ns, day_ns)):
-        ax.text(xi, 101, f"users={u}\ndays={dd}", ha="center", va="bottom", fontsize=8)
+        ax.text(xi, 101, f"users={u}\ndays={dd}", ha="center", va="bottom", fontsize=11)
 
-    ax.set_title("Figure 8.1a: Mean time in glycemic ranges by arm", fontsize=13)
+    ax.set_title("Figure 8.1a: Mean time in glycemic ranges by arm", fontsize=SUPTITLE_FS)
     fig.tight_layout()
     return fig
 
@@ -539,14 +540,14 @@ def make_violin_grids(pdf):
     breadth, CE>0 grey; a separator divides the NMA arms from the comparator."""
     out = {}
     for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8.6))
         for ax, (col, label) in zip(axes.ravel(), eps):
             base = endpoint_color(col)
             violin_box_panel(ax, arm_violin_groups(pdf, col, base=base),
                              title=label, title_color=base, separators=(3.5,))
         fig.suptitle(f"Figure 8.1b — {gtitle}\nper-user mean endpoints by arm "
-                     "(NMA arms coloured light→dark by breadth, CE>0 grey)", fontsize=10)
-        fig.tight_layout(rect=[0, 0, 1, 0.92])
+                     "(NMA arms coloured light→dark by breadth, CE>0 grey)", fontsize=SUPTITLE_FS)
+        fig.tight_layout(rect=[0, 0, 1, 0.91])
         out[f"figure_8_1b_violin_{key}.png"] = fig
     return out
 
@@ -568,7 +569,7 @@ def make_paired_delta_grids(pdf):
             overlay_hist_panel(ax, [(delta, "NMA − CE>0", base)],
                                xlabel="per-user Δ (NMA − CE>0)", title=label, title_color=base)
         fig.suptitle(f"Figure 8.1c — {gtitle}\nwithin-user paired differences (NMA − CE>0), "
-                     "CE=0/BE≤∞ arm (solid = mean, dashed = 0)", fontsize=10)
+                     "CE=0/BE≤∞ arm (solid = mean, dashed = 0)", fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.92])
         out[f"figure_8_1c_paired_delta_{key}.png"] = fig
     return out

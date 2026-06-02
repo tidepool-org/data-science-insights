@@ -65,7 +65,14 @@ from utils.data_loader import (  # noqa: E402
     prepare_day_level,
     restrict_comparator,
 )
-from utils.plotting import TIDEPOOL, endpoint_color, violin_box_panel  # noqa: E402
+from utils.plotting import (  # noqa: E402
+    SUPTITLE_FS,
+    TICK_FS,
+    TITLE_FS,
+    TIDEPOOL,
+    endpoint_color,
+    violin_box_panel,
+)
 
 # The broadest NMA arm (CE=0, any BE) — the single "no-meal-announcement" arm used where one
 # arm is needed (S2 anchor, S3 contrast). S1 loops over all three nested classifications.
@@ -131,29 +138,29 @@ def figure_s1_intake(pdf, a81):
     """Per-user mean TDD and bolus insulin by arm (CE=0 arms vs CE>0) — visual of the intake gap.
     Shared violin convention (utils.plotting); TDD/bolus aren't glycemic ranges, so the NMA arms
     use the Tidepool brand colour (graded by breadth) with the CE>0 comparator grey."""
-    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6.4))
     for ax, (col, lab, unit) in zip(axes, [("tdd_units", "Per-user mean TDD by arm", "TDD (U/day)"),
                                            ("bolus_units", "Per-user mean bolus insulin by arm",
                                             "Bolus (U/day)")]):
         violin_box_panel(ax, a81.arm_violin_groups(pdf, col, base=TIDEPOOL),
                          title=lab, title_color=TIDEPOOL, separators=(3.5,))
         ax.set_ylabel(unit)
-    fig.suptitle("S1: intake proxies by arm — CE=0 arms vs CE>0 comparator", fontsize=13)
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.suptitle("S1: intake proxies by arm — CE=0 arms vs CE>0 comparator", fontsize=SUPTITLE_FS)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
     return fig
 
 
 def figure_s3_tbr(pdf, a81):
     """Per-user time below range by arm (<70 and <54), re-presented under the safety question
     (replaces the retired §8.1c single figure; same shared violin convention + range colours)."""
-    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6.4))
     for ax, (col, lab) in zip(axes, [("tbr", "Time <70 (%)"), ("tbr_very_low", "Time <54 (%)")]):
         base = endpoint_color(col)
         violin_box_panel(ax, a81.arm_violin_groups(pdf, col, base=base),
                          title=lab, title_color=base, separators=(3.5,))
         ax.set_ylabel(f"Per-user mean {lab}")
-    fig.suptitle("S3: per-user time below range by arm (safety check)", fontsize=13)
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.suptitle("S3: per-user time below range by arm (safety check)", fontsize=SUPTITLE_FS)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
     return fig
 
 
@@ -225,10 +232,11 @@ def figure_s2_dose_response(table_s2):
         ax.errorbar(x, d["mean"], yerr=se, marker="o", color=color, capsize=3, lw=1.8)
         ax.axvline(0.5, color="gray", ls=":", lw=1)  # separate CE=0 anchor from CE>0 bins
         ax.set_xticks(x)
-        ax.set_xticklabels(S2_ORDER, rotation=20, fontsize=8)
+        ax.set_xticklabels(S2_ORDER, rotation=20, fontsize=TICK_FS)
         ax.set_ylabel(ylab)
-        ax.set_title(f"{outcome.upper()} vs announced carbohydrate load", fontsize=11)
-    fig.suptitle("S2: carbohydrate dose-response (CE=0 is the pinned 0 g anchor)", fontsize=13)
+        ax.set_title(f"{outcome.upper()} vs announced carbohydrate load", fontsize=TITLE_FS)
+    fig.suptitle("S2: carbohydrate dose-response (CE=0 is the pinned 0 g anchor)",
+                 fontsize=SUPTITLE_FS)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     return fig
 

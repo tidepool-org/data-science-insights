@@ -77,7 +77,10 @@ from utils.data_loader import (  # noqa: E402
 from utils.plotting import (  # noqa: E402
     GRAY,
     GRIDS,
+    LEGEND_FS,
     RANGE_COLORS,
+    SUPTITLE_FS,
+    TITLE_FS,
     endpoint_color,
     overlay_hist_panel,
     violin_box_panel,
@@ -212,8 +215,8 @@ def figure_8_3b_paired_delta(strata_by_cls, cmp_strata):
                 [(_stratum_delta(df, col), "CE=0", base),
                  (_stratum_delta(cmp_strata, col), "CE>0", GRAY)],
                 xlabel="per-user Low−High Δ", title=label, title_color=base)
-        fig.suptitle(f"Figure 8.3b — {gtitle}\nwithin-user Low−High TDD deltas, CE=0/BE≤∞ "
-                     "(CE=0 colour = range, CE>0 grey; solid = mean, dashed = 0)", fontsize=10)
+        fig.suptitle(f"Figure 8.3b — {gtitle}\nwithin-user Low−High deltas, CE=0/BE≤∞ · "
+                     "solid = mean, dashed = 0", fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.92])
         out[f"figure_8_3b_{key}.png"] = fig
     return out
@@ -249,9 +252,9 @@ def figure_8_3c_stacked(pdf, strata_inf):
     ax.set_xticks(x); ax.set_xticklabels([g for g, _ in groups])
     ax.set_ylim(0, 108); ax.set_ylabel("Mean time in range (%)")
     for xi, nu in enumerate(ns):
-        ax.text(xi, 101, f"users={nu}", ha="center", va="bottom", fontsize=8)
-    ax.legend(title="Glucose (mg/dL)", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=8)
-    ax.set_title("Figure 8.3c: glycemic ranges by TDD stratum (CE=0) vs CE>0", fontsize=12)
+        ax.text(xi, 101, f"users={nu}", ha="center", va="bottom", fontsize=11)
+    ax.legend(title="Glucose (mg/dL)", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=LEGEND_FS)
+    ax.set_title("Figure 8.3c: glycemic ranges by TDD stratum (CE=0) vs CE>0", fontsize=TITLE_FS)
     fig.tight_layout()
     return fig
 
@@ -265,7 +268,7 @@ def figure_8_3d_r_dist(strata_inf):
     ax.set_xlabel("R = day TDD / user mean TDD (clipped at 3)")
     ax.set_ylabel("CE=0 user-days")
     ax.legend()
-    ax.set_title("Figure 8.3d: within-user TDD ratio on CE=0 days", fontsize=12)
+    ax.set_title("Figure 8.3d: within-user TDD ratio on CE=0 days", fontsize=TITLE_FS)
     fig.tight_layout()
     return fig
 
@@ -309,13 +312,12 @@ def figure_8_3a_violin(strata_inf, cmp_strata):
     non-range metrics); CE=0 coloured, CE>0 grey; Low lighter / High darker."""
     out = {}
     for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8.6))
         for ax, (col, label) in zip(axes.ravel(), eps):
             _violin_panel(ax, col, label, strata_inf, cmp_strata)
-        fig.suptitle(f"Figure 8.3a — {gtitle}\nper-user means by TDD stratum "
-                     "(CE=0 colour = range, CE>0 grey; light = Low-TDD, dark = High-TDD)",
-                     fontsize=10)
-        fig.tight_layout(rect=[0, 0, 1, 0.92])
+        fig.suptitle(f"Figure 8.3a — {gtitle}\nper-user means by TDD stratum — "
+                     "CE=0 coloured, CE>0 grey; light = Low, dark = High", fontsize=SUPTITLE_FS)
+        fig.tight_layout(rect=[0, 0, 1, 0.91])
         out[f"figure_8_3a_{key}.png"] = fig
     return out
 

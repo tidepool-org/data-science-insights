@@ -11,6 +11,25 @@ Treatment data (NMA / CE=0) carries the endpoint colour; the CE>0 comparator is 
 from __future__ import annotations
 
 import numpy as np
+import matplotlib as mpl
+
+# House style: larger fonts across every NMA figure. All four analyses import this module (after
+# matplotlib.use("Agg")), so this rcParams bump applies everywhere; the explicit sizes below feed
+# the panel helpers / are re-exported for suptitles so hand-set sizes scale too.
+mpl.rcParams.update({
+    "font.size": 13,
+    "axes.titlesize": 15,
+    "axes.labelsize": 14,
+    "xtick.labelsize": 12,
+    "ytick.labelsize": 12,
+    "legend.fontsize": 11,
+    "figure.titlesize": 16,
+})
+SUPTITLE_FS = 15   # figure suptitles
+TITLE_FS = 14      # panel titles
+LABEL_FS = 13      # axis labels
+TICK_FS = 11       # x-group tick labels (4 multi-line groups → kept a touch smaller)
+LEGEND_FS = 10.5
 
 # Deterministic jitter (same seed the analyses use for bootstrap).
 BOOTSTRAP_SEED = 20260520
@@ -56,7 +75,7 @@ def endpoint_color(endpoint):
     return ENDPOINT_COLORS.get(endpoint, TIDEPOOL)
 
 
-def violin_box_panel(ax, groups, *, title=None, title_color=None, separators=(), label_fs=7):
+def violin_box_panel(ax, groups, *, title=None, title_color=None, separators=(), label_fs=TICK_FS):
     """Draw the standard violin + box + dots panel into `ax`.
 
     groups: list of (xtick_label, values(1-D array), facecolor, alpha) — one x position each
@@ -95,7 +114,7 @@ def violin_box_panel(ax, groups, *, title=None, title_color=None, separators=(),
     ax.set_xticks(positions)
     ax.set_xticklabels([f"{g[0]}\n(n={len(g[1])})" for g in groups], fontsize=label_fs)
     if title is not None:
-        ax.set_title(title, fontsize=10, color=title_color or "#000000")
+        ax.set_title(title, fontsize=TITLE_FS, color=title_color or "#000000")
 
 
 def overlay_hist_panel(ax, series, *, xlabel="", title=None, title_color=None, bins=24,
@@ -116,7 +135,7 @@ def overlay_hist_panel(ax, series, *, xlabel="", title=None, title_color=None, b
             ax.axvline(float(vals.mean()), color=color, ls="-", lw=1.8)
     if zero_line:
         ax.axvline(0, color="#333333", ls="--", lw=1)
-    ax.set_xlabel(xlabel, fontsize=7)
-    ax.legend(fontsize=6, loc="upper right")
+    ax.set_xlabel(xlabel, fontsize=LABEL_FS)
+    ax.legend(fontsize=LEGEND_FS, loc="upper right")
     if title is not None:
-        ax.set_title(title, fontsize=10, color=title_color or "#000000")
+        ax.set_title(title, fontsize=TITLE_FS, color=title_color or "#000000")

@@ -60,7 +60,7 @@ no_meal_announcement/
 │   └── utils/                                          — shared analysis helpers
 │       ├── data_loader.py                              — shared snapshot loader, §7.6 cohort filter, CE>0 comparator restriction, endpoint/classification constants (ENDPOINTS, CLASSIFICATIONS, MIN_AGE, …), by-path statistics loaders; consumed by §8.1 + §8.2
 │       ├── statistics.py                               — cluster_bootstrap_ci, paired_within_user, lmm_arm_contrast (§8.1 Method B), lmm_day_strategy_interaction (§8.2), lmm_tdd_stratum (§8.3); wraps FDA statistics by path
-│       └── plotting.py                                 — shared figure conventions for §8.1–§8.3 + supplement: range-based ENDPOINT_COLORS (Tidepool brand for the 3 non-range metrics), the two 2×2 metric GRIDS (target+safety / hyper+overall), violin_box_panel (dots-behind/box-on-top), overlay_hist_panel (shared bin edges + mean lines)
+│       └── plotting.py                                 — shared figure conventions for §8.1–§8.3 + supplement: house-style rcParams (larger fonts everywhere) + font-size constants, range-based ENDPOINT_COLORS (Tidepool brand for the 3 non-range metrics), the two 2×2 metric GRIDS (target+safety / hyper+overall), violin_box_panel (dots-behind/box-on-top), overlay_hist_panel (shared bin edges + mean lines)
 ├── exploratory/                             — ad-hoc investigation queries
 │   ├── autobolus_as_normal_bolus.py                    — confirms autoboluses are subType='normal' → leak into BE; sizes HK vs dd coverage
 │   ├── autobolus_hk_vs_dd_gap.sql                      — dd-only vs GREATEST(dd,hk) autobolus-day gap on the snapshot

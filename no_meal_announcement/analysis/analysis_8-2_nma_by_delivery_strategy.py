@@ -78,8 +78,12 @@ from utils.data_loader import (  # noqa: E402
 from utils.plotting import (  # noqa: E402
     GRAY,
     GRIDS,
+    LEGEND_FS,
     RANGE_COLORS,
     RANGE_COLS,
+    SUPTITLE_FS,
+    TICK_FS,
+    TITLE_FS,
     endpoint_color,
     violin_box_panel,
 )
@@ -274,14 +278,14 @@ def make_violin_grids(frames):
     frame = frames[HEADLINE_CLS]
     out = {}
     for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8.6))
         for ax, (col, label) in zip(axes.ravel(), eps):
             base = endpoint_color(col)
             violin_box_panel(ax, _cell_violin_groups(frame, col, base),
                              title=label, title_color=base, separators=(2.5,))
         fig.suptitle(f"Figure 8.2a — {gtitle}\nper-user means by delivery strategy × day type, "
-                     "CE=0/BE≤∞ (NMA coloured, CE>0 grey)", fontsize=10)
-        fig.tight_layout(rect=[0, 0, 1, 0.92])
+                     "CE=0/BE≤∞ (NMA coloured, CE>0 grey)", fontsize=SUPTITLE_FS)
+        fig.tight_layout(rect=[0, 0, 1, 0.91])
         out[f"figure_8_2a_violin_{key}.png"] = fig
     return out
 
@@ -304,15 +308,15 @@ def make_interaction_grids(records):
                 for d, color in [(NMA_LABEL, base), (COMPARATOR_LABEL, GRAY)]:
                     ys = [mc.get((d, s), {}).get("mean", np.nan) for s in strat_names]
                     ax.plot(range(len(strat_names)), ys, marker="o", label=d, color=color)
-                ax.legend(fontsize=7)
+                ax.legend(fontsize=LEGEND_FS)
             else:
                 ax.text(0.5, 0.5, "model not fit\n(degenerate)", ha="center", va="center",
-                        transform=ax.transAxes, fontsize=9, color="gray")
+                        transform=ax.transAxes, fontsize=11, color="gray")
             ax.set_xticks(range(len(strat_names)))
             ax.set_xticklabels(strat_short)
-            ax.set_title(label, fontsize=10, color=base)
+            ax.set_title(label, fontsize=TITLE_FS, color=base)
         fig.suptitle(f"Figure 8.2c — {gtitle}\nday-type × delivery-strategy interaction "
-                     "(model marginal means), CE=0/BE≤∞", fontsize=10)
+                     "(model marginal means), CE=0/BE≤∞", fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.92])
         out[f"figure_8_2c_interaction_{key}.png"] = fig
     return out
@@ -353,16 +357,17 @@ def make_figure_8_2d(frames):
                    label=rlabel)
             bottom += vals
         ax.set_xticks(x)
-        ax.set_xticklabels(bar_labels, fontsize=8)
+        ax.set_xticklabels(bar_labels, fontsize=TICK_FS)
         ax.set_ylim(0, 108)
-        ax.set_title(cls_label, fontsize=10)
+        ax.set_title(cls_label, fontsize=TITLE_FS)
         for xi, u in enumerate(user_ns):
-            ax.text(xi, 101, f"users={u}", ha="center", va="bottom", fontsize=7)
+            ax.text(xi, 101, f"users={u}", ha="center", va="bottom", fontsize=11)
 
     axes[0][0].set_ylabel("Mean time in range (%)")
     axes[0][-1].legend(title="Glucose (mg/dL)", bbox_to_anchor=(1.01, 1), loc="upper left",
-                       fontsize=8)
-    fig.suptitle("Figure 8.2d: Mean time in glycemic ranges by classification × cell", fontsize=13)
+                       fontsize=LEGEND_FS)
+    fig.suptitle("Figure 8.2d: Mean time in glycemic ranges by classification × cell",
+                 fontsize=SUPTITLE_FS)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     return fig
 
