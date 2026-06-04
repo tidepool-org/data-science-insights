@@ -118,3 +118,4 @@ no_meal_announcement/outputs/
 no_meal_announcement/analysis/outputs/*
 !no_meal_announcement/analysis/outputs/.gitkeep
 CLAUDE.md
+.claude/settings.json

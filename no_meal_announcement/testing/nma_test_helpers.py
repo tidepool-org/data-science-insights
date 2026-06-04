@@ -82,8 +82,29 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _origin(version: str = DEFAULT_VERSION) -> str:
-    return json.dumps({"version": version})
+def _origin(version: str = DEFAULT_VERSION, source_name: Optional[str] = None) -> str:
+    """BDDP `origin` JSON. With `source_name` set, embeds the HealthKit
+    `payload.sourceRevision.source.name` that export_user_day_tdd's HK predicate
+    (`$.payload.sourceRevision.source.name = 'Loop'`) keys on. Mirrors FDA
+    build_synthetic_bddp._origin so synthetic boluses/basals land in the
+    HealthKit-delivered TDD stream."""
+    payload = {"version": version}
+    if source_name:
+        payload["payload"] = {"sourceRevision": {"source": {"name": source_name}}}
+    return json.dumps(payload)
+
+
+# HealthKit metadata flag Loop stamps on automatically-issued boluses. The bolus
+# classifier (export_user_day_bolus_classification) reads it via
+# get_json_object(payload, '$["com.loopkit.InsulinKit.MetadataKeyAutomaticallyIssued"]'),
+# so an autobolus carrying this payload is counted as automatic (and excluded from
+# manual_normal_bolus_count = BE) even though its subType is 'normal' — matching how
+# real Loop autoboluses look after the 2026-06-01 classifier rewrite.
+_AUTO_PAYLOAD = json.dumps({"com.loopkit.InsulinKit.MetadataKeyAutomaticallyIssued": 1})
+
+# BDDP origin for HealthKit-delivered (source=Loop) insulin records. Used for boluses
+# and basals so their delivered amounts land in export_user_day_tdd's HealthKit stream.
+HK_LOOP_ORIGIN = _origin(DEFAULT_VERSION, source_name="Loop")
 
 
 def _row(**fields) -> dict:
@@ -130,7 +151,13 @@ def make_bolus_events(
         - meal:       `bolus(subType="normal")` + matching `food(nutrition.carb)`
                       at the same timestamp (within ±15 min window).
         - non_meal:   `bolus(subType="normal")` only.
-        - autobolus:  `bolus(subType="automated")` only.
+        - autobolus:  `bolus(subType="normal")` + HealthKit AutomaticallyIssued
+                      payload flag. Real Loop autoboluses are subType='normal'; the
+                      classifier tells them apart by the flag, counting them as
+                      automatic (NOT in manual_normal_bolus_count = BE).
+
+    All boluses carry the HealthKit (source=Loop) origin so their `normal` amount
+    is picked up by export_user_day_tdd's delivered-bolus stream.
 
     Total rows returned = 2 * n_meal + n_non_meal + n_autobolus.
 
@@ -150,7 +177,7 @@ def make_bolus_events(
             type="bolus",
             subType="normal",
             normal=meal_units,
-            origin=_origin(version),
+            origin=_origin(version, source_name="Loop"),
         ))
         rows.append(_row(
             _userId=user_id,
@@ -170,7 +197,7 @@ def make_bolus_events(
             type="bolus",
             subType="normal",
             normal=non_meal_units,
-            origin=_origin(version),
+            origin=_origin(version, source_name="Loop"),
         ))
         slot += 1
 
@@ -180,9 +207,10 @@ def make_bolus_events(
             _userId=user_id,
             time_string=_iso(t),
             type="bolus",
-            subType="automated",
+            subType="normal",
             normal=autobolus_units,
-            origin=_origin(version),
+            origin=_origin(version, source_name="Loop"),
+            payload=_AUTO_PAYLOAD,
         ))
         slot += 1
 
@@ -253,20 +281,24 @@ def make_basal_row(
     rate_u_per_hr: float = 0.5,
     version: str = DEFAULT_VERSION,
 ) -> dict:
-    """Single `type='basal'` record covering `duration_hours` from `hour:00`.
+    """Single HealthKit (source=Loop) `type='basal'` record covering
+    `duration_hours` from `hour:00`.
 
-    `rate_u_per_hr` lands in `normal`; `duration_hours * 3600` lands in
-    `duration` (string per BDDP schema). Unit 9's TDD computation reads
-    these two fields to recover `tdd_basal_u`.
+    export_user_day_tdd's HealthKit-delivered basal path reads the `rate` column
+    (delivered U/hr) and `duration` (MILLISECONDS), then credits
+    rate × LEAST(gap_to_next, duration) per segment. So `rate_u_per_hr` lands in
+    `rate`, `duration_hours * 3600 * 1000` lands in `duration`, and the origin
+    carries the source=Loop tag the HK predicate matches. With one full-day
+    record per user-day, delivered basal ≈ rate × 24.
     """
     t = datetime(day.year, day.month, day.day, hour, 0, 0)
     return _row(
         _userId=user_id,
         time_string=_iso(t),
         type="basal",
-        normal=rate_u_per_hr,
-        duration=str(duration_hours * 3600),
-        origin=_origin(version),
+        rate=rate_u_per_hr,
+        duration=str(duration_hours * 3600 * 1000),
+        origin=_origin(version, source_name="Loop"),
     )
 
 

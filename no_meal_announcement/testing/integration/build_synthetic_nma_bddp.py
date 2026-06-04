@@ -15,7 +15,7 @@ Public surface:
 
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
@@ -30,6 +30,7 @@ from nma_test_helpers import (  # type: ignore # noqa: E402
     make_bolus_events,
     make_cbg_rows,
     make_cbg_rows_at_target_tir,
+    make_loop_recs,
 )
 
 # Imports FDA's BDDP_COLUMNS / BDDP_SCHEMA so the saved table matches
@@ -41,6 +42,14 @@ from FDA_real_world_data.testing.integration.build_synthetic_bddp import (  # ty
     BDDP_COLUMNS,
     BDDP_SCHEMA,
 )
+
+# Two schema deltas from FDA's BDDP_SCHEMA, both because FDA never runs the NMA staging:
+#   1. `rate` — export_user_day_tdd reads it on HealthKit basal rows (TRY_CAST(rate AS DOUBLE)
+#      + PARTITION BY ..., rate, duration); without it the TDD SQL fails to COMPILE.
+#   2. `normal` STRING (not double) — the bolus classifier does get_json_object(normal,'$.value'),
+#      which requires a STRING (real bddp_sample_all_2.normal is a string; FDA types it double).
+NMA_BDDP_COLUMNS = BDDP_COLUMNS + ["rate"]
+NMA_BDDP_SCHEMA = BDDP_SCHEMA.replace("`normal` double", "`normal` string") + ", `rate` double"
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +72,41 @@ DEMOGRAPHICS = {
     "nma_user_known_paired_diff":  {"dob": date(1985, 1, 1)},   # 39
     "nma_user_known_interaction":  {"dob": date(1985, 1, 1)},   # 39
     "nma_user_known_low_high_tdd": {"dob": date(1985, 1, 1)},   # 39
+    "nma_user_ce_pos_only":        {"dob": date(1988, 1, 1)},   # 36 — comparator-restriction probe
+}
+
+# Per-archetype window length (days from START_DAY). Drives build_loop_recommendations
+# (the valid-day universe must cover exactly the days each archetype emits) and
+# build_loop_cbg. Keep in sync with the archetype builders below.
+ARCHETYPE_DAYS = {
+    "nma_user_pure_be0":           14,
+    "nma_user_mixed":              14,
+    "nma_user_low_coverage":       14,
+    "nma_user_below_min_days":      8,
+    "nma_user_pediatric":          14,
+    "nma_user_ambiguous_strategy": 14,
+    "nma_user_tdd_drift":          60,
+    "nma_user_known_paired_diff":  20,
+    "nma_user_known_interaction":  20,
+    "nma_user_known_low_high_tdd": 30,
+    "nma_user_ce_pos_only":        14,
+}
+
+# Per-user sex for the analysis-ready LEFT JOIN to user_gender (§8.1 Sample
+# Information). Deterministic spread across M/F/Other so _bin_sex is exercised;
+# does not affect the TIR design.
+USER_GENDER = {
+    "nma_user_pure_be0":           "M",
+    "nma_user_mixed":              "F",
+    "nma_user_low_coverage":       "M",
+    "nma_user_below_min_days":     "F",
+    "nma_user_pediatric":          "F",
+    "nma_user_ambiguous_strategy": "M",
+    "nma_user_tdd_drift":          "M",
+    "nma_user_known_paired_diff":  "M",
+    "nma_user_known_interaction":  "F",
+    "nma_user_known_low_high_tdd": "F",
+    "nma_user_ce_pos_only":        "M",
 }
 
 
@@ -274,6 +318,22 @@ def _archetype_known_low_high_tdd(uid="nma_user_known_low_high_tdd"):
     return rows
 
 
+def _archetype_ce_pos_only(uid="nma_user_ce_pos_only"):
+    """6.11 — 14 days, EVERY day CE>0 (2 meals + 5 autoboluses), TIR≈65%.
+
+    Has no CE=0 day, so analysis_8-1.restrict_comparator must zero its `in_ce_gt0`
+    (the CE>0 arm is restricted to users with >=1 CE=0 day). Used by the §8.1
+    end-to-end test to assert the comparator restriction drops this user.
+    """
+    rows = []
+    for d in range(14):
+        day = START_DAY + timedelta(days=d)
+        rows.extend(make_cbg_rows_at_target_tir(uid, day, tir_pct=65.0))
+        rows.extend(_archetype_bolus(uid, day, "ce_pos"))
+        rows.append(make_basal_row(uid, day))
+    return rows
+
+
 ARCHETYPES = {
     "nma_user_pure_be0":           _archetype_pure_be0,
     "nma_user_mixed":              _archetype_mixed,
@@ -285,6 +345,7 @@ ARCHETYPES = {
     "nma_user_known_paired_diff":  _archetype_known_paired_diff,
     "nma_user_known_interaction":  _archetype_known_interaction,
     "nma_user_known_low_high_tdd": _archetype_known_low_high_tdd,
+    "nma_user_ce_pos_only":        _archetype_ce_pos_only,
 }
 
 
@@ -300,10 +361,14 @@ def _to_bddp_row(row: dict) -> dict:
     needs every BDDP column present so the saved table is `bddp_sample_all_2`-
     shaped. Missing columns default to None.
     """
-    base = {c: None for c in BDDP_COLUMNS}
-    base.update({k: v for k, v in row.items() if k in BDDP_COLUMNS})
+    base = {c: None for c in NMA_BDDP_COLUMNS}
+    base.update({k: v for k, v in row.items() if k in NMA_BDDP_COLUMNS})
     if base.get("timezoneOffset") is None:
         base["timezoneOffset"] = TZ_OFFSET_MIN
+    # `normal` is a STRING column (see NMA_BDDP_SCHEMA) — serialize the numeric value so
+    # createDataFrame accepts it and the classifier's get_json_object / TRY_CAST both work.
+    if base.get("normal") is not None:
+        base["normal"] = str(base["normal"])
     return base
 
 
@@ -321,9 +386,9 @@ def build_synthetic_nma_bddp(spark, output_table: str) -> None:
     from FDA's build_synthetic_bddp).
     """
     rows = [_to_bddp_row(r) for r in _build_rows()]
-    pdf = pd.DataFrame(rows, columns=BDDP_COLUMNS)
+    pdf = pd.DataFrame(rows, columns=NMA_BDDP_COLUMNS)
     (
-        spark.createDataFrame(pdf, schema=BDDP_SCHEMA)
+        spark.createDataFrame(pdf, schema=NMA_BDDP_SCHEMA)
         .write.mode("overwrite")
         .option("overwriteSchema", "true")
         .saveAsTable(output_table)
@@ -340,5 +405,76 @@ def build_user_dates(spark, table_name: str) -> None:
         for uid, demo in DEMOGRAPHICS.items()
     ]
     pdf = pd.DataFrame(rows, columns=["userid", "dob"])
-    spark.createDataFrame(pdf).write.mode("overwrite").saveAsTable(table_name)
+    schema = "`userid` string, `dob` date"
+    spark.createDataFrame(pdf, schema=schema).write.mode("overwrite").saveAsTable(table_name)
     print(f"Wrote {len(rows)} demographic rows to {table_name}")
+
+
+def build_user_gender(spark, table_name: str) -> None:
+    """Write the per-user sex aux table (`dev.default.user_gender`-shaped:
+    columns `userid`, `gender`). LEFT JOINed by export_user_day_analysis_ready
+    for §8.1 Sample Information."""
+    rows = [{"userid": uid, "gender": g} for uid, g in USER_GENDER.items()]
+    pdf = pd.DataFrame(rows, columns=["userid", "gender"])
+    schema = "`userid` string, `gender` string"
+    spark.createDataFrame(pdf, schema=schema).write.mode("overwrite").saveAsTable(table_name)
+    print(f"Wrote {len(rows)} gender rows to {table_name}")
+
+
+def build_loop_recommendations(spark, table_name: str) -> None:
+    """Write the synthetic `loop_recommendations` valid-day universe.
+
+    This FDA-produced table is the day anchor + Loop-version source for the NMA
+    pipeline (export_user_day_{bolus_classification,carbs,age,classification,
+    analysis_ready}). NMA does not rebuild it from BDDP, so the test seeds it
+    directly: one row per (user, day) over each archetype's window, via
+    make_loop_recs. loop_version='3.2.0' (version_int=3_002_000 < 3_004_000) so
+    days survive the §cohort Loop-version filter in analysis_ready.
+
+    The dosing-mode counts are unused by the current pipeline (delivery_strategy
+    now derives from the bolus classifier's automatic_bolus_count), so every user
+    is emitted as 'autobolus' for simplicity.
+    """
+    rows = []
+    for uid, n_days in ARCHETYPE_DAYS.items():
+        rows.extend(make_loop_recs(uid, START_DAY, n_days, dosing_mode="autobolus"))
+    pdf = pd.DataFrame(rows, columns=[
+        "_userId", "day", "dd_autobolus_count", "hk_autobolus_count",
+        "dd_temp_basal_count", "hk_temp_basal_count", "loop_version", "version_int",
+    ])
+    schema = (
+        "`_userId` string, `day` date, "
+        "`dd_autobolus_count` bigint, `hk_autobolus_count` bigint, "
+        "`dd_temp_basal_count` bigint, `hk_temp_basal_count` bigint, "
+        "`loop_version` string, `version_int` bigint"
+    )
+    spark.createDataFrame(pdf, schema=schema).write.mode("overwrite").saveAsTable(table_name)
+    print(f"Wrote {len(rows):,} loop_recommendations rows to {table_name}")
+
+
+def build_loop_cbg(spark, table_name: str) -> None:
+    """Write the synthetic `loop_cbg` cleaned-CGM table that export_user_day_cbg
+    slices (columns `_userId`, `cbg_timestamp`, `cbg_mg_dl`, `is_plausible`).
+
+    NMA does not rebuild loop_cbg from BDDP (FDA's export_cbg_from_loop reads
+    glucose from the BDDP `value` column, which the NMA helpers leave null —
+    using it would yield empty CGM). Instead we derive loop_cbg directly from the
+    same archetype CGM rows the BDDP fixture already encodes (single source of
+    truth for each archetype's TIR design): take every `type='cbg'` row, convert
+    its mmol `normal` back to mg/dL, and flag plausible (all synthetic values are
+    within 38-500 mg/dL).
+    """
+    cbg_rows = [r for r in _build_rows() if r.get("type") == "cbg"]
+    rows = [
+        {
+            "_userId": r["_userId"],
+            "cbg_timestamp": datetime.strptime(r["time_string"], "%Y-%m-%dT%H:%M:%SZ"),
+            "cbg_mg_dl": float(r["normal"]) / MMOL_PER_MGDL,
+            "is_plausible": True,
+        }
+        for r in cbg_rows
+    ]
+    pdf = pd.DataFrame(rows, columns=["_userId", "cbg_timestamp", "cbg_mg_dl", "is_plausible"])
+    schema = "`_userId` string, `cbg_timestamp` timestamp, `cbg_mg_dl` double, `is_plausible` boolean"
+    spark.createDataFrame(pdf, schema=schema).write.mode("overwrite").saveAsTable(table_name)
+    print(f"Wrote {len(rows):,} loop_cbg rows to {table_name}")

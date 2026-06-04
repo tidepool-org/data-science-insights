@@ -35,6 +35,9 @@ Outputs (analysis/outputs/analysis_8_2/<cohort>/):
     figure_8_2d_stacked_bars.png    (mean time in glycemic ranges per cell)
 """
 
+%pip install statsmodels
+dbutils.library.restartPython()
+
 import argparse
 import importlib.util
 import os

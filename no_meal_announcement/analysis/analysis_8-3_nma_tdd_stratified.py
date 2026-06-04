@@ -19,6 +19,7 @@ Sign convention: contrasts are **Low − High** (lmm_tdd_stratum ref = High).
 
 Outputs (analysis/outputs/analysis_8_3/<cohort>/):
     table_8_3a_per_user_by_stratum.csv     per classification × endpoint × stratum: across-user mean±SD
+    table_8_3a_supp_terciles.csv           supplemental Table 8.3a: across-user mean±SD by Low/Mid/High R tercile
     table_8_3b_within_user_contrast.csv    per classification × endpoint: within-user Low−High (Wilcoxon + boot CI + paired-t)
     table_8_3c_lmm_sensitivity.csv         day-level LMM outcome ~ tdd_stratum + (1|user)
     table_8_3b_sens_terciles.csv           sensitivity: bottom vs top tercile of each user's CE=0-day R
@@ -29,6 +30,8 @@ Outputs (analysis/outputs/analysis_8_3/<cohort>/):
     figure_8_3b_grid{1,2}_*.png            within-user Low−High delta histograms (CE=0 vs CE>0), two 2×2 grids
     figure_8_3c_stacked_ranges.png         mean glycemic ranges: Low vs High vs CE>0 reference
     figure_8_3d_R_distribution.png         within-user R = tdd/mean_tdd distribution on CE=0 days
+    figure_8_3e_tir_vs_tdd_percentile.png  scatter: per-day TIR vs within-user TDD percentile, coloured by
+                                           CE/BE category (CE=0 BE=0/1/≥2 + CE>0) + 11-dot decile-mean trend
 
 Rolling-30-day reference (§7.5) is computed in-analysis from per-day tdd_units + local_day
 (trailing 30-calendar-day mean; no staging column needed).
@@ -37,6 +40,10 @@ Questions) — flagged; winsorize upstream before strong High-stratum claims.
 
 Usage: python analysis_8-3_nma_tdd_stratified.py [--cohort {adult,pediatric,all}]
 """
+
+# %pip install statsmodels
+# dbutils.library.restartPython()
+
 from __future__ import annotations
 
 import argparse
@@ -107,8 +114,9 @@ def _ce0_strata(pdf, nma_flag, ratio_col="tdd_ratio"):
 
 
 def _tercile_strata(pdf, nma_flag):
-    """Sensitivity strata: bottom tercile (Low) vs top tercile (High) of each user's own
-    CE=0-day R distribution."""
+    """Label each CE=0 day Low / Mid / High by within-user R terciles (each user's own CE=0-day
+    R distribution). Callers take what they need: table_8_3b_within_user contrasts only Low vs
+    High (Mid ignored); the supplemental Table 8.3a reports all three."""
     df = pdf[(pdf[nma_flag] == True)  # noqa: E712
              & (pdf["n_eligible_days_for_tdd"] >= MIN_REF_DAYS)
              & (pdf["tdd_ratio"].notna())].copy()
@@ -116,20 +124,22 @@ def _tercile_strata(pdf, nma_flag):
     q2 = df.groupby("_userId")["tdd_ratio"].transform(lambda s: s.quantile(2 / 3))
     df["tdd_stratum"] = np.where(df["tdd_ratio"] <= q1, "Low",
                                  np.where(df["tdd_ratio"] >= q2, "High", "Mid"))
-    return df[df["tdd_stratum"].isin(["Low", "High"])].copy()
+    return df
 
 
 def _per_user_stratum_mean(df, col, stratum):
     return df[df["tdd_stratum"] == stratum].groupby("_userId")[col].mean()
 
 
-def table_8_3a_per_user_by_stratum(strata_by_cls):
+def table_8_3a_per_user_by_stratum(strata_by_cls, strata_order=("Low", "High")):
     """Across-user mean ± SD of each endpoint's per-user within-stratum mean, by classification
-    × stratum, with user/day counts."""
+    × stratum, with user/day counts. `strata_order` selects which strata (and their order) to
+    report: ("Low", "High") for the primary mean-reference table, ("Low", "Mid", "High") for the
+    supplemental R-tercile version (table_8_3a_supp_terciles.csv)."""
     rows = []
     for cls_label, df in strata_by_cls.items():
         for col, ep_label in ENDPOINTS:
-            for stratum in ("Low", "High"):
+            for stratum in strata_order:
                 m = _per_user_stratum_mean(df, col, stratum).dropna()
                 sub = df[df["tdd_stratum"] == stratum]
                 rows.append({
@@ -273,6 +283,72 @@ def figure_8_3d_r_dist(strata_inf):
     return fig
 
 
+# Four mutually-exclusive day categories for figure_8_3e, each its own colour. CE=0 is split by
+# bolus-entry count on a diverging green→amber→red ramp (escalating BE: 0 / 1 / ≥2); CE>0 is the
+# grey comparator.
+CE_BE_COLORS = {
+    "CE=0/BE=0": "#1a9850",   # green
+    "CE=0/BE=1": "#f1a340",   # amber
+    "CE=0/BE≥2": "#d73027",   # red
+    "CE>0": GRAY,             # grey comparator
+}
+
+
+def figure_8_3e_tir_vs_tdd_pct(pdf):
+    """For-fun scatter: per-day TIR vs the day's within-user TDD percentile, for TDD-reference-
+    eligible users, every eligible day coloured by CE/BE category — CE=0 split by bolus count
+    (BE=0 / BE=1 / BE≥2) plus the CE>0 comparator. Percentile = each day's rank of tdd_units
+    within that user's eligible days (0–100), comparable across users. Each category gets its own
+    decile-mean TIR line (11 dots on the x-ticks), plus a dashed black overall-mean line across all
+    days; the faint scatter behind shows day-level spread."""
+    df = pdf[pdf["n_eligible_days_for_tdd"] >= MIN_REF_DAYS].dropna(subset=["tdd_units", "tir"]).copy()
+    df["tdd_pct"] = df.groupby("_userId")["tdd_units"].rank(pct=True) * 100.0
+    ce0 = df["carb_entry_count"] == 0
+    be = df["bolus_entry_count"]
+    df["cat"] = np.select(
+        [~ce0, ce0 & (be == 0), ce0 & (be == 1)],
+        ["CE>0", "CE=0/BE=0", "CE=0/BE=1"], default="CE=0/BE≥2")
+
+    fig, ax = plt.subplots(figsize=(9.5, 6))
+    marks = np.arange(0, 101, 10)
+    edges = np.arange(-5, 106, 10)  # 10-pct-wide bins centred on the marks → dots land on ticks
+
+    # Faint scatter for density: largest category on the bottom, CE>0 drawn faintest.
+    plot_order = sorted(CE_BE_COLORS, key=lambda c: int((df["cat"] == c).sum()), reverse=True)
+    for cat in plot_order:
+        sub = df[df["cat"] == cat]
+        ax.scatter(sub["tdd_pct"], sub["tir"], s=6, color=CE_BE_COLORS[cat], linewidths=0,
+                   zorder=2, alpha=0.07 if cat == "CE>0" else 0.16)
+
+    # A decile-mean TIR line per category (11 dots on the x-ticks), in logical CE/BE order.
+    handles = []
+    for cat in CE_BE_COLORS:
+        sub = df[df["cat"] == cat]
+        binned = (sub.assign(_b=pd.cut(sub["tdd_pct"], edges, labels=marks))
+                     .groupby("_b", observed=False)["tir"].mean().reindex(marks))
+        h, = ax.plot(marks, binned.to_numpy(dtype=float), "-o", color=CE_BE_COLORS[cat], lw=2,
+                     ms=5, zorder=5, label=f"{cat} (n={len(sub):,})")
+        handles.append(h)
+
+    # Overall mean TIR per decile across all categories (dashed black, on top).
+    overall = (df.assign(_b=pd.cut(df["tdd_pct"], edges, labels=marks))
+                 .groupby("_b", observed=False)["tir"].mean().reindex(marks))
+    h_all, = ax.plot(marks, overall.to_numpy(dtype=float), "--o", color="#111111", lw=2.5, ms=5,
+                     zorder=6, label=f"overall (n={len(df):,})")
+    handles.append(h_all)
+
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 100)
+    ax.set_xticks(marks)
+    ax.set_xlabel("within-user TDD percentile (all eligible days, %)")
+    ax.set_ylabel("Time 70-180 mg/dL (%)")
+    ax.legend(handles=handles, fontsize=LEGEND_FS)
+    ax.set_title(f"Figure 8.3e: TIR vs within-user TDD percentile by CE/BE category (n={len(df):,})",
+                 fontsize=TITLE_FS)
+    fig.tight_layout()
+    return fig
+
+
 def _add_rolling_ref(pdf):
     """Add a trailing rolling-30-calendar-day TDD reference + ratio, computed in-analysis from
     per-day tdd_units + local_day (no staging column needed). tdd_ratio_rolling = day TDD ÷ the
@@ -362,8 +438,11 @@ def run(
     table_8_3c_lmm(strata, nma_stats).to_csv(
         os.path.join(output_dir, "table_8_3c_lmm_sensitivity.csv"), index=False)
 
-    # Sensitivities: terciles, and median-TDD reference.
+    # Sensitivities: terciles, and median-TDD reference. _tercile_strata labels Low/Mid/High;
+    # the supplemental Table 8.3a reports all three, the within-user contrast uses only Low/High.
     terc = {cls_label: _tercile_strata(pdf, flag) for flag, cls_label in CLASSIFICATIONS}
+    table_8_3a_per_user_by_stratum(terc, strata_order=("Low", "Mid", "High")).to_csv(
+        os.path.join(output_dir, "table_8_3a_supp_terciles.csv"), index=False)
     table_8_3b_within_user(terc, nma_stats).to_csv(
         os.path.join(output_dir, "table_8_3b_sens_terciles.csv"), index=False)
     pdf_med = pdf.copy()
@@ -388,6 +467,7 @@ def run(
     figs.update(figure_8_3b_paired_delta(strata, cmp_strata))   # two 2×2 grid figures
     figs["figure_8_3c_stacked_ranges.png"] = figure_8_3c_stacked(pdf, strata_inf)
     figs["figure_8_3d_R_distribution.png"] = figure_8_3d_r_dist(strata_inf)
+    figs["figure_8_3e_tir_vs_tdd_percentile.png"] = figure_8_3e_tir_vs_tdd_pct(pdf)
     for fname, fig in figs.items():
         fig.savefig(os.path.join(output_dir, fname), dpi=150)
         plt.close(fig)

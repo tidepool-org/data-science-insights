@@ -26,6 +26,10 @@ Outputs (analysis/outputs/analysis_8_supp/<cohort>/):
 
 Usage: python analysis_8-supp_nma_finding_explanation.py [--cohort {adult,pediatric,all}]
 """
+
+%pip install statsmodels
+dbutils.library.restartPython()
+
 from __future__ import annotations
 
 import argparse

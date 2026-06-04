@@ -47,6 +47,9 @@ entry point):
     analysis/outputs/analysis_8_1/table_8_1_sample_information.csv  (adult/pediatric/all columns)
 """
 
+# %pip install statsmodels
+# dbutils.library.restartPython()
+
 import argparse
 import importlib.util
 import os

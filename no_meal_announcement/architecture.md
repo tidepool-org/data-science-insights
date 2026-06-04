@@ -1,6 +1,6 @@
 # PLN-1008 No Meal Announcement — Architecture
 
-## Current state (as of 2026-06-01)
+## Current state (as of 2026-06-04)
 
 Data-staging pipeline and **§8.1 complete**: Method A (per-user paired) + Method B (LMM, Table 8.1b) + Tables 8.1a/8.1c + Figures 8.1a/8.1b/8.1c + adult/pediatric/all cohort split + **Sample Information (Table 1)**. Runs on Databricks, or **locally off the CSV snapshot** (`analysis_8-1_…py --csv_path`) that `data_staging/export_user_day_analysis_ready.py` writes. The age-stratified run is produced for all three cohorts (`outputs/analysis_8_1/{adult,pediatric,all}/`), each with a `sample_information.csv`, plus a combined `table_8_1_sample_information.csv`. The §8.1 LMM-vs-Method-A weighting caveat is documented in [docs/weighting_sensitivity.md](docs/weighting_sensitivity.md) (stringent NMA arms sign-fragile; CE=0/BE≤∞ robust).
 
@@ -14,7 +14,11 @@ Data-staging pipeline and **§8.1 complete**: Method A (per-user paired) + Metho
 
 **Figure conventions unified (2026-06-01).** §8.1/§8.2/§8.3 (+ supplement) now share one figure vocabulary in **`analysis/utils/plotting.py`**: every endpoint is coloured by its glycemic range (TIR green, <70/<54 coral/red, >180/>250 light/dark purple; mean glucose, CV, hypo events use the Tidepool brand blue), the treatment arm (NMA / CE=0) carries the colour and the CE>0 comparator is grey, and every per-user figure is the same two 2×2 metric grids spanning all 8 endpoints (Grid 1 target+safety: TIR/<70/<54/hypo; Grid 2 hyper+overall: >180/>250/mean/CV). Violins use dots-behind / box-on-top (orange median); paired-difference histograms use shared bin edges + mean lines. This renamed the per-user figures (§8.1: 8.1b→violin grids, 8.1c→paired-delta grids, dropping `method_a_panel_*`; §8.2: 8.2a→violin grids, 8.2c→interaction grids, dropping the TIR/TBR-only 8.2a/8.2b) — flag for the report editor.
 
-**Next:** high-TDD outlier winsorization before strong High-stratum claims; §8.1/§8.2/§8.3 tests remain skipped placeholders. See the latest `project_history.md` entries.
+**§8.3 supplemental + scatter (2026-06-04).** Added a supplemental **Low/Mid/High R-tercile** Table 8.3a (`table_8_3a_supp_terciles.csv`, same per-user tercile cutpoints as the §8.3b tercile sensitivity) and a new **`figure_8_3e_tir_vs_tdd_percentile.png`** — per-day TIR vs each day's within-user TDD percentile (rank over ALL eligible days, CE=0 + CE>0), coloured by CE/BE category (CE=0 BE=0/1/≥2 on a green→amber→red ramp + CE>0 grey), with per-category decile-mean lines (11 dots on the 0/10/…/100 ticks) + a dashed black overall-mean line. ⚠️ **The TDD/tercile results are NOT yet trustworthy — do not cite them** (see Open Questions): the empirical tercile split is Low-biased and degenerate for users with few/clustered CE=0-day TDD, so the three tercile rows cover *different, unequal user sets* (adult CE=0/BE=0: Low 879 / Mid 477 / High 611 users) — not a clean within-user comparison; and TIR is a band metric (Low→Mid flat because reclaimed hypo ≈ added hyper) while mean glucose / TAR move monotonically.
+
+**Integration-test harness implemented (2026-06-04).** The dormant `testing/integration/` scaffold is now a working end-to-end harness on Databricks: `run_pipeline.py` builds the synthetic BDDP fixture, seeds the FDA upstream tables it reads (loop_recommendations via `make_loop_recs`; loop_cbg built directly), runs the 9 current staging modules → a `dev.fda_510k_rwd.test_nma_*` analysis-ready table (+ a CSV fixture). `run_test_analysis_8_1.py` is a **runnable file** (named `run_*`, not `test_*`, so Databricks runs it as a file — not pytest): it builds the pipeline then asserts §8.1 recovers the baked-in design (paired_diff CE=0 ≈80% / CE>0 ≈70% TIR, comparator restriction, cohort split, all artifacts). `run_test_analysis_8_{2,3}.py` are runnable stubs. The fixture was extended for the current pipeline (HK AutomaticallyIssued flag on autoboluses, Loop-origin basal/bolus + a `rate` column, `normal` typed string, `nma_user_ce_pos_only` archetype); `run_pipeline.load_analysis_module` strips the Databricks notebook preamble (`%pip` / top-level `dbutils.…`) so the hyphenated analysis modules import cleanly. statsmodels availability on the cluster is checked by `exploratory/import_test.py`.
+
+**Next:** **scrutinize/fix the TDD-tercile results before any TDD-stratum claim** (degenerate, unequal-user-set empirical terciles + TIR band-insensitivity — see Open Questions); high-TDD outlier winsorization before strong High-stratum claims; flesh out the §8.2/§8.3 runnable integration checks (currently stubs); the older `testing/data_staging/` + `testing/analysis/` unit tests are still prior-scaffold stubs. See the latest `project_history.md` entries.
 
 Plan doc: [PLN-1008 Data Analysis Plan_ No Meal Announcement with Tidepool Loop.txt](PLN-1008%20Data%20Analysis%20Plan_%20No%20Meal%20Announcement%20with%20Tidepool%20Loop.txt) (Rev 01, effective 2026-05-20).
 
@@ -54,7 +58,7 @@ no_meal_announcement/
 ├── analysis/                                — §8 analyses
 │   ├── analysis_8-1_glycemic_outcomes_nma_vs_carb_entry.py  — Method A + Method B (LMM) + Tables 8.1a/b/c + figures; adult/pediatric cohort split; Sample Information (Table 1)
 │   ├── analysis_8-2_nma_by_delivery_strategy.py        — §8.2 day-type × delivery-strategy interaction LMM (Tables 8.2a/b + Figures 8.2a–d); per-cohort run()/main()
-│   ├── analysis_8-3_nma_tdd_stratified.py              — §8.3 within-user TDD stratification of CE=0 days (Low/High R=tdd/mean; Tables 8.3a/b/c + Figures 8.3b/c/d); per-cohort run()/main()
+│   ├── analysis_8-3_nma_tdd_stratified.py              — §8.3 within-user TDD stratification of CE=0 days (Low/High R=tdd/mean; Tables 8.3a/b/c + supp Low/Mid/High terciles; Figures 8.3a–e incl. 8.3e TIR-vs-TDD-percentile scatter); per-cohort run()/main(). ⚠️ tercile results need scrutiny (see Open Questions)
 │   ├── analysis_8-supp_nma_finding_explanation.py      — supplement: explains higher-TIR-on-CE=0 (S1 intake / S2 carb dose-response / S3 decomposition+safety / C1–C4); → outputs/analysis_8_supp/<cohort>/
 │   ├── data_overview.py                                — cohort/data overview (from prior scaffold)
 │   └── utils/                                          — shared analysis helpers
@@ -79,7 +83,14 @@ no_meal_announcement/
 │   ├── pediatric_split.md                              — pediatric/adult split notes (from prior scaffold)
 │   ├── tdd_reference_choice.md                         — TDD reference choice notes (from prior scaffold)
 │   └── weighting_sensitivity.md                        — §8.1 LMM vs Method A: stringent arms sign-fragile to user weighting; BE<=inf robust
-└── testing/                                 — test suite (from prior scaffold; not updated for current data_staging)
+└── testing/                                 — test suite
+    ├── integration/                          — WORKING end-to-end harness (Databricks):
+    │   ├── run_pipeline.py                              — orchestrator: build synthetic fixture + seed FDA upstream tables + run the 9 staging modules → test_nma_* analysis-ready (+ CSV fixture); + load_analysis_module (strips notebook preamble)
+    │   ├── build_synthetic_nma_bddp.py                  — synthetic BDDP archetypes + build_loop_recommendations/_loop_cbg/_user_gender
+    │   ├── run_test_analysis_8_1.py                     — runnable §8.1 check (build pipeline → assert design recovery); 8_2/8_3 are stubs
+    │   └── inspect_nma.py                               — reusable db-display + plotting spot-check (synthetic OR real analysis-ready)
+    ├── nma_test_helpers.py                   — row builders (CBG/bolus/basal/food, make_loop_recs re-export)
+    └── data_staging/, analysis/             — prior-scaffold unit-test stubs (not updated for current pipeline)
 ```
 
 > **Heads up — prior-scaffold material:** several files moved over from the earlier project
@@ -92,8 +103,12 @@ no_meal_announcement/
 > rewiring to the current `data_staging/` modules before they will run. The data_staging tests and
 > `testing/analysis/test_{tdd,classification}.py` (which import other deleted `analysis/utils`
 > modules) have not been updated. `testing/analysis/test_statistics.py` is green again now that
-> `analysis/utils/statistics.py` has been restored. The §8.1 analysis tests
-> (`testing/analysis/test_analysis_8_1.py`) remain skipped placeholders (deferred).
+> `analysis/utils/statistics.py` has been restored. **Update (2026-06-04):** the
+> `testing/integration/` layer is no longer scaffold — it's an implemented end-to-end harness
+> (see the directory tree + the "Integration-test harness" note above); the per-analysis checks
+> moved there as runnable `run_test_analysis_8_*.py` files and the old `testing/analysis/`
+> per-analysis copies were removed. The `testing/data_staging/` + remaining `testing/analysis/`
+> unit-test stubs are still prior-scaffold and unrewired.
 
 ## Pipeline DAG
 
@@ -173,8 +188,8 @@ Phase 4: Analysis
   §8.3 Within-user TDD stratification on CE=0 days — implemented in analysis_8-3_nma_tdd_stratified.py.
     On CE=0 days (per nested classification, users with n_eligible_days_for_tdd>=30), stratify by R=tdd_units/mean_tdd_user cut at 1.0 (Low<1.0 light intake; High>=1.0 likely unannounced meal).
     Within-user Low-High paired per endpoint (paired_within_user, Wilcoxon + boot CI + paired-t) → Table 8.3b; per-user-by-stratum means → Table 8.3a; day-level LMM outcome ~ tdd_stratum + (1|user) via lmm_tdd_stratum → Table 8.3c.
-    Sensitivities: tercile cutpoints + median-TDD + rolling-30-day reference (rolling computed in-analysis from per-day tdd_units + local_day; trailing 30-calendar-day mean).
-    Figures (shared NMA conventions, utils/plotting.py): figure_8_3a_grid{1,2}_*.png (per-user means by stratum, CE=0 Low/High vs CE>0 Low/High, all 8 endpoints, two 2×2 grids), figure_8_3b_grid{1,2}_*.png (within-user Low−High delta histograms, CE=0 vs CE>0), figure_8_3c_stacked_ranges.png, figure_8_3d_R_distribution.png. Outputs in outputs/analysis_8_3/<cohort>/.
+    Sensitivities: tercile cutpoints + median-TDD + rolling-30-day reference (rolling computed in-analysis from per-day tdd_units + local_day; trailing 30-calendar-day mean), plus a supplemental Low/Mid/High R-tercile Table 8.3a (table_8_3a_supp_terciles.csv). ⚠️ tercile results need scrutiny — see Open Questions.
+    Figures (shared NMA conventions, utils/plotting.py): figure_8_3a_grid{1,2}_*.png (per-user means by stratum, CE=0 Low/High vs CE>0 Low/High, all 8 endpoints, two 2×2 grids), figure_8_3b_grid{1,2}_*.png (within-user Low−High delta histograms, CE=0 vs CE>0), figure_8_3c_stacked_ranges.png, figure_8_3d_R_distribution.png, figure_8_3e_tir_vs_tdd_percentile.png (per-day TIR vs within-user TDD percentile over all eligible days, per-CE/BE-category decile lines + overall mean). Outputs in outputs/analysis_8_3/<cohort>/.
     Finding: Low-TDD CE=0 days TIR ~68 vs High-TDD ~49 — the aggregate §8.1 CE=0 benefit is driven by light-intake days; unannounced-meal (High-TDD) days are much worse.
   §8-supp Finding-explanation supplement — analysis_8-supp_nma_finding_explanation.py. Reuses §8.1 contrast/figure machinery + utils. S1 CE=0-vs-CE>0 intake characterization; S2 carbohydrate dose-response (CE=0 as 0g anchor + within-user slope LMM); S3 glycemic decomposition (TAR vs TBR) + safety; C1–C4 confounder checks (selection, clustering, CGM coverage, weighting). Outputs in outputs/analysis_8_supp/<cohort>/. Exploratory/explanatory; §8.1 audit trail untouched.
 ```
@@ -199,3 +214,4 @@ Phase 4: Analysis
 - **Strategy "ambiguous" tie-cases** — how to label days with non-zero AB and non-zero manual counts that fall under the §7.3 threshold.
 - **Prior-scaffold reconciliation** — whether to delete the unused prior stubs (`analysis_8-2`, `analysis_8-3`, `data_overview.py`, prior exploratory python, `testing/`, prior docs) or rewire them to the current `data_staging/` modules.
 - **Residual high-TDD outliers** — even after the nearest-minute bolus dedup, a few users have very high TDD (300+ U/day on some days). Could be genuine high-resistance users or a separate artifact (e.g. very large single boluses); needs follow-up before §8.3 stratification.
+- **⚠️ TDD / tercile results need real understanding — do NOT cite yet.** §8.3's within-user TDD stratification has two unresolved issues. (1) The empirical tercile rule (`tdd_ratio <= q1` Low / `>= q2` High / strict-interior Mid) splits *days* ~evenly but covers **unequal user sets** (adult CE=0/BE=0 n_users Low 879 / Mid 477 / High 611): it's Low-biased (`<= q1` is inclusive and checked first) and degenerate for users with few/clustered CE=0-day TDD (1 CE=0 day → Low only; 2 → Low+High; ties can empty Mid at any day count) — so the user-weighted Low/Mid/High means are not apples-to-apples. (2) **TIR is a band metric** — Low→Mid is ~flat (reclaimed hypo ≈ added hyper) while mean glucose / TAR rise monotonically, so the tercile TIR table looks at odds with figure_8_3e's slope (the figure is day-pooled over all days incl. CE>0; the table is per-user CE=0 terciles). Candidate fixes (not yet applied): a same-user-set gate (only users with all 3 strata non-empty) + rank/qcut balancing; and/or a **parametric mean±SD split** (note ±1 SD ≈ 16/68/16 tails-vs-middle, NOT thirds — ±0.43 SD gives parametric terciles; centre = the CE=0-day mean of R, which is < 1, not 1.0). Resolve before any TDD-stratum claim.
