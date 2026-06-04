@@ -70,6 +70,8 @@ from utils.data_loader import (  # noqa: E402
     COMPARATOR_LABEL,
     ENDPOINTS,
     MIN_AGE,
+    STRATEGIES,
+    STRATEGY_COL,
     analysis_dir,
     default_analysis_ready_csv,
     filter_cohort,
@@ -91,10 +93,8 @@ from utils.plotting import (  # noqa: E402
     violin_box_panel,
 )
 
-# §7.3 delivery strategies: (column value, short label). Any other / null strategy is
-# "ambiguous" and excluded (the staging CASE currently only emits these two values).
-STRATEGIES = [("autobolus_on", "AB"), ("temp_basal_only", "TB")]
-STRATEGY_COL = "delivery_strategy"
+# §7.3 delivery strategies (STRATEGIES / STRATEGY_COL) now live in utils.data_loader (shared with
+# §8.3); imported above. Any other / null strategy is "ambiguous" and excluded.
 DAY_TYPE_COL = "day_type"
 NMA_LABEL = "NMA"
 PRIMARY_ENDPOINT = "tir"

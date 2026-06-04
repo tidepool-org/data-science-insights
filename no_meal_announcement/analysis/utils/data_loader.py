@@ -14,6 +14,7 @@ import importlib.util
 import os
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 # (column, display label) — PLN-1008 §6 endpoints in the endpoints table.
@@ -40,11 +41,23 @@ COMPARATOR_LABEL = "CE>0"
 # Arms shown in figures (3 nested NMA arms + comparator).
 FIGURE_ARMS = CLASSIFICATIONS + [(COMPARATOR_FLAG, COMPARATOR_LABEL)]
 
+# §7.3 delivery strategies: (column value, short label). Any other / null strategy is
+# "ambiguous" and excluded (the staging CASE currently emits only these two values). Shared by
+# §8.2 (day-type × strategy interaction) and §8.3 (Low/High × strategy cross-tab) — single source.
+STRATEGIES = [("autobolus_on", "AB"), ("temp_basal_only", "TB")]
+STRATEGY_COL = "delivery_strategy"
+
 # §6 / PLN-1001 minimum age (years), applied in analysis via filter_cohort. Users KNOWN to
 # be younger are dropped; unknown/nulled-age users are retained (PLN-1001
 # `is_age_eligible OR dob IS NULL`). Implausible-high ages are already nulled at extraction
 # (export_user_day_age.MAX_PLAUSIBLE_AGE), so this floor + that bound together gate age.
 MIN_AGE = 6
+
+# Rolling temporal-match window for the §8.1 windowed-comparator sensitivity: a CE=0 (NMA) day is
+# paired only against CE>0 comparator days within ± WINDOW_HALF calendar days of it (same user), to
+# control within-user temporal drift (Loop-version era, seasonality). See windowed_matched_means.
+WINDOW_DAYS = 90
+WINDOW_HALF = 45
 
 # Columns coerced to float: endpoints (Spark `* 100.0` returns Decimal/object) plus the
 # behavioral / age columns used downstream (Table 8.1c, cohort split).
@@ -139,3 +152,64 @@ def restrict_comparator(pdf):
     out = pdf.copy()
     out.loc[~out["_userId"].isin(ce0_users), "in_ce_gt0"] = False
     return out
+
+
+def windowed_matched_means(pdf, nma_flag, cmp_flag, endpoints, half=WINDOW_HALF):
+    """Per-NMA-day ±`half`-day matched comparator inputs (the §8.1 windowed-comparator sensitivity).
+
+    For the §8.1 NMA-vs-CE>0 contrast, anchor on each NMA (`nma_flag`) day; its comparator value is
+    the MEAN of `cmp_flag` comparator days (CE>0 = COMPARATOR_FLAG) within ±half CALENDAR days of
+    THAT day (same user). Only NMA days with >=1 in-window comparator are kept; a comparator day
+    near several NMA days contributes to each of their local means. Matching contemporaneous days
+    removes within-user temporal drift (Loop-version era, seasonality) from the contrast.
+
+    Returns (per_user, coverage):
+      per_user — one row per user with >=1 matched NMA day; columns `{ep}__nma` (mean over the
+                 user's matched NMA days of the NMA-day value) and `{ep}__cmp` (mean over those
+                 days of the local comparator mean) for each ep in `endpoints`. The per-user
+                 windowed contrast for `ep` is `{ep}__nma - {ep}__cmp` (equal-user weight, D5).
+      coverage — dict(total_nma_days, matched_nma_days, n_users_matched).
+
+    Requires `nma_flag` + `cmp_flag` boolean columns and `local_day` (YYYY-MM-DD). Implementation:
+    per user, encode days as calendar-day ordinals and use cumulative-sum + searchsorted so each
+    NMA day's in-window comparator mean is O(log n)."""
+    ep_cols = [e[0] if isinstance(e, (tuple, list)) else e for e in endpoints]
+    ordv_all = (pd.to_datetime(pdf["local_day"]) - pd.Timestamp("2000-01-01")).dt.days
+    rows = []
+    total_nma = matched_nma = 0
+    for _, sub in pdf.groupby("_userId"):
+        nm = (sub[nma_flag] == True).to_numpy()   # noqa: E712
+        cm = (sub[cmp_flag] == True).to_numpy()    # noqa: E712
+        n_nma = int(nm.sum())
+        if n_nma == 0:
+            continue
+        total_nma += n_nma
+        if cm.sum() == 0:
+            continue
+        ordv = ordv_all.loc[sub.index].to_numpy()
+        n_pos = np.where(nm)[0]
+        c_pos = np.where(cm)[0]
+        n_ord = ordv[n_pos]
+        c_ord = ordv[c_pos]
+        order = np.argsort(c_ord)
+        c_ord_s = c_ord[order]
+        lo = np.searchsorted(c_ord_s, n_ord - half, side="left")
+        hi = np.searchsorted(c_ord_s, n_ord + half, side="right")   # inclusive ±half (91-day window)
+        cnt = hi - lo
+        keep = cnt > 0
+        matched_nma += int(keep.sum())
+        if not keep.any():
+            continue
+        rec = {"_userId": sub["_userId"].iloc[0]}
+        for ep in ep_cols:
+            cv = sub[ep].to_numpy()[c_pos][order].astype(float)
+            prefix = np.concatenate([[0.0], np.cumsum(cv)])         # prefix sums over sorted comparator days
+            local = (prefix[hi] - prefix[lo]) / np.where(cnt > 0, cnt, 1)   # local comparator mean per NMA day
+            nv = sub[ep].to_numpy()[n_pos].astype(float)
+            rec[f"{ep}__nma"] = np.nanmean(nv[keep])
+            rec[f"{ep}__cmp"] = np.nanmean(local[keep])
+        rows.append(rec)
+    per_user = pd.DataFrame(rows)
+    coverage = {"total_nma_days": total_nma, "matched_nma_days": matched_nma,
+                "n_users_matched": len(per_user)}
+    return per_user, coverage

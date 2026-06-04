@@ -39,6 +39,16 @@ Many are inherited from `FDA_real_world_data/` (NMA imports FDA components rathe
 - Day grain currently keys on the **UTC date** (`LEFT(time_string,10)` / `CAST(... AS DATE)`).
   A user-local boundary would have to change every day-grain table at once — see [todo.md](todo.md).
 
+## Data handling / privacy
+
+- **Pseudonymize `_userId` at the Databricks export, not at local write.** `export_user_day_analysis_ready.py`
+  hashes `_userId` (deterministic salted SHA-256) at the final SELECT so the analysis-ready table +
+  its CSV snapshot carry an opaque key — the raw id (a direct BDDP identifier) never reaches local
+  disk. The column **name stays `_userId`** (a stable per-user groupby key); the raw id stays only in
+  the upstream staging tables (traceback by recomputing the hash). See decisions.md D16.
+- **Never write a raw `_userId` to any local CSV.** Aggregate outputs (per-arm means, counts) carry no
+  user id at all — prefer that; if an ad-hoc local CSV needs a per-user key, use the export hash.
+
 ## Statistics & tables
 
 - **Always emit both parametric and non-parametric variants** (paired-t + Wilcoxon; mean±SD +

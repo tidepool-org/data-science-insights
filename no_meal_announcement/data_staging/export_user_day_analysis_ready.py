@@ -36,10 +36,16 @@ Inputs:
     nma_user_day_age                       (age_years, is_pediatric per §7.6)
     dev.default.user_gender                (per-user sex for Sample Information; LEFT JOIN, null if unknown)
 
+Privacy: `_userId` is PSEUDONYMIZED at the final SELECT (deterministic salted SHA-256, see
+USERID_SALT) so the analysis-ready table + its CSV snapshot never carry the raw user id off
+Databricks. Raw ids remain only in the upstream staging tables (traceback by recomputing the
+hash). The column name is unchanged, so analyses keep a stable per-user key with no code change.
+
 Outputs:
     nma_user_day_analysis_ready
         One row per (user, local_day) — classification flags, endpoints, TDD + ratio,
-        delivery strategy, Loop version, eligibility, age + sex. Analysis-ready for §8.1/§8.2/§8.3.
+        delivery strategy, Loop version, eligibility, age + sex (`_userId` pseudonymized).
+        Analysis-ready for §8.1/§8.2/§8.3.
     <outputs>/nma_user_day_analysis_ready.csv
         A single-file CSV snapshot of the same table (pandas dump from the driver), for
         download / inspection. The estimated CSV size is always printed first; the file is
@@ -67,6 +73,16 @@ MAX_DAY_IF_VERSION_UNKNOWN = "2024-07-13"
 # >= this. The classifier combines the HealthKit AutomaticallyIssued flag with a dosingDecision
 # fallback; dd alone (loop_recommendations) misses ~97% of HealthKit-tagged autobolus days.
 MIN_AUTOBOLUS_COUNT = 3
+
+# Pseudonymize the user id at this final export so the analysis-ready table AND its CSV snapshot
+# never carry the raw `_userId` (a direct identifier into the BDDP) off Databricks onto a local
+# machine. `_userId` is replaced by a deterministic salted SHA-256 (truncated) — stable across
+# runs and tables, so analyses keep a usable per-user key and traceback is possible by recomputing
+# the same hash on the upstream staging tables (which retain the raw id). The column NAME stays
+# `_userId` so no downstream analysis code changes. NOTE: USERID_SALT lives in source (not a
+# secret) — it removes the raw identifier but is not cryptographically secret; move it to a
+# Databricks secret scope if irreversibility against a known-id dictionary is required.
+USERID_SALT = "pln1008-nma-v1"
 
 
 def _default_outputs_dir():
@@ -214,7 +230,10 @@ user_tdd_ref AS (
 )
 
 SELECT
-  b.*,
+  -- Pseudonymized user id (see USERID_SALT): raw `_userId` never leaves Databricks. Joins above
+  -- use the raw id; only this output column is hashed. Column name kept so analyses are unchanged.
+  concat('u', substr(sha2(concat(b._userId, '{USERID_SALT}'), 256), 1, 16)) AS _userId,
+  b.* EXCEPT (_userId),
   ref.mean_tdd_user,
   ref.median_tdd_user,
   ref.n_eligible_days_for_tdd,

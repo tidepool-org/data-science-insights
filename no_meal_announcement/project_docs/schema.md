@@ -26,7 +26,7 @@ snapshot** that the analyses read. Catalog: `dev.fda_510k_rwd`. Prune entries th
 | `nma_user_day_tdd` | `tdd_units` (delivered basal+bolus). |
 | `nma_user_day_age` | `age_years`, `is_pediatric` (cutoff 18). Ages >120 / negative nulled (corrupt DOB). |
 | `nma_user_day_classification` | arm flags + eligibility (below). |
-| `nma_user_day_analysis_ready` | **denormalized terminal table** → the CSV snapshot analyses read locally. |
+| `nma_user_day_analysis_ready` | **denormalized terminal table** → the CSV snapshot analyses read locally. `_userId` is **pseudonymized** (salted SHA-256) at export — raw id never leaves Databricks (D16). |
 
 ## Core encodings
 

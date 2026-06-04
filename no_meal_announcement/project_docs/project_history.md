@@ -145,7 +145,21 @@ Ran the carb analogue of the bolus-classifier investigation — could carb entri
 - `exploratory/import_test.py` — Databricks check that statsmodels imports AND fits a MixedLM (§8.1 Method B prerequisite).
 - A `%pip install statsmodels` + `dbutils.library.restartPython()` preamble was added to the analysis files for direct-notebook runs (commented out in `analysis_8-3`); the loader strips it for imports.
 
+## 2026-06-04 — §8.1 windowed-comparator sensitivity + `_userId` pseudonymization at export (team-review changes)
+
+First tranche of the post-review changes.
+
+- **§8.1 windowed-comparator sensitivity (D15).** Recomputes the NMA-vs-CE>0 contrast with a per-NMA-day ±45-day (90-day) temporal match: each CE=0 day is paired only against the mean of that user's CE>0 days within ±45 calendar days, controlling within-user temporal drift; per-user windowed Δ summarized equal-user-weight (Method A). New `create_table_8_1d_windowed` → `table_8_1d_windowed_sensitivity.csv` (3 arms × 8 endpoints, `diff_win` + `diff_full` on the same matched users + paired-t/Wilcoxon + coverage), `make_windowed_delta_grids` → figure 8.1d (Δ histograms), `make_windowed_violin_grids` → figure 8.1e (per-arm violins, NMA arms vs CE>0). The pooled-within-user full-record analysis (8.1a/b/c + method_a) is **unchanged**. Regenerated adult/pediatric/all. Headline (all): broadest-arm TIR Δwin +0.80 (full +0.61); stringent CE=0/BE=0 +3.30.
+- **Shared windowing helper.** `utils/data_loader.py` gains `windowed_matched_means(pdf, nma_flag, cmp_flag, endpoints, half)` (per-NMA-day match via per-user cumulative-sum + searchsorted) + `WINDOW_DAYS=90`/`WINDOW_HALF=45`; also **hoisted `STRATEGIES`/`STRATEGY_COL`** out of `analysis_8-2` into `data_loader` (shared with §8.2 and future §8.3; D9). §8.2 now imports them.
+- **Verified three ways** — embedded brute-force self-check, exact reproduction of the independent coverage sweep (56,629 broadest-arm matched days), and a blind from-scratch re-implementation (exact to 4 dp).
+- **Selection caveat quantified.** Broadest arm matches only 70% of CE=0 days; the 30% unmatched are 72.3% sustained-non-announcing + 27.2% pure non-announcers (users who correction-bolus but never log carbs), with negligible (<1%) coverage gaps — diagnostic saved to `outputs/review_feasibility/unmatched_ce0_day_reasons.csv`. So the window characterizes NMA days during mixed-behaviour periods; the full-record analysis retains the deep non-announcing days. (A stricter CE+BE≥3 "high meal-announcement" comparator was prototyped this session then **dropped** — CE>0 is the sole comparator.)
+- **`_userId` pseudonymized at export (D16).** `export_user_day_analysis_ready.py` now hashes `_userId` (deterministic salted SHA-256, `concat('u', substr(sha2(concat(_userId, USERID_SALT),256),1,16))`) at the final SELECT, so the analysis-ready table + CSV snapshot carry an opaque key and the raw id never reaches local disk; the column name is kept so analyses are unchanged. Snapshot regenerated (local `_userId` e.g. `u0ba380071334927b`). Raw id remains in upstream staging for traceback.
+- **D7 resolved.** Confirmed the snapshot carries `automatic_bolus_count` + classifier-derived `delivery_strategy` (~77% autobolus_on / 23% temp_basal_only eligible days); stringent-arm / §8.2 results are citable.
+
 ## Pending / To do (deferred — not yet done)
+
+- **Rest of the team-review plan (not in this commit):** §8.3 two-view rank terciles (overall-reference + CE=0-reference, same-user-set gated) + CE>0 as an arm in Tables 8.3a/b/c; §8.3 Low/High × delivery-strategy (AB/TB) cross-tab; §8.4 carb-entry-rate by delivery strategy; run-tests for the new outputs.
+- **FDA-pipeline `_userId` pseudonymization** — the FDA exports still write raw `_userId`; apply the D16 treatment there too.
 
 - **⚠️ Understand & fix the §8.3 TDD/tercile results before citing them** — degenerate, unequal-user-set empirical terciles + TIR band-insensitivity (see the 2026-06-04 entry + architecture Open Questions). Consider a same-user-set gate + rank/qcut balancing and/or a parametric mean±SD split.
 

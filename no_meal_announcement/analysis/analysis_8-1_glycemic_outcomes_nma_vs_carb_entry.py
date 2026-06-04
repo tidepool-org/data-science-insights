@@ -83,6 +83,7 @@ from utils.data_loader import (  # noqa: E402
     ENDPOINTS,
     FIGURE_ARMS,
     MIN_AGE,
+    WINDOW_DAYS,
     analysis_dir,
     default_analysis_ready_csv,
     filter_cohort,
@@ -91,6 +92,7 @@ from utils.data_loader import (  # noqa: E402
     load_nma_statistics,
     prepare_day_level,
     restrict_comparator,
+    windowed_matched_means,
 )
 from utils.plotting import (  # noqa: E402
     GRAY,
@@ -577,6 +579,92 @@ def make_paired_delta_grids(pdf):
     return out
 
 
+def create_table_8_1d_windowed(pdf, fda_stats):
+    """Table 8.1d (windowed-comparator sensitivity): the §8.1 NMA-vs-CE>0 contrast recomputed with a
+    per-NMA-day ±(WINDOW_DAYS/2)-day temporal match — each NMA day is compared only to the mean of
+    that user's CE>0 days within ±(WINDOW_DAYS/2) calendar days (utils.data_loader.windowed_matched_means),
+    per nested classification × endpoint. Per-user windowed Δ (NMA − local CE>0 mean) summarized
+    across users with equal weight (Method A: paired-t + Wilcoxon + t-CI). The pooled-within-user
+    full-record contrast (method_a_contrasts / Table 8.1a) stays primary; the full-record Δ on the
+    SAME matched users (diff_full) is reported alongside so the window's effect is visible."""
+    rows = []
+    for nma_flag, cls_label in CLASSIFICATIONS:
+        per_user, cov = windowed_matched_means(pdf, nma_flag, COMPARATOR_FLAG, ENDPOINTS)
+        pct = round(100.0 * cov["matched_nma_days"] / max(1, cov["total_nma_days"]), 1)
+        # Full-record per-user means on the matched users (one groupby per arm, all endpoints).
+        mu = pdf[pdf["_userId"].isin(set(per_user["_userId"]))] if len(per_user) else pdf.iloc[:0]
+        nma_full = mu[mu[nma_flag] == True].groupby("_userId")[[c for c, _ in ENDPOINTS]].mean()  # noqa: E712
+        cmp_full = mu[mu[COMPARATOR_FLAG] == True].groupby("_userId")[[c for c, _ in ENDPOINTS]].mean()  # noqa: E712
+        for col, ep_label in ENDPOINTS:
+            base = {"classification": cls_label, "endpoint": col, "label": ep_label,
+                    "matched_nma_days": cov["matched_nma_days"],
+                    "total_nma_days": cov["total_nma_days"], "pct_matched": pct}
+            if len(per_user) > 1 and f"{col}__nma" in per_user.columns:
+                wide = per_user[[f"{col}__nma", f"{col}__cmp"]].dropna()
+                s = fda_stats.compute_paired_statistics(wide[f"{col}__cmp"], wide[f"{col}__nma"])
+                full = pd.DataFrame({"NMA": nma_full[col], "CMP": cmp_full[col]}).dropna()
+                base.update({
+                    "n_users": s["n_pairs"], "nma_mean": s["seg2_mean"], "ce_gt0_mean": s["seg1_mean"],
+                    "diff_win": s["diff_mean"], "diff_ci_low": s["diff_ci_low"],
+                    "diff_ci_hi": s["diff_ci_hi"], "diff_median": s["diff_median"],
+                    "p_ttest": s["p_ttest"], "p_wsrt": s["p_wsrt"],
+                    "diff_full": (full["NMA"] - full["CMP"]).mean() if len(full) else np.nan,
+                })
+            else:
+                base.update({"n_users": int(len(per_user)), "nma_mean": np.nan, "ce_gt0_mean": np.nan,
+                             "diff_win": np.nan, "diff_ci_low": np.nan, "diff_ci_hi": np.nan,
+                             "diff_median": np.nan, "p_ttest": np.nan, "p_wsrt": np.nan,
+                             "diff_full": np.nan})
+            rows.append(base)
+    return pd.DataFrame(rows)
+
+
+def make_windowed_delta_grids(pdf):
+    """Figure 8.1d (two 2×2 grids): within-user windowed Δ (NMA − CE>0, per-NMA-day
+    ±(WINDOW_DAYS/2)-day match) on the broadest arm (CE=0/BE≤∞) — the windowed companion to the
+    full-record paired-delta grids (8.1c). Endpoint range colour; solid line = mean, dashed = 0."""
+    headline_flag = CLASSIFICATIONS[-1][0]  # in_ce0_be_inf
+    per_user, _ = windowed_matched_means(pdf, headline_flag, COMPARATOR_FLAG, ENDPOINTS)
+    out = {}
+    for key, gtitle, eps in GRIDS:
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+        for ax, (col, label) in zip(axes.ravel(), eps):
+            base = endpoint_color(col)
+            delta = (per_user[f"{col}__nma"] - per_user[f"{col}__cmp"]).dropna().to_numpy()
+            overlay_hist_panel(ax, [(delta, "NMA − CE>0 (windowed)", base)],
+                               xlabel="per-user Δ (NMA − CE>0, windowed)", title=label, title_color=base)
+        fig.suptitle(f"Figure 8.1d — {gtitle}\nwithin-user windowed Δ (NMA − CE>0, ±{WINDOW_DAYS // 2}d match, BE≤∞)",
+                     fontsize=SUPTITLE_FS)
+        fig.tight_layout(rect=[0, 0, 1, 0.92])
+        out[f"figure_8_1d_windowed_delta_{key}.png"] = fig
+    return out
+
+
+def make_windowed_violin_grids(pdf):
+    """Figure 8.1e (two 2×2 grids): per-user windowed means by arm — the 3 nested NMA arms and the
+    CE>0 comparator, each on the per-NMA-day ±(WINDOW_DAYS/2)-day match. The windowed companion to
+    the full-record violin grids (8.1b). NMA arms carry the endpoint's glycemic-range colour graded
+    light→dark by breadth; CE>0 is grey."""
+    win = {lab: windowed_matched_means(pdf, flag, COMPARATOR_FLAG, ENDPOINTS)[0]
+           for flag, lab in CLASSIFICATIONS}
+    broadest = CLASSIFICATIONS[-1][1]  # CE=0/BE<=inf — supplies the CE>0 windowed comparator group
+    out = {}
+    for key, gtitle, eps in GRIDS:
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8.6))
+        for ax, (col, label) in zip(axes.ravel(), eps):
+            base = endpoint_color(col)
+            groups = [(lab, win[lab][f"{col}__nma"].dropna().to_numpy(), base, NMA_ARM_ALPHAS[i])
+                      for i, (_flag, lab) in enumerate(CLASSIFICATIONS)]
+            groups.append((COMPARATOR_LABEL, win[broadest][f"{col}__cmp"].dropna().to_numpy(),
+                           GRAY, COMPARATOR_ALPHA))
+            violin_box_panel(ax, groups, title=label, title_color=base, separators=(3.5,))
+        fig.suptitle(f"Figure 8.1e — {gtitle}\nper-user windowed means by arm (NMA vs CE>0, ±{WINDOW_DAYS // 2}d match)",
+                     fontsize=SUPTITLE_FS)
+        fig.tight_layout(rect=[0, 0, 1, 0.91])
+        out[f"figure_8_1e_windowed_violin_{key}.png"] = fig
+    return out
+
+
 def run(
     spark=None,
     analysis_ready_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
@@ -641,12 +729,18 @@ def run(
     create_table_8_1a(pdf).to_csv(os.path.join(output_dir, "table_8_1a_per_user_means.csv"), index=False)
     create_table_8_1b(pdf, nma_stats).to_csv(os.path.join(output_dir, "table_8_1b_lmm_contrasts.csv"), index=False)
     create_table_8_1c(pdf).to_csv(os.path.join(output_dir, "table_8_1c_behavioral_summary.csv"), index=False)
+    # Table 8.1d (windowed-comparator sensitivity): NMA vs CE>0 with a per-NMA-day ±45d match.
+    create_table_8_1d_windowed(pdf, fda_stats).to_csv(
+        os.path.join(output_dir, "table_8_1d_windowed_sensitivity.csv"), index=False)
 
     # Figures (shared NMA conventions): 8.1a stacked ranges by arm; 8.1b per-user violin grids
-    # (all 8 endpoints, 4 arms); 8.1c paired-difference grids (all 8, broadest arm).
+    # (all 8 endpoints, 4 arms); 8.1c paired-difference grids (all 8, broadest arm); 8.1d/8.1e
+    # windowed NMA − CE>0 (±45d match) Δ-histogram grids + per-arm violin grids.
     figures = {"figure_8_1a_stacked_bars.png": make_stacked_bar(pdf)}
     figures.update(make_violin_grids(pdf))         # figure_8_1b_violin_grid{1,2}_*.png
     figures.update(make_paired_delta_grids(pdf))   # figure_8_1c_paired_delta_grid{1,2}_*.png
+    figures.update(make_windowed_delta_grids(pdf)) # figure_8_1d_windowed_delta_grid{1,2}_*.png
+    figures.update(make_windowed_violin_grids(pdf)) # figure_8_1e_windowed_violin_grid{1,2}_*.png
     for fname, fig in figures.items():
         fig.savefig(os.path.join(output_dir, fname), dpi=150)
         plt.close(fig)
