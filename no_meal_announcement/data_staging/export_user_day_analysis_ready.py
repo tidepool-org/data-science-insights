@@ -163,6 +163,7 @@ WITH base AS (
     cls.in_ce0_be_le1,
     cls.in_ce0_be_inf,
     cls.in_ce_gt0,
+    cls.in_ce_ge3_be_ge3,
     -- Glycemic endpoints (LEFT JOIN — null if day has no plausible CGM)
     ep.cbg_count,
     ep.tbr_very_low,

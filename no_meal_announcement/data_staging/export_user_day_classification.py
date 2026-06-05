@@ -92,6 +92,8 @@ SELECT
   (carb_entry_count = 0 AND bolus_entry_count <= 1) AS in_ce0_be_le1,
   (carb_entry_count = 0) AS in_ce0_be_inf,
   (carb_entry_count > 0) AS in_ce_gt0,
+  -- High meal-announcement arm (supplement, 5th category): >=3 carb entries AND >=3 bolus entries.
+  (carb_entry_count >= 3 AND bolus_entry_count >= 3) AS in_ce_ge3_be_ge3,
   (SUM(CASE WHEN day_eligible THEN 1 ELSE 0 END)
      OVER (PARTITION BY _userId) >= {MIN_USER_ELIGIBLE_DAYS}) AS user_eligible
 FROM joined

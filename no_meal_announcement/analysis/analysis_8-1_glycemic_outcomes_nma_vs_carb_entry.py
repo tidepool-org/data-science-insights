@@ -29,18 +29,22 @@ Inputs:
                                         applied — version<3.4.0 when known, else local_day<2024-07-13)
 
 Outputs (analysis/outputs/analysis_8_1/<cohort>/):
+  §8.1 (main — matches the plan; arms = 3 nested NMA + CE>0 + the CE>=3/BE>=3 high-engagement column):
     sample_information.csv              (Table 1: per-cohort age + sex demographics, user/day counts)
     sex_missingness_sensitivity.csv     (recorded-vs-missing-sex baseline comparison; FDA §8.5 analog)
-    nma_day_frequency.csv               (§4 secondary obj. bullet 3: per-classification NMA-day-type frequency + per-user distribution)
-    method_a_contrasts.csv              (per classification x endpoint paired stats)
-    table_8_1a_per_user_means.csv       (per-user means ± SD by arm, with user/day counts)
-    table_8_1b_lmm_contrasts.csv        (Method B LMM contrast NMA-CE>0 + np median sensitivity)
-    table_8_1c_behavioral_summary.csv   (CE>0-day behavioral metrics: mean±SD, median[IQR])
-    method_a_panel_a.png                (per endpoint: 4 arms of per-user means, jittered points)
-    method_a_panel_b_{central,lows,highs}.png   (paired-delta histograms)
-    figure_8_1a_stacked_bars.png        (mean time in 5 glycemic ranges across the 4 arms)
-    figure_8_1b_tir_violin_box.png      (per-user TIR violin+box across the 4 arms)
-    figure_8_1c_tbr_violin_box.png      (per-user time <70 and <54 violin+box across the 4 arms)
+    nma_day_frequency.csv               (§4 secondary obj. bullet 3: per-classification NMA-day-type frequency)
+    table_8_1a_per_user_means.csv       (Table 8.1a: per-user means ± SD by arm, with user/day counts)
+    table_8_1a_expanded.csv             (Table 8.1a expanded: per classification x endpoint Method A paired stats)
+    table_8_1b_lmm_contrasts.csv        (Table 8.1b: Method B LMM contrast NMA-CE>0 + np median sensitivity)
+    table_8_1c_behavioral_summary.csv   (Table 8.1c: CE>0-day behavioral metrics: mean±SD, median[IQR])
+    figure_8_1a_stacked_bars.png        (mean time in 5 glycemic ranges across the arms)
+    figure_8_1b_violin_grid{1,2}_*.png  (per-user means by arm, all 8 endpoints, two 2x2 grids)
+    figure_8_1c_paired_delta_grid{1,2}_*.png  (within-user NMA-CE>0 paired Δ + NMA-CE>=3/BE>=3 overlay)
+  Appendix §12.1 (windowed-comparator sensitivity, per-NMA-day ±45d match — mirrors §8.1 layout):
+    table_12_1a_windowed_sensitivity.csv (windowed NMA vs CE>0 per classification x endpoint)
+    figure_12_1a_windowed_stacked_bars.png / figure_12_1b_windowed_violin_grid{1,2}_*.png / figure_12_1c_windowed_delta_grid{1,2}_*.png
+  Appendix §12.1 (cont.) — high-engagement CE>=3/BE>=3 arm vs CE>0:
+    table_12_1b_high_engagement_lmm.csv (full-record LMM) / table_12_1c_high_engagement_windowed.csv (windowed ±45d match)
 
 main() also writes the combined Sample Information across cohorts (run via the no-`--cohort`
 entry point):
@@ -82,7 +86,10 @@ from utils.data_loader import (  # noqa: E402
     COMPARATOR_LABEL,
     ENDPOINTS,
     FIGURE_ARMS,
+    HIGH_MA_FLAG,
+    HIGH_MA_LABEL,
     MIN_AGE,
+    SUPPLEMENT_ARMS,
     WINDOW_DAYS,
     analysis_dir,
     default_analysis_ready_csv,
@@ -114,6 +121,10 @@ BOOTSTRAP_SEED = 20260520
 # are shared across §8.1–§8.3 via utils.plotting.
 NMA_ARM_ALPHAS = [0.30, 0.50, 0.78]   # BE=0 / BE≤1 / BE≤∞, graded by breadth
 COMPARATOR_ALPHA = 0.65
+# High meal-announcement (CE>=3/BE>=3) 5th-category styling for figures — a distinct bronze/gold
+# (the heavy-announcement end), separate from the range colours and the grey CE>0 comparator.
+HIGH_MA_COLOR = "#9c6b30"
+HIGH_MA_ALPHA = 0.70
 
 # Behavioral metrics for Table 8.1c (CE>0 days). PLN-1008 §7.5 lists meal boluses,
 # manual/correction boluses, announced carbs, and TDD. There is no dedicated meal-bolus
@@ -183,12 +194,13 @@ def contrasts_table(pdf, stats_mod):
 def create_table_8_1a(pdf):
     """Table 8.1a: per-arm, across-user mean ± SD of each endpoint's per-user within-arm
     mean, plus user-day and contributing-user counts. Rows = 8 endpoints + 2 count rows;
-    columns = the 4 arms (3 nested NMA + CE>0)."""
-    arm_labels = [lab for _, lab in FIGURE_ARMS]
+    columns = the 5 arms (3 nested NMA + CE>0 + the high meal-announcement CE>=3/BE>=3 column;
+    note CE>=3/BE>=3 ⊂ CE>0 — a descriptive heavy-announcement column, not a disjoint arm)."""
+    arm_labels = [lab for _, lab in SUPPLEMENT_ARMS]
     table = {}  # row label -> {arm label: display cell}
     for col, ep_label in ENDPOINTS:
         table[ep_label] = {}
-        for flag, arm_label in FIGURE_ARMS:
+        for flag, arm_label in SUPPLEMENT_ARMS:
             m = per_user_arm_mean(pdf, col, flag).dropna()
             if len(m) > 1:
                 table[ep_label][arm_label] = f"{m.mean():.1f} ± {m.std(ddof=1):.1f}"
@@ -197,7 +209,7 @@ def create_table_8_1a(pdf):
             else:
                 table[ep_label][arm_label] = "N/A"
     user_days, users_contrib = {}, {}
-    for flag, arm_label in FIGURE_ARMS:
+    for flag, arm_label in SUPPLEMENT_ARMS:
         sub = pdf[pdf[flag] == True]  # noqa: E712
         user_days[arm_label] = int(len(sub))
         users_contrib[arm_label] = int(sub["_userId"].nunique())
@@ -209,7 +221,7 @@ def create_table_8_1a(pdf):
     return out.reset_index()
 
 
-def create_table_8_1b(pdf, nma_stats):
+def create_table_8_1b(pdf, nma_stats, classifications=CLASSIFICATIONS):
     """Table 8.1b (§8.1 Method B): mixed-effects contrast NMA-CE>0 per classification x
     endpoint — `outcome ~ arm + (1|user)` — with Wald 95% CI and p, plus the per-user
     median paired non-parametric companion. Degenerate / non-converging fits yield a
@@ -225,7 +237,7 @@ def create_table_8_1b(pdf, nma_stats):
               "columns will be NaN; non-parametric companion still computed. "
               "Install with `%pip install statsmodels` (or use an ML runtime).")
     rows = []
-    for nma_flag, cls_label in CLASSIFICATIONS:
+    for nma_flag, cls_label in classifications:
         for col, ep_label in ENDPOINTS:
             # Day-level 2-arm slice; arm reference = CE>0 so the coef is NMA - CE>0.
             nma = pdf.loc[pdf[nma_flag] == True, ["_userId", col]].assign(arm="NMA")  # noqa: E712
@@ -481,7 +493,7 @@ def make_stacked_bar(pdf):
     range_keys = [rc for rc, _ in RANGE_COLS]
     arm_labels, user_ns, day_ns = [], [], []
     means = {rc: [] for rc in range_keys}
-    for flag, arm_label in FIGURE_ARMS:
+    for flag, arm_label in SUPPLEMENT_ARMS:
         sub = df[df[flag] == True]  # noqa: E712
         arm_labels.append(arm_label)
         day_ns.append(len(sub))
@@ -490,9 +502,9 @@ def make_stacked_bar(pdf):
         for rc in range_keys:
             means[rc].append(user_means[rc].mean() if len(user_means) else 0.0)
 
-    fig, ax = plt.subplots(figsize=(9, 7))
-    x = np.arange(len(FIGURE_ARMS))
-    bottom = np.zeros(len(FIGURE_ARMS))
+    fig, ax = plt.subplots(figsize=(10.5, 7))
+    x = np.arange(len(SUPPLEMENT_ARMS))
+    bottom = np.zeros(len(SUPPLEMENT_ARMS))
     for rc, rlabel in RANGE_COLS:
         vals = np.array(means[rc])
         ax.bar(x, vals, bottom=bottom, label=rlabel, color=RANGE_COLORS[rlabel], edgecolor="white")
@@ -523,11 +535,13 @@ def make_stacked_bar(pdf):
     return fig
 
 
-def arm_violin_groups(pdf, endpoint, *, base=None):
-    """Per-user-mean violin groups for the 4 arms (3 nested NMA + CE>0) of one column, in the
-    shape utils.plotting.violin_box_panel expects: (label, values, colour, alpha). NMA arms carry
-    `base` (default the endpoint's glycemic-range colour) graded light→dark by breadth; CE>0 is
-    grey. `base` is overridable for non-glycemic columns (e.g. the supplement's TDD/bolus)."""
+def arm_violin_groups(pdf, endpoint, *, base=None, include_high_ma=False):
+    """Per-user-mean violin groups for the arms of one column, in the shape
+    utils.plotting.violin_box_panel expects: (label, values, colour, alpha). NMA arms carry `base`
+    (default the endpoint's glycemic-range colour) graded light→dark by breadth; CE>0 is grey.
+    `base` is overridable for non-glycemic columns (e.g. the supplement's TDD/bolus). With
+    `include_high_ma=True`, appends the CE>=3/BE>=3 high meal-announcement category (bronze) as a
+    5th group (used by §8.1 Figure 8.1b; off by default so other callers stay 4-arm)."""
     base = base or endpoint_color(endpoint)
     groups = [
         (lab, per_user_arm_mean(pdf, endpoint, flag).dropna().to_numpy(), base, alpha)
@@ -535,6 +549,9 @@ def arm_violin_groups(pdf, endpoint, *, base=None):
     ]
     cmp_vals = per_user_arm_mean(pdf, endpoint, COMPARATOR_FLAG).dropna().to_numpy()
     groups.append((COMPARATOR_LABEL, cmp_vals, GRAY, COMPARATOR_ALPHA))
+    if include_high_ma:
+        hi_vals = per_user_arm_mean(pdf, endpoint, HIGH_MA_FLAG).dropna().to_numpy()
+        groups.append((HIGH_MA_LABEL, hi_vals, HIGH_MA_COLOR, HIGH_MA_ALPHA))
     return groups
 
 
@@ -545,12 +562,12 @@ def make_violin_grids(pdf):
     breadth, CE>0 grey; a separator divides the NMA arms from the comparator."""
     out = {}
     for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8.6))
+        fig, axes = plt.subplots(2, 2, figsize=(11.5, 8.6))
         for ax, (col, label) in zip(axes.ravel(), eps):
             base = endpoint_color(col)
-            violin_box_panel(ax, arm_violin_groups(pdf, col, base=base),
-                             title=label, title_color=base, separators=(3.5,))
-        fig.suptitle(f"Figure 8.1b — {gtitle}\nper-user means by arm", fontsize=SUPTITLE_FS)
+            violin_box_panel(ax, arm_violin_groups(pdf, col, base=base, include_high_ma=True),
+                             title=label, title_color=base, separators=(3.5, 4.5))
+        fig.suptitle(f"Figure 8.1b — {gtitle}\nper-user means by arm (+ CE>=3/BE>=3)", fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.91])
         out[f"figure_8_1b_violin_{key}.png"] = fig
     return out
@@ -569,26 +586,29 @@ def make_paired_delta_grids(pdf):
             base = endpoint_color(col)
             nma = per_user_arm_mean(pdf, col, headline_flag)
             cmp = per_user_arm_mean(pdf, col, COMPARATOR_FLAG)
+            hi = per_user_arm_mean(pdf, col, HIGH_MA_FLAG)
             delta = pd.DataFrame({"NMA": nma, "CMP": cmp}).dropna().eval("NMA - CMP").to_numpy()
-            overlay_hist_panel(ax, [(delta, "NMA − CE>0", base)],
-                               xlabel="per-user Δ (NMA − CE>0)", title=label, title_color=base)
-        fig.suptitle(f"Figure 8.1c — {gtitle}\nwithin-user differences (NMA − CE>0, BE≤∞)",
+            hi_delta = pd.DataFrame({"NMA": nma, "HI": hi}).dropna().eval("NMA - HI").to_numpy()
+            overlay_hist_panel(ax, [(delta, "NMA − CE>0", base),
+                                    (hi_delta, "NMA − CE>=3/BE>=3", HIGH_MA_COLOR)],
+                               xlabel="per-user Δ (NMA − comparator)", title=label, title_color=base)
+        fig.suptitle(f"Figure 8.1c — {gtitle}\nwithin-user differences: NMA − CE>0 and NMA − CE>=3/BE>=3 (BE≤∞)",
                      fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.92])
         out[f"figure_8_1c_paired_delta_{key}.png"] = fig
     return out
 
 
-def create_table_8_1d_windowed(pdf, fda_stats):
-    """Table 8.1d (windowed-comparator sensitivity): the §8.1 NMA-vs-CE>0 contrast recomputed with a
+def create_windowed_contrast_table(pdf, fda_stats, classifications=CLASSIFICATIONS):
+    """Table 12.1 (windowed-comparator sensitivity): the §8.1 NMA-vs-CE>0 contrast recomputed with a
     per-NMA-day ±(WINDOW_DAYS/2)-day temporal match — each NMA day is compared only to the mean of
     that user's CE>0 days within ±(WINDOW_DAYS/2) calendar days (utils.data_loader.windowed_matched_means),
     per nested classification × endpoint. Per-user windowed Δ (NMA − local CE>0 mean) summarized
     across users with equal weight (Method A: paired-t + Wilcoxon + t-CI). The pooled-within-user
-    full-record contrast (method_a_contrasts / Table 8.1a) stays primary; the full-record Δ on the
+    full-record contrast (table_8_1a_expanded / Table 8.1a) stays primary; the full-record Δ on the
     SAME matched users (diff_full) is reported alongside so the window's effect is visible."""
     rows = []
-    for nma_flag, cls_label in CLASSIFICATIONS:
+    for nma_flag, cls_label in classifications:
         per_user, cov = windowed_matched_means(pdf, nma_flag, COMPARATOR_FLAG, ENDPOINTS)
         pct = round(100.0 * cov["matched_nma_days"] / max(1, cov["total_nma_days"]), 1)
         # Full-record per-user means on the matched users (one groupby per arm, all endpoints).
@@ -620,49 +640,122 @@ def create_table_8_1d_windowed(pdf, fda_stats):
 
 
 def make_windowed_delta_grids(pdf):
-    """Figure 8.1d (two 2×2 grids): within-user windowed Δ (NMA − CE>0, per-NMA-day
-    ±(WINDOW_DAYS/2)-day match) on the broadest arm (CE=0/BE≤∞) — the windowed companion to the
-    full-record paired-delta grids (8.1c). Endpoint range colour; solid line = mean, dashed = 0."""
+    """Figure 12.1c (two 2×2 grids; last in the windowed set, mirroring main 8.1c): within-user
+    windowed Δ on the broadest arm (CE=0/BE≤∞), per-NMA-day ±(WINDOW_DAYS/2)-day match — overlays
+    NMA − CE>0 and NMA − CE>=3/BE>=3 (the windowed companion to the full-record paired-delta grids
+    8.1c). NMA−CE>0 in the endpoint range colour, NMA−CE>=3/BE>=3 in bronze; mean line, dashed 0."""
     headline_flag = CLASSIFICATIONS[-1][0]  # in_ce0_be_inf
     per_user, _ = windowed_matched_means(pdf, headline_flag, COMPARATOR_FLAG, ENDPOINTS)
+    per_user_hi, _ = windowed_matched_means(pdf, headline_flag, HIGH_MA_FLAG, ENDPOINTS)
     out = {}
     for key, gtitle, eps in GRIDS:
         fig, axes = plt.subplots(2, 2, figsize=(10, 8))
         for ax, (col, label) in zip(axes.ravel(), eps):
             base = endpoint_color(col)
             delta = (per_user[f"{col}__nma"] - per_user[f"{col}__cmp"]).dropna().to_numpy()
-            overlay_hist_panel(ax, [(delta, "NMA − CE>0 (windowed)", base)],
-                               xlabel="per-user Δ (NMA − CE>0, windowed)", title=label, title_color=base)
-        fig.suptitle(f"Figure 8.1d — {gtitle}\nwithin-user windowed Δ (NMA − CE>0, ±{WINDOW_DAYS // 2}d match, BE≤∞)",
+            hi_delta = (per_user_hi[f"{col}__nma"] - per_user_hi[f"{col}__cmp"]).dropna().to_numpy()
+            overlay_hist_panel(ax, [(delta, "NMA − CE>0 (win)", base),
+                                    (hi_delta, "NMA − CE>=3/BE>=3 (win)", HIGH_MA_COLOR)],
+                               xlabel="per-user Δ (windowed)", title=label, title_color=base)
+        fig.suptitle(f"Figure 12.1c — {gtitle}\nwithin-user windowed Δ: NMA − CE>0 and NMA − CE>=3/BE>=3 (±{WINDOW_DAYS // 2}d, BE≤∞)",
                      fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.92])
-        out[f"figure_8_1d_windowed_delta_{key}.png"] = fig
+        out[f"figure_12_1c_windowed_delta_{key}.png"] = fig
     return out
 
 
 def make_windowed_violin_grids(pdf):
-    """Figure 8.1e (two 2×2 grids): per-user windowed means by arm — the 3 nested NMA arms and the
-    CE>0 comparator, each on the per-NMA-day ±(WINDOW_DAYS/2)-day match. The windowed companion to
-    the full-record violin grids (8.1b). NMA arms carry the endpoint's glycemic-range colour graded
-    light→dark by breadth; CE>0 is grey."""
+    """Figure 12.1b (two 2×2 grids): per-user windowed means by arm — the 3 nested NMA arms, the CE>0
+    comparator, and the CE>=3/BE>=3 high-engagement arm, each on the per-NMA-day ±(WINDOW_DAYS/2)-day
+    match. The windowed companion to the full-record violin grids (8.1b). NMA arms carry the
+    endpoint's glycemic-range colour graded light→dark by breadth; CE>0 grey; CE>=3/BE>=3 bronze."""
     win = {lab: windowed_matched_means(pdf, flag, COMPARATOR_FLAG, ENDPOINTS)[0]
            for flag, lab in CLASSIFICATIONS}
     broadest = CLASSIFICATIONS[-1][1]  # CE=0/BE<=inf — supplies the CE>0 windowed comparator group
+    win_hi = windowed_matched_means(pdf, HIGH_MA_FLAG, COMPARATOR_FLAG, ENDPOINTS)[0]
     out = {}
     for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8.6))
+        fig, axes = plt.subplots(2, 2, figsize=(11.5, 8.6))
         for ax, (col, label) in zip(axes.ravel(), eps):
             base = endpoint_color(col)
             groups = [(lab, win[lab][f"{col}__nma"].dropna().to_numpy(), base, NMA_ARM_ALPHAS[i])
                       for i, (_flag, lab) in enumerate(CLASSIFICATIONS)]
             groups.append((COMPARATOR_LABEL, win[broadest][f"{col}__cmp"].dropna().to_numpy(),
                            GRAY, COMPARATOR_ALPHA))
-            violin_box_panel(ax, groups, title=label, title_color=base, separators=(3.5,))
-        fig.suptitle(f"Figure 8.1e — {gtitle}\nper-user windowed means by arm (NMA vs CE>0, ±{WINDOW_DAYS // 2}d match)",
+            groups.append((HIGH_MA_LABEL, win_hi[f"{col}__nma"].dropna().to_numpy(),
+                           HIGH_MA_COLOR, HIGH_MA_ALPHA))
+            violin_box_panel(ax, groups, title=label, title_color=base, separators=(3.5, 4.5))
+        fig.suptitle(f"Figure 12.1b — {gtitle}\nper-user windowed means by arm (NMA, CE>0, CE>=3/BE>=3; ±{WINDOW_DAYS // 2}d match)",
                      fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.91])
-        out[f"figure_8_1e_windowed_violin_{key}.png"] = fig
+        out[f"figure_12_1b_windowed_violin_{key}.png"] = fig
     return out
+
+
+def make_windowed_stacked_bar(pdf):
+    """Figure 12.1a (windowed companion to 8.1a, first in the windowed set to mirror the main figure
+    order — stacked bar, violins, Δ-histograms): mean % time in glycemic ranges by arm
+    from per-NMA-day ±(WINDOW_DAYS/2)-day matched per-user means — the 3 NMA arms, CE>0, and the
+    CE>=3/BE>=3 high-engagement arm. Equal-user weight (consistent with 8.1a / Method A); each
+    range is derived per user from the windowed endpoint means (linear, so == windowed mean of the
+    range). Arm matching: NMA arms + CE>=3/BE>=3 vs CE>0; CE>0 from the broadest arm's match."""
+    win = {lab: windowed_matched_means(pdf, flag, COMPARATOR_FLAG, ENDPOINTS)[0]
+           for flag, lab in CLASSIFICATIONS}
+    broadest = CLASSIFICATIONS[-1][1]
+    win_hi = windowed_matched_means(pdf, HIGH_MA_FLAG, COMPARATOR_FLAG, ENDPOINTS)[0]
+
+    def ranges_for(arm_label):
+        if arm_label == COMPARATOR_LABEL:
+            src, sfx = win[broadest], "__cmp"
+        elif arm_label == HIGH_MA_LABEL:
+            src, sfx = win_hi, "__nma"
+        else:
+            src, sfx = win[arm_label], "__nma"
+        g = lambda ep: src[f"{ep}{sfx}"]  # noqa: E731
+        return pd.DataFrame({
+            "r_lt54": g("tbr_very_low"),
+            "r_54_70": g("tbr") - g("tbr_very_low"),
+            "r_70_180": g("tir"),
+            "r_180_250": g("tar") - g("tar_very_high"),
+            "r_gt250": g("tar_very_high"),
+        }).dropna()
+
+    range_keys = [rc for rc, _ in RANGE_COLS]
+    arm_labels, user_ns = [], []
+    means = {rc: [] for rc in range_keys}
+    for _flag, arm_label in SUPPLEMENT_ARMS:
+        r = ranges_for(arm_label)
+        arm_labels.append(arm_label)
+        user_ns.append(len(r))
+        for rc in range_keys:
+            means[rc].append(r[rc].mean() if len(r) else 0.0)
+
+    fig, ax = plt.subplots(figsize=(10.5, 7))
+    x = np.arange(len(SUPPLEMENT_ARMS))
+    bottom = np.zeros(len(SUPPLEMENT_ARMS))
+    for rc, rlabel in RANGE_COLS:
+        vals = np.array(means[rc])
+        ax.bar(x, vals, bottom=bottom, label=rlabel, color=RANGE_COLORS[rlabel], edgecolor="white")
+        centers = bottom + vals / 2.0
+        for xi, (v, cen) in enumerate(zip(vals, centers)):
+            if rlabel == "<54":
+                continue
+            if rlabel == "54-70":
+                ax.annotate(f"{v:.1f}%", xy=(xi, cen), xytext=(0, 16), textcoords="offset points",
+                            ha="center", va="bottom", fontsize=13,
+                            arrowprops=dict(arrowstyle="-", lw=0.6, color="gray"))
+            else:
+                ax.text(xi, cen, f"{v:.1f}%", ha="center", va="center", fontsize=13)
+        bottom += vals
+    ax.set_xticks(x); ax.set_xticklabels(arm_labels)
+    ax.set_ylabel("Mean time in range (%)"); ax.set_ylim(0, 108)
+    ax.legend(title="Glucose (mg/dL)", bbox_to_anchor=(1.01, 1), loc="upper left")
+    for xi, u in enumerate(user_ns):
+        ax.text(xi, 101, f"users={u}", ha="center", va="bottom", fontsize=11)
+    ax.set_title(f"Figure 12.1a: windowed mean time in glycemic ranges by arm (±{WINDOW_DAYS // 2}d match)",
+                 fontsize=SUPTITLE_FS)
+    fig.tight_layout()
+    return fig
 
 
 def run(
@@ -713,7 +806,7 @@ def run(
     # Method A paired contrasts.
     contrasts = contrasts_table(pdf, fda_stats)
     print(contrasts.to_string(index=False))
-    contrasts.to_csv(os.path.join(output_dir, "method_a_contrasts.csv"), index=False)
+    contrasts.to_csv(os.path.join(output_dir, "table_8_1a_expanded.csv"), index=False)
 
     # Sample Information (Table 1) for this cohort — age + sex demographics.
     create_sample_information(pdf).to_csv(
@@ -729,18 +822,27 @@ def run(
     create_table_8_1a(pdf).to_csv(os.path.join(output_dir, "table_8_1a_per_user_means.csv"), index=False)
     create_table_8_1b(pdf, nma_stats).to_csv(os.path.join(output_dir, "table_8_1b_lmm_contrasts.csv"), index=False)
     create_table_8_1c(pdf).to_csv(os.path.join(output_dir, "table_8_1c_behavioral_summary.csv"), index=False)
-    # Table 8.1d (windowed-comparator sensitivity): NMA vs CE>0 with a per-NMA-day ±45d match.
-    create_table_8_1d_windowed(pdf, fda_stats).to_csv(
-        os.path.join(output_dir, "table_8_1d_windowed_sensitivity.csv"), index=False)
+    # Table 12.1 (windowed-comparator sensitivity): NMA vs CE>0 with a per-NMA-day ±45d match.
+    create_windowed_contrast_table(pdf, fda_stats).to_csv(
+        os.path.join(output_dir, "table_12_1a_windowed_sensitivity.csv"), index=False)
+    # Appendix §12.1: the high meal-announcement arm (CE>=3/BE>=3) contrasted vs CE>0 — full-record
+    # LMM (table_12_1b_high_engagement_lmm) + windowed (table_12_1c_high_engagement_windowed). NB CE>=3/BE>=3 ⊂ CE>0 (overlapping
+    # reference, "heavy vs typical meal day"); Table 8.1a already carries the descriptive column.
+    high_ma = [(HIGH_MA_FLAG, HIGH_MA_LABEL)]
+    create_table_8_1b(pdf, nma_stats, classifications=high_ma).to_csv(
+        os.path.join(output_dir, "table_12_1b_high_engagement_lmm.csv"), index=False)
+    create_windowed_contrast_table(pdf, fda_stats, classifications=high_ma).to_csv(
+        os.path.join(output_dir, "table_12_1c_high_engagement_windowed.csv"), index=False)
 
-    # Figures (shared NMA conventions): 8.1a stacked ranges by arm; 8.1b per-user violin grids
-    # (all 8 endpoints, 4 arms); 8.1c paired-difference grids (all 8, broadest arm); 8.1d/8.1e
-    # windowed NMA − CE>0 (±45d match) Δ-histogram grids + per-arm violin grids.
+    # Figures (shared NMA conventions). §8.1 main set: 8.1a stacked ranges by arm; 8.1b per-user
+    # violin grids (all 8 endpoints, 5 arms); 8.1c paired-difference grids (all 8, broadest arm).
+    # Appendix §12.1 windowed (±45d) companions mirror that order — 12.1a stacked, 12.1b violins, 12.1c Δ-hist.
     figures = {"figure_8_1a_stacked_bars.png": make_stacked_bar(pdf)}
     figures.update(make_violin_grids(pdf))         # figure_8_1b_violin_grid{1,2}_*.png
     figures.update(make_paired_delta_grids(pdf))   # figure_8_1c_paired_delta_grid{1,2}_*.png
-    figures.update(make_windowed_delta_grids(pdf)) # figure_8_1d_windowed_delta_grid{1,2}_*.png
-    figures.update(make_windowed_violin_grids(pdf)) # figure_8_1e_windowed_violin_grid{1,2}_*.png
+    figures["figure_12_1a_windowed_stacked_bars.png"] = make_windowed_stacked_bar(pdf)
+    figures.update(make_windowed_violin_grids(pdf)) # figure_12_1b_windowed_violin_grid{1,2}_*.png
+    figures.update(make_windowed_delta_grids(pdf))  # figure_12_1c_windowed_delta_grid{1,2}_*.png
     for fname, fig in figures.items():
         fig.savefig(os.path.join(output_dir, fname), dpi=150)
         plt.close(fig)

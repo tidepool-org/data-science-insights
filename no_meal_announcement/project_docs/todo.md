@@ -23,8 +23,9 @@ Forward-looking checklist: where work stopped and what's blocked. Past-tense det
 
 ## Team-review changes (2026-06-04)
 
-- [x] **§8.1 windowed-comparator sensitivity** (NMA vs CE>0, ±45-day per-NMA-day match) — Table 8.1d + figures 8.1d/8.1e; `windowed_matched_means` in data_loader (D15). *Committed.*
+- [x] **§8.1 windowed-comparator sensitivity** (NMA vs CE>0, ±45-day per-NMA-day match) — Appendix §12.1: `table_12_1a_windowed_sensitivity` + figures 12.1a/12.1b/12.1c; `windowed_matched_means` in data_loader (D15). *Committed.*
 - [x] **Pseudonymize `_userId` at export** (D16) — committed; snapshot regenerated.
+- [x] **§8.1 high-engagement arm (CE≥3/BE≥3)** (D17) — staged `in_ce_ge3_be_ge3`; Table 8.1a +column, figs 8.1a/8.1b +bar/violin + windowed figs 12.1a stacked / 12.1b violins / 12.1c Δ-hist (mirroring main order), §12.1 supplement tables (vs CE>0), 8.1c+12.1c NMA−CE≥3/BE≥3 overlays; restricted to CE=0-contributing users; snapshot regenerated + derive bridge removed.
 - [ ] **§8.3 two-view rank terciles** — overall-reference (rank over all eligible days, à la fig 8.3e) **and** CE=0-reference, both same-user-set gated; with **CE>0 as an arm in Tables 8.3a/b/c** (binary Low/High *and* terciles). Supersedes the degenerate empirical terciles (D12).
 - [ ] **§8.3 Low/High × delivery-strategy (AB/TB) cross-tab** (plan §8.3 step 4; descriptive, guard thin High×TB cell).
 - [ ] **§8.4 carb-entry-rate by delivery strategy** ("are users more likely to log carbs on TB vs AB days?" — within-user paired proportions; note the same-day entanglement caveat + the surprising direction found this session).
@@ -51,4 +52,4 @@ Forward-looking checklist: where work stopped and what's blocked. Past-tense det
 
 ## Flag for the report editor
 
-- [ ] Per-user figure files were **renamed** in the figure-convention unification (D13) — content preserved (TIR/TBR now in Grid 1 of the violin grids).
+- [ ] **§8.1 + Appendix §12 table/figure changes (2026-06-04)** — the full editor-facing note (numbering scheme, name changes, plan deviations, Figure↔Table map, caveats, headline framing) lives in **[report_editor_note.md](report_editor_note.md)**. Covers the figure-convention change (D13), the windowed §12.1 supplement (D15), the high-engagement §12.1 arm (D17), and the `method_a_contrasts.csv` → `table_8_1a_expanded.csv` rename.

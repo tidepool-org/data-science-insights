@@ -44,8 +44,12 @@ the classifier (D7). Loop records autoboluses as `type='bolus'`, `subType='norma
 | CE=0 / BE≤1 | no carb entries, ≤1 bolus (mirrors Kovatchev 2023) | `in_ce0_be_le1` |
 | CE=0 / BE≤∞ | no carb entries, any boluses | `in_ce0_be_inf` |
 | CE>0 (comparator) | ≥1 carb entry | `in_ce_gt0` |
+| CE≥3 / BE≥3 (high engagement, §8.1 supplement) | ≥3 carb entries AND ≥3 manual boluses | `in_ce_ge3_be_ge3` |
 
-Nested: BE=0 ⊂ BE≤1 ⊂ BE≤∞. CE>0 comparator is **restricted to users with ≥1 CE=0 day** in §8.1/§8.2.
+Nested: BE=0 ⊂ BE≤1 ⊂ BE≤∞. CE>0 comparator **and** the CE≥3/BE≥3 high-engagement arm are **restricted to
+users with ≥1 CE=0 day** in §8.1 (`restrict_comparator`). `in_ce_ge3_be_ge3` ⊂ `in_ce_gt0` (a 5th
+descriptive arm, not disjoint); it drives Table 8.1a's 5th column + the §12.1 supplement contrasts
+(CE≥3/BE≥3 vs CE>0, overlapping reference) + the 8.1c NMA−CE≥3/BE≥3 overlay (D17).
 
 **delivery_strategy (§7.3).** `autobolus_on` if `automatic_bolus_count >= 3`, else `temp_basal_only`;
 ambiguous tie-cases excluded. Autobolus signal: HealthKit `MetadataKeyAutomaticallyIssued` (HK-first) +

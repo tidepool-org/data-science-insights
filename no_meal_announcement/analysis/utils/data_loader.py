@@ -41,6 +41,15 @@ COMPARATOR_LABEL = "CE>0"
 # Arms shown in figures (3 nested NMA arms + comparator).
 FIGURE_ARMS = CLASSIFICATIONS + [(COMPARATOR_FLAG, COMPARATOR_LABEL)]
 
+# High meal-announcement ("high engagement") arm: >=3 carb entries AND >=3 manual bolus entries —
+# the heavy-announcement end of the spectrum, shown as a 5th category beside the 3 NMA arms + CE>0
+# (Table 8.1a column + figures 8.1a/8.1b) and in parallel supplement contrast tables. Staged as
+# `in_ce_ge3_be_ge3` in export_user_day_classification.py (carried through analysis-ready).
+HIGH_MA_FLAG = "in_ce_ge3_be_ge3"
+HIGH_MA_LABEL = "CE>=3/BE>=3"
+# The 5-category arm set for the supplement / violins (3 NMA + CE>0 + high meal-announcement).
+SUPPLEMENT_ARMS = FIGURE_ARMS + [(HIGH_MA_FLAG, HIGH_MA_LABEL)]
+
 # §7.3 delivery strategies: (column value, short label). Any other / null strategy is
 # "ambiguous" and excluded (the staging CASE currently emits only these two values). Shared by
 # §8.2 (day-type × strategy interaction) and §8.3 (Low/High × strategy cross-tab) — single source.
@@ -144,13 +153,17 @@ def filter_cohort(pdf, cohort: Literal["adult", "pediatric", "all"] = "all", min
 
 
 def restrict_comparator(pdf):
-    """§8.1 Table 8.1a: the CE>0 arm is restricted to users who contributed >=1 CE=0 day in
-    at least one of the three NMA classifications. The arms are nested under in_ce0_be_inf
-    (CE=0), so that reduces to ">=1 in_ce0_be_inf day". Zero in_ce_gt0 for users with no
-    CE=0 day so every table/figure uses the restricted comparator."""
+    """§8.1 Table 8.1a: the comparison arms — CE>0 and the CE>=3/BE>=3 high meal-announcement
+    supplement arm — are restricted to users who contributed >=1 CE=0 day in at least one of the
+    three NMA classifications. The arms are nested under in_ce0_be_inf (CE=0), so that reduces to
+    ">=1 in_ce0_be_inf day". Zero in_ce_gt0 (and in_ce_ge3_be_ge3) for users with no CE=0 day so
+    every table/figure compares the same CE=0-contributing cohort."""
     ce0_users = set(pdf.loc[pdf["in_ce0_be_inf"] == True, "_userId"])  # noqa: E712
     out = pdf.copy()
-    out.loc[~out["_userId"].isin(ce0_users), "in_ce_gt0"] = False
+    non_ce0 = ~out["_userId"].isin(ce0_users)
+    out.loc[non_ce0, "in_ce_gt0"] = False
+    if HIGH_MA_FLAG in out.columns:
+        out.loc[non_ce0, HIGH_MA_FLAG] = False
     return out
 
 
