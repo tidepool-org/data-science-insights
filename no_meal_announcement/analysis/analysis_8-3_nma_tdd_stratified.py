@@ -17,20 +17,22 @@ AND ≥1 CE=0 day in EACH stratum (for the within-user Low−High pairing).
 
 Sign convention: contrasts are **Low − High** (lmm_tdd_stratum ref = High).
 
-High meal-announcement (CE>=3/BE>=3) supplement — mirrors §8.1's high-engagement treatment: HMA
-days are stratified Low/High by within-user TDD just like CE=0 days, shown as a 3rd group in the
-stratum figures (8.3a/8.3b/8.3c, bronze) and emitted as a parallel Appendix §12.3 within-user
-contrast (overlapping reference, CE>=3/BE>=3 ⊂ CE>0).
+High meal-announcement (CE>=3/BE>=3) arm — mirrors §8.1's high-engagement treatment: HMA days are
+stratified Low/High by within-user TDD just like CE=0 days, shown as a 3rd group/section in the
+primary stratum figures + Table 8.3a (bronze), and emitted in the Appendix §12.3 supplement (its
+own within-user contrast + day-level LMM). Overlapping reference (CE>=3/BE>=3 ⊂ CE>0).
 
-Outputs (analysis/outputs/analysis_8_3/<cohort>/):
-    table_8_3a_per_user_by_stratum.csv     per classification × endpoint × stratum: across-user mean±SD
-    table_8_3a_supp_terciles.csv           supplemental Table 8.3a: across-user mean±SD by Low/Mid/High R tercile
+Appendix §12.3 supplement (§8.3 sensitivities — flat *_12_3* names; cf. §8.1 §12.1 / §8.2 §12.2):
+two alternative TDD-reference definitions (median; rolling-30-day mean), each a full mini-analysis
+(per-user-by-stratum table + violin figure + within-user contrast), plus the HMA arm (within-user
+contrast + LMM). ⚠️ All inherit the §8.3 D12 not-citable caveat. (The empirical-tercile sensitivity
+was dropped — pending the D12 two-view rank-tercile rework.)
+
+Outputs (analysis/outputs/analysis_8_3/<cohort>/) — primary (mean TDD reference):
+    table_8_3a_per_user_by_stratum.csv     per section × endpoint × stratum: across-user mean±SD —
+                                           sections = the 3 nested CE=0 classifications + CE>0 + CE>=3/BE>=3 (HMA)
     table_8_3b_within_user_contrast.csv    per classification × endpoint: within-user Low−High (Wilcoxon + boot CI + paired-t)
     table_8_3c_lmm_sensitivity.csv         day-level LMM outcome ~ tdd_stratum + (1|user)
-    table_8_3b_sens_terciles.csv           sensitivity: bottom vs top tercile of each user's CE=0-day R
-    table_8_3b_sens_median_ref.csv         sensitivity: median (not mean) TDD reference
-    table_8_3b_sens_rolling30.csv          sensitivity: rolling-30-day TDD reference (computed in-analysis)
-    table_12_3a_high_engagement_tdd_strata.csv  Appendix §12.3: within-user Low−High on CE>=3/BE>=3 days
     figure_8_3a_grid{1,2}_*.png            per-user endpoints by stratum (CE=0 / CE>0 / CE>=3-BE>=3 Low&High),
                                            violin+box+dots, two 2×2 metric grids; colour = glycemic range
     figure_8_3b_grid{1,2}_*.png            within-user Low−High delta histograms (CE=0 / CE>0 / CE>=3-BE>=3), two 2×2 grids
@@ -38,6 +40,15 @@ Outputs (analysis/outputs/analysis_8_3/<cohort>/):
     figure_8_3d_R_distribution.png         within-user R = tdd/mean_tdd distribution on CE=0 days
     figure_8_3e_tir_vs_tdd_percentile.png  scatter: per-day TIR vs within-user TDD percentile, coloured by
                                            CE/BE category (CE=0 BE=0/1/≥2 + CE>0) + 11-dot decile-mean trend
+  Appendix §12.3 supplement:
+    table_12_3a_median_per_user_by_stratum.csv   median ref — per-user-by-stratum (5 sections)
+    figure_12_3a_median_grid{1,2}_*.png          median ref — per-user violin grids (6 groups)
+    table_12_3b_median_within_user.csv           median ref — within-user Low−High (CE=0)
+    table_12_3c_rolling_per_user_by_stratum.csv  rolling-30d ref — per-user-by-stratum (5 sections)
+    figure_12_3c_rolling_grid{1,2}_*.png         rolling-30d ref — per-user violin grids (6 groups)
+    table_12_3d_rolling_within_user.csv          rolling-30d ref — within-user Low−High (CE=0)
+    table_12_3e_high_engagement_within_user.csv  HMA — within-user Low−High (8.3b parallel)
+    table_12_3f_high_engagement_lmm.csv          HMA — day-level LMM (8.3c parallel)
 
 Rolling-30-day reference (§7.5) is computed in-analysis from per-day tdd_units + local_day
 (trailing 30-calendar-day mean; no staging column needed).
@@ -77,6 +88,7 @@ if _ANALYSIS_DIR not in sys.path:
 from utils.data_loader import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
+    COMPARATOR_LABEL,
     ENDPOINTS,
     HIGH_MA_FLAG,
     HIGH_MA_LABEL,
@@ -122,33 +134,18 @@ def _ce0_strata(pdf, nma_flag, ratio_col="tdd_ratio"):
     return df
 
 
-def _tercile_strata(pdf, nma_flag):
-    """Label each CE=0 day Low / Mid / High by within-user R terciles (each user's own CE=0-day
-    R distribution). Callers take what they need: table_8_3b_within_user contrasts only Low vs
-    High (Mid ignored); the supplemental Table 8.3a reports all three."""
-    df = pdf[(pdf[nma_flag] == True)  # noqa: E712
-             & (pdf["n_eligible_days_for_tdd"] >= MIN_REF_DAYS)
-             & (pdf["tdd_ratio"].notna())].copy()
-    q1 = df.groupby("_userId")["tdd_ratio"].transform(lambda s: s.quantile(1 / 3))
-    q2 = df.groupby("_userId")["tdd_ratio"].transform(lambda s: s.quantile(2 / 3))
-    df["tdd_stratum"] = np.where(df["tdd_ratio"] <= q1, "Low",
-                                 np.where(df["tdd_ratio"] >= q2, "High", "Mid"))
-    return df
-
-
 def _per_user_stratum_mean(df, col, stratum):
     return df[df["tdd_stratum"] == stratum].groupby("_userId")[col].mean()
 
 
-def table_8_3a_per_user_by_stratum(strata_by_cls, strata_order=("Low", "High")):
-    """Across-user mean ± SD of each endpoint's per-user within-stratum mean, by classification
-    × stratum, with user/day counts. `strata_order` selects which strata (and their order) to
-    report: ("Low", "High") for the primary mean-reference table, ("Low", "Mid", "High") for the
-    supplemental R-tercile version (table_8_3a_supp_terciles.csv)."""
+def table_8_3a_per_user_by_stratum(strata_by_cls):
+    """Across-user mean ± SD of each endpoint's per-user within-stratum mean, by section × Low/High
+    stratum, with user/day counts. Reused for the primary mean-reference Table 8.3a and the
+    Appendix §12.3 median- / rolling-reference per-user-by-stratum variants."""
     rows = []
     for cls_label, df in strata_by_cls.items():
         for col, ep_label in ENDPOINTS:
-            for stratum in strata_order:
+            for stratum in ("Low", "High"):
                 m = _per_user_stratum_mean(df, col, stratum).dropna()
                 sub = df[df["tdd_stratum"] == stratum]
                 rows.append({
@@ -400,19 +397,23 @@ def _violin_panel(ax, endpoint, label, strata_inf, cmp_strata, hma_strata):
     violin_box_panel(ax, groups, title=label, title_color=base, separators=(2.5, 4.5))
 
 
-def figure_8_3a_violin(strata_inf, cmp_strata, hma_strata):
-    """Figure 8.3a (two semantic 2×2 grids): per-user means by TDD stratum, one grid per metric
-    group. Returns {filename: figure}. Endpoint colour = glycemic range (Tidepool for the
-    non-range metrics); CE=0 coloured, CE>0 grey, CE>=3/BE>=3 bronze; Low lighter / High darker."""
+def figure_8_3a_violin(strata_inf, cmp_strata, hma_strata, *, fig_id="8.3a",
+                       fname_stem="figure_8_3a", ref_note=""):
+    """Per-user means by TDD stratum (two semantic 2×2 grids), one grid per metric group. Returns
+    {filename: figure}. Endpoint colour = glycemic range (Tidepool for the non-range metrics); CE=0
+    coloured, CE>0 grey, CE>=3/BE>=3 bronze; Low lighter / High darker. `fig_id` / `fname_stem` /
+    `ref_note` parametrize the title + filename so the Appendix §12.3 median- and rolling-reference
+    variants reuse this (primary = Figure 8.3a; §12.3a = median ref; §12.3c = rolling ref)."""
+    ref = f" ({ref_note})" if ref_note else ""
     out = {}
     for key, gtitle, eps in GRIDS:
         fig, axes = plt.subplots(2, 2, figsize=(13, 8.6))
         for ax, (col, label) in zip(axes.ravel(), eps):
             _violin_panel(ax, col, label, strata_inf, cmp_strata, hma_strata)
-        fig.suptitle(f"Figure 8.3a — {gtitle}\nper-user means by TDD stratum (CE=0, CE>0, CE>=3/BE>=3)",
+        fig.suptitle(f"Figure {fig_id} — {gtitle}\nper-user means by TDD stratum (CE=0, CE>0, CE>=3/BE>=3){ref}",
                      fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.91])
-        out[f"figure_8_3a_{key}.png"] = fig
+        out[f"{fname_stem}_{key}.png"] = fig
     return out
 
 
@@ -449,48 +450,76 @@ def run(
 
     # Primary strata (mean-TDD reference via tdd_ratio), per nested classification.
     strata = {cls_label: _ce0_strata(pdf, flag) for flag, cls_label in CLASSIFICATIONS}
-    # High meal-announcement (CE>=3/BE>=3) days, stratified Low/High by within-user TDD like CE=0
-    # days — same _ce0_strata machinery (overlapping reference, CE>=3/BE>=3 ⊂ CE>0). Used for the
-    # §12.3 supplement contrast + the 3rd group in the stratum figures (8.3a/8.3b/8.3c).
+    # CE>0 comparator and the high meal-announcement (CE>=3/BE>=3) arm, both stratified Low/High by
+    # within-user TDD with the same _ce0_strata machinery (HMA: overlapping reference, CE>=3/BE>=3 ⊂
+    # CE>0). Used as the extra Table 8.3a sections + the §12.3 contrast + the 3rd/4th groups in the
+    # stratum figures (8.3a/8.3b/8.3c).
+    cmp_strata = _ce0_strata(pdf, COMPARATOR_FLAG)
     hma_strata = _ce0_strata(pdf, HIGH_MA_FLAG)
 
-    table_8_3a_per_user_by_stratum(strata).to_csv(
+    # Table 8.3a (primary, mean reference): the 3 nested CE=0 classifications plus a CE>0 and a
+    # CE>=3/BE>=3 (HMA) section, each split Low/High by TDD (matches figure 8.3a's groups).
+    strata_8_3a = {**strata, COMPARATOR_LABEL: cmp_strata, HIGH_MA_LABEL: hma_strata}
+    table_8_3a_per_user_by_stratum(strata_8_3a).to_csv(
         os.path.join(output_dir, "table_8_3a_per_user_by_stratum.csv"), index=False)
     table_8_3b_within_user(strata, nma_stats).to_csv(
         os.path.join(output_dir, "table_8_3b_within_user_contrast.csv"), index=False)
     table_8_3c_lmm(strata, nma_stats).to_csv(
         os.path.join(output_dir, "table_8_3c_lmm_sensitivity.csv"), index=False)
-    # Appendix §12.3: within-user Low−High TDD contrast on CE>=3/BE>=3 days (mirrors Table 8.3b;
-    # parallels §8.1's §12.1 high-engagement supplement). Inherits the §8.3 D12 caveat.
-    table_8_3b_within_user({HIGH_MA_LABEL: hma_strata}, nma_stats).to_csv(
-        os.path.join(output_dir, "table_12_3a_high_engagement_tdd_strata.csv"), index=False)
 
-    # Sensitivities: terciles, and median-TDD reference. _tercile_strata labels Low/Mid/High;
-    # the supplemental Table 8.3a reports all three, the within-user contrast uses only Low/High.
-    terc = {cls_label: _tercile_strata(pdf, flag) for flag, cls_label in CLASSIFICATIONS}
-    table_8_3a_per_user_by_stratum(terc, strata_order=("Low", "Mid", "High")).to_csv(
-        os.path.join(output_dir, "table_8_3a_supp_terciles.csv"), index=False)
-    table_8_3b_within_user(terc, nma_stats).to_csv(
-        os.path.join(output_dir, "table_8_3b_sens_terciles.csv"), index=False)
+    # Appendix §12.3 — §8.3 sensitivities (flat *_12_3* names; cf. §8.1 §12.1 / §8.2 §12.2). Three
+    # blocks: two alternative TDD-reference definitions (median; rolling-30-day mean), each a full
+    # mini-analysis (per-user-by-stratum table + violin figure + within-user contrast), and the
+    # high meal-announcement (CE>=3/BE>=3) arm (within-user contrast + day-level LMM, the 8.3c
+    # parallel). All overlapping references; ⚠️ inherit the §8.3 D12 not-citable caveat. (The
+    # empirical-tercile sensitivity was dropped — pending the D12 two-view rank-tercile rework.)
+
+    # §12.3a/b — median TDD reference (R = tdd / median_tdd_user). The per-user-by-stratum table +
+    # violin carry the same 5 sections / 6 groups as the primary; the within-user contrast is CE=0.
     pdf_med = pdf.copy()
     pdf_med["tdd_ratio_median"] = pdf_med["tdd_units"] / pdf_med["median_tdd_user"]
     med = {cls_label: _ce0_strata(pdf_med, flag, ratio_col="tdd_ratio_median")
            for flag, cls_label in CLASSIFICATIONS}
+    med_8_3a = {**med,
+                COMPARATOR_LABEL: _ce0_strata(pdf_med, COMPARATOR_FLAG, ratio_col="tdd_ratio_median"),
+                HIGH_MA_LABEL: _ce0_strata(pdf_med, HIGH_MA_FLAG, ratio_col="tdd_ratio_median")}
+    table_8_3a_per_user_by_stratum(med_8_3a).to_csv(
+        os.path.join(output_dir, "table_12_3a_median_per_user_by_stratum.csv"), index=False)
     table_8_3b_within_user(med, nma_stats).to_csv(
-        os.path.join(output_dir, "table_8_3b_sens_median_ref.csv"), index=False)
+        os.path.join(output_dir, "table_12_3b_median_within_user.csv"), index=False)
 
-    # Rolling-30-day TDD reference (§7.5) — computed in-analysis from per-day tdd_units + local_day.
+    # §12.3c/d — rolling-30-day mean TDD reference (computed in-analysis from per-day tdd_units +
+    # local_day; §7.5).
     pdf_roll = _add_rolling_ref(pdf)
     roll = {cls_label: _ce0_strata(pdf_roll, flag, ratio_col="tdd_ratio_rolling")
             for flag, cls_label in CLASSIFICATIONS}
+    roll_8_3a = {**roll,
+                 COMPARATOR_LABEL: _ce0_strata(pdf_roll, COMPARATOR_FLAG, ratio_col="tdd_ratio_rolling"),
+                 HIGH_MA_LABEL: _ce0_strata(pdf_roll, HIGH_MA_FLAG, ratio_col="tdd_ratio_rolling")}
+    table_8_3a_per_user_by_stratum(roll_8_3a).to_csv(
+        os.path.join(output_dir, "table_12_3c_rolling_per_user_by_stratum.csv"), index=False)
     table_8_3b_within_user(roll, nma_stats).to_csv(
-        os.path.join(output_dir, "table_8_3b_sens_rolling30.csv"), index=False)
+        os.path.join(output_dir, "table_12_3d_rolling_within_user.csv"), index=False)
 
-    # Figures (broadest CE=0 arm for stratum-level figures; CE>0 also split Low/High).
+    # §12.3e/f — high meal-announcement (CE>=3/BE>=3) arm, mean reference: within-user Low−High
+    # contrast (8.3b parallel) + day-level LMM outcome ~ tdd_stratum + (1|user) (8.3c parallel).
+    table_8_3b_within_user({HIGH_MA_LABEL: hma_strata}, nma_stats).to_csv(
+        os.path.join(output_dir, "table_12_3e_high_engagement_within_user.csv"), index=False)
+    table_8_3c_lmm({HIGH_MA_LABEL: hma_strata}, nma_stats).to_csv(
+        os.path.join(output_dir, "table_12_3f_high_engagement_lmm.csv"), index=False)
+
+    # Figures (broadest CE=0 arm for stratum-level figures; CE>0 + HMA also split Low/High,
+    # computed above).
     strata_inf = strata["CE=0/BE<=inf"]
-    cmp_strata = _ce0_strata(pdf, COMPARATOR_FLAG)
     figs = {}
-    figs.update(figure_8_3a_violin(strata_inf, cmp_strata, hma_strata))     # two 2×2 grid figures
+    figs.update(figure_8_3a_violin(strata_inf, cmp_strata, hma_strata))     # primary, figure_8_3a_grid{1,2}
+    # Appendix §12.3 median- and rolling-reference violin variants (figs 12.3a / 12.3c).
+    figs.update(figure_8_3a_violin(med_8_3a["CE=0/BE<=inf"], med_8_3a[COMPARATOR_LABEL],
+                                   med_8_3a[HIGH_MA_LABEL], fig_id="12.3a", ref_note="median TDD ref",
+                                   fname_stem="figure_12_3a_median"))
+    figs.update(figure_8_3a_violin(roll_8_3a["CE=0/BE<=inf"], roll_8_3a[COMPARATOR_LABEL],
+                                   roll_8_3a[HIGH_MA_LABEL], fig_id="12.3c", ref_note="rolling-30-day TDD ref",
+                                   fname_stem="figure_12_3c_rolling"))
     figs.update(figure_8_3b_paired_delta(strata, cmp_strata, hma_strata))   # two 2×2 grid figures
     figs["figure_8_3c_stacked_ranges.png"] = figure_8_3c_stacked(pdf, strata_inf)
     figs["figure_8_3d_R_distribution.png"] = figure_8_3d_r_dist(strata_inf)

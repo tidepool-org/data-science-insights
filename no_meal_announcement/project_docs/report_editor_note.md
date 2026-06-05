@@ -99,10 +99,22 @@ HMA renders in **bronze** (#9c6b30) everywhere, matching §8.1's 5th arm.
   - HMA days are stratified Low/High by within-user TDD like CE=0 days and shown as a 3rd group
     (bronze): `figure_8_3a_grid{1,2}_*` (6 violins: CE=0 / CE>0 / CE≥3-BE≥3, each Low&High),
     `figure_8_3b_grid{1,2}_*` (3rd Low−High overlay), `figure_8_3c_stacked_ranges` (4th reference bar).
-  - **Appendix §12.3** `table_12_3a_high_engagement_tdd_strata.csv` — within-user Low−High contrast on
-    CE≥3/BE≥3 days (mirrors Table 8.3b).
-  - ⚠️ **§8.3 / §12.3 TDD results are NOT yet citable** (decisions.md D12) — propagation adds parallel
-    structure only; it does not resolve D12.
+  - **Table 8.3a** (`table_8_3a_per_user_by_stratum.csv`) now carries **five sections** — the 3 nested
+    CE=0 classifications **plus a CE>0 and a CE≥3/BE≥3 (HMA) section**, each split Low/High by TDD
+    (matches figure 8.3a's groups).
+  - **Appendix §12.3 supplement** (flat `*_12_3*` names, cf. §12.1/§12.2) collects the §8.3
+    sensitivities in three blocks:
+    - **Median TDD reference** (R = tdd/median): `table_12_3a_median_per_user_by_stratum`,
+      `figure_12_3a_median_grid{1,2}`, `table_12_3b_median_within_user`.
+    - **Rolling-30-day mean reference**: `table_12_3c_rolling_per_user_by_stratum`,
+      `figure_12_3c_rolling_grid{1,2}`, `table_12_3d_rolling_within_user`.
+    - **HMA arm** (CE≥3/BE≥3, mean ref): `table_12_3e_high_engagement_within_user` (8.3b parallel) +
+      `table_12_3f_high_engagement_lmm` (8.3c parallel).
+    The two alternative-reference per-user tables + violins carry the same 5 sections / 6 groups as the
+    primary; the within-user contrasts are CE=0. **The empirical-tercile outputs were dropped** (they
+    were the degenerate, not-apples-to-apples part of D12) — pending the planned two-view rank-tercile rework.
+  - ⚠️ **§8.3 / §12.3 TDD results are NOT yet citable** (decisions.md D12) — this is parallel/sensitivity
+    structure; it does not resolve D12.
 
 The plan defines no §8.2/§8.3 high-engagement material — everything in this section is **new
 supplementary** Appendix §12 content, parallel to §8.1's §12.1. Provenance: `decisions.md` D17, D18._

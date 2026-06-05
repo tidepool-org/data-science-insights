@@ -174,7 +174,20 @@ Carried the D17 high-engagement / "HMA" arm (`in_ce_ge3_be_ge3`) into §8.2 and 
 - **§8.2** (`analysis_8-2_nma_by_delivery_strategy.py`): HMA shown as a 3rd, overlapping day type (HMA ⊂ CE>0, bronze) beside NMA and CE>0 in the descriptive figures — 8.2a violins / 8.2c interaction lines / 8.2d stacked bars go 4 → 6 cells per strategy pair. `build_day_type_frame` parametrized by treatment flag/label; new `build_display_frame` (3 day types) + `DISPLAY_CELLS`; `fit_interaction_models` parametrized with `treatments`/`treatment_label`. New **Appendix §12.2** `table_12_2a_high_engagement_interaction.csv` — the day_type ∈ {CE>=3/BE>=3, CE>0} × delivery_strategy interaction (same columns as Table 8.2b; reference = CE>0, so main_day = HMA − CE>0). Thin HMA×autobolus_on cells caught by the existing `converged=False` guards. Also commented out the leftover `%pip`/`dbutils` notebook preamble so the script is locally runnable like §8.1/§8.3.
 - **§8.3** (`analysis_8-3_nma_tdd_stratified.py`): HMA days stratified Low/High by within-user TDD via the existing `_ce0_strata(pdf, HIGH_MA_FLAG)` — shown as a 3rd group (bronze) in figures 8.3a (6 violins), 8.3b (3rd Low−High overlay), 8.3c (4th reference bar). New **Appendix §12.3** `table_12_3a_high_engagement_tdd_strata.csv` — within-user Low−High contrast on CE>=3/BE>=3 days (reuses `table_8_3b_within_user`, mirrors Table 8.3b). **Inherits the D12 caveat** (TDD/tercile results not yet citable) — parallel structure only, does not resolve D12.
 - Docs updated: decisions.md D18 (+ D17 marked extended), architecture.md, report_editor_note.md, todo.md.
-- **Pending:** regenerate adult/pediatric/all off the snapshot + spot-check the 6-cell/6-group figures (local Bash was unavailable at edit time); flesh out `run_test_analysis_8_{2,3}.py` for the new outputs.
+- **Verified:** regenerated adult/pediatric/all for §8.2 + §8.3, all rows converged. §12.2 all-cohort TIR HMA−CE>0 = −0.92; §12.3 all-cohort HMA-day Low−High TIR = +10.8. Figures spot-checked.
+- Follow-up (same day): Table 8.3a gained CE>0 + CE≥3/BE≥3 sections (5 sections total, each Low/High; matches figure 8.3a).
+
+## 2026-06-05 — §8.3 sensitivities reorganized into Appendix §12.3 supplement
+
+Reorganized §8.3's scattered sensitivity outputs into a coherent Appendix §12.3 supplement (flat `*_12_3*` names; cf. §8.1 §12.1 / §8.2 §12.2), and featured the two alternative TDD-reference definitions as full mini-analyses. See decisions.md D12 (updated).
+
+- **Three §12.3 blocks**, each reusing the existing builders (`table_8_3a_per_user_by_stratum` / `table_8_3b_within_user` / `table_8_3c_lmm` / `_ce0_strata`):
+  - **Median reference** (R = tdd/median_tdd_user): `table_12_3a_median_per_user_by_stratum` (5 sections) + `figure_12_3a_median_grid{1,2}` (6 groups) + `table_12_3b_median_within_user`.
+  - **Rolling-30-day mean reference**: `table_12_3c_rolling_per_user_by_stratum` + `figure_12_3c_rolling_grid{1,2}` + `table_12_3d_rolling_within_user`.
+  - **HMA arm** (CE≥3/BE≥3, mean ref): `table_12_3e_high_engagement_within_user` (8.3b parallel) + `table_12_3f_high_engagement_lmm` (8.3c parallel — the new "Table 8.3c parallel with HMA").
+- `figure_8_3a_violin` parametrized (`fig_id` / `fname_stem` / `ref_note`) so the median & rolling violin variants reuse it; the median/rolling per-user tables + violins carry the same 5 sections / 6 groups as the primary.
+- **Dropped the empirical-tercile outputs** (`_tercile_strata`, `table_8_3a_supp_terciles`, `table_8_3b_sens_terciles`) — the degenerate, not-apples-to-apples part of D12 — pending the two-view rank-tercile rework. Renamed the old flat sensitivity files into the §12.3 scheme (`_sens_median_ref` → `_12_3b_median_within_user`, `_sens_rolling30` → `_12_3d_rolling_within_user`, `table_12_3a_high_engagement_tdd_strata` → `_12_3e_high_engagement_within_user`).
+- Regenerated adult/pediatric/all; ⚠️ all §12.3 / TDD-stratum outputs remain **not citable** (D12 unchanged). Docs: decisions.md D12 update, architecture.md, report_editor_note.md §7, todo.md.
 
 ## Pending / To do (deferred — not yet done)
 
