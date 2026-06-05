@@ -38,6 +38,12 @@ BOOTSTRAP_SEED = 20260520
 TIDEPOOL = "#607cff"
 GRAY = "#9e9e9e"
 
+# High meal-announcement ("high engagement", CE>=3/BE>=3) 5th-category styling: a distinct
+# bronze/gold (the heavy-announcement end), separate from the range colours and the grey CE>0
+# comparator. Shared across §8.1–§8.3 so the HMA arm reads identically everywhere.
+HIGH_MA_COLOR = "#9c6b30"
+HIGH_MA_ALPHA = 0.70
+
 # Standard AGP/Tidepool glycemic-range band colours (stacked bars).
 RANGE_COLORS = {"<54": "#E03830", "54-70": "#FF6D5C", "70-180": "#5AC692",
                 "180-250": "#AA85DE", ">250": "#7046CC"}

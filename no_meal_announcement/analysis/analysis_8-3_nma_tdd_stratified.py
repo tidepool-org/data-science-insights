@@ -17,6 +17,11 @@ AND ≥1 CE=0 day in EACH stratum (for the within-user Low−High pairing).
 
 Sign convention: contrasts are **Low − High** (lmm_tdd_stratum ref = High).
 
+High meal-announcement (CE>=3/BE>=3) supplement — mirrors §8.1's high-engagement treatment: HMA
+days are stratified Low/High by within-user TDD just like CE=0 days, shown as a 3rd group in the
+stratum figures (8.3a/8.3b/8.3c, bronze) and emitted as a parallel Appendix §12.3 within-user
+contrast (overlapping reference, CE>=3/BE>=3 ⊂ CE>0).
+
 Outputs (analysis/outputs/analysis_8_3/<cohort>/):
     table_8_3a_per_user_by_stratum.csv     per classification × endpoint × stratum: across-user mean±SD
     table_8_3a_supp_terciles.csv           supplemental Table 8.3a: across-user mean±SD by Low/Mid/High R tercile
@@ -25,10 +30,11 @@ Outputs (analysis/outputs/analysis_8_3/<cohort>/):
     table_8_3b_sens_terciles.csv           sensitivity: bottom vs top tercile of each user's CE=0-day R
     table_8_3b_sens_median_ref.csv         sensitivity: median (not mean) TDD reference
     table_8_3b_sens_rolling30.csv          sensitivity: rolling-30-day TDD reference (computed in-analysis)
-    figure_8_3a_grid{1,2}_*.png            per-user endpoints by stratum (CE=0 Low/High vs CE>0 Low/High),
+    table_12_3a_high_engagement_tdd_strata.csv  Appendix §12.3: within-user Low−High on CE>=3/BE>=3 days
+    figure_8_3a_grid{1,2}_*.png            per-user endpoints by stratum (CE=0 / CE>0 / CE>=3-BE>=3 Low&High),
                                            violin+box+dots, two 2×2 metric grids; colour = glycemic range
-    figure_8_3b_grid{1,2}_*.png            within-user Low−High delta histograms (CE=0 vs CE>0), two 2×2 grids
-    figure_8_3c_stacked_ranges.png         mean glycemic ranges: Low vs High vs CE>0 reference
+    figure_8_3b_grid{1,2}_*.png            within-user Low−High delta histograms (CE=0 / CE>0 / CE>=3-BE>=3), two 2×2 grids
+    figure_8_3c_stacked_ranges.png         mean glycemic ranges: CE=0 Low/High vs CE>0 + CE>=3/BE>=3 references
     figure_8_3d_R_distribution.png         within-user R = tdd/mean_tdd distribution on CE=0 days
     figure_8_3e_tir_vs_tdd_percentile.png  scatter: per-day TIR vs within-user TDD percentile, coloured by
                                            CE/BE category (CE=0 BE=0/1/≥2 + CE>0) + 11-dot decile-mean trend
@@ -72,6 +78,8 @@ from utils.data_loader import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     ENDPOINTS,
+    HIGH_MA_FLAG,
+    HIGH_MA_LABEL,
     MIN_AGE,
     analysis_dir,
     default_analysis_ready_csv,
@@ -84,6 +92,7 @@ from utils.data_loader import (  # noqa: E402
 from utils.plotting import (  # noqa: E402
     GRAY,
     GRIDS,
+    HIGH_MA_COLOR,
     LEGEND_FS,
     RANGE_COLORS,
     SUPTITLE_FS,
@@ -209,11 +218,12 @@ def _stratum_delta(df, col):
     return pd.DataFrame({"L": low, "H": high}).dropna().eval("L - H").to_numpy()
 
 
-def figure_8_3b_paired_delta(strata_by_cls, cmp_strata):
+def figure_8_3b_paired_delta(strata_by_cls, cmp_strata, hma_strata):
     """Figure 8.3b (two semantic 2×2 grids): within-user Low−High TDD delta histograms
-    (CE=0/BE≤∞ arm), one grid per metric group; overlays CE=0 (endpoint range colour) and CE>0
-    (grey). Solid line = each distribution's mean, dashed = 0. Returns {filename: figure}.
-    (Per-classification deltas are in table_8_3b_*.csv.)"""
+    (CE=0/BE≤∞ arm), one grid per metric group; overlays CE=0 (endpoint range colour), CE>0
+    (grey) and the high meal-announcement CE>=3/BE>=3 arm (bronze). Solid line = each
+    distribution's mean, dashed = 0. Returns {filename: figure}. (Per-classification deltas are in
+    table_8_3b_*.csv; the CE>=3/BE>=3 contrast in table_12_3a_high_engagement_tdd_strata.csv.)"""
     df = strata_by_cls["CE=0/BE<=inf"]
     out = {}
     for key, gtitle, eps in GRIDS:
@@ -223,7 +233,8 @@ def figure_8_3b_paired_delta(strata_by_cls, cmp_strata):
             overlay_hist_panel(
                 ax,
                 [(_stratum_delta(df, col), "CE=0", base),
-                 (_stratum_delta(cmp_strata, col), "CE>0", GRAY)],
+                 (_stratum_delta(cmp_strata, col), "CE>0", GRAY),
+                 (_stratum_delta(hma_strata, col), HIGH_MA_LABEL, HIGH_MA_COLOR)],
                 xlabel="per-user Low−High Δ", title=label, title_color=base)
         fig.suptitle(f"Figure 8.3b — {gtitle}\nwithin-user Low − High differences (BE≤∞)",
                      fontsize=SUPTITLE_FS)
@@ -244,8 +255,9 @@ def figure_8_3c_stacked(pdf, strata_inf):
 
     groups = [("CE=0 Low-TDD", strata_inf[strata_inf["tdd_stratum"] == "Low"]),
               ("CE=0 High-TDD", strata_inf[strata_inf["tdd_stratum"] == "High"]),
-              ("CE>0 (ref)", pdf[pdf[COMPARATOR_FLAG] == True])]  # noqa: E712
-    fig, ax = plt.subplots(figsize=(8, 7))
+              ("CE>0 (ref)", pdf[pdf[COMPARATOR_FLAG] == True]),  # noqa: E712
+              (f"{HIGH_MA_LABEL} (ref)", pdf[pdf[HIGH_MA_FLAG] == True])]  # noqa: E712
+    fig, ax = plt.subplots(figsize=(9.5, 7))
     x = np.arange(len(groups))
     bottom = np.zeros(len(groups))
     means = {k: [] for k in RANGE_COLORS}
@@ -264,7 +276,8 @@ def figure_8_3c_stacked(pdf, strata_inf):
     for xi, nu in enumerate(ns):
         ax.text(xi, 101, f"users={nu}", ha="center", va="bottom", fontsize=11)
     ax.legend(title="Glucose (mg/dL)", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=LEGEND_FS)
-    ax.set_title("Figure 8.3c: glycemic ranges by TDD stratum (CE=0) vs CE>0", fontsize=TITLE_FS)
+    ax.set_title("Figure 8.3c: glycemic ranges by TDD stratum (CE=0) vs CE>0 & CE>=3/BE>=3 refs",
+                 fontsize=TITLE_FS)
     fig.tight_layout()
     return fig
 
@@ -367,31 +380,37 @@ def _add_rolling_ref(pdf):
     return out.drop(columns="_d")
 
 
-def _violin_panel(ax, endpoint, label, strata_inf, cmp_strata):
-    """One endpoint's violin+box+dots panel, 4 groups: CE=0 Low/High + CE>0 Low/High. CE=0
-    carries the endpoint's glycemic-range colour, the CE>0 comparator is grey; Low = lighter,
-    High = darker (alpha). Drawing convention is shared via utils.plotting.violin_box_panel."""
+def _violin_panel(ax, endpoint, label, strata_inf, cmp_strata, hma_strata):
+    """One endpoint's violin+box+dots panel, 6 groups: CE=0 Low/High + CE>0 Low/High +
+    CE>=3/BE>=3 (HMA) Low/High. CE=0 carries the endpoint's glycemic-range colour, the CE>0
+    comparator is grey, the high meal-announcement arm is bronze; Low = lighter, High = darker
+    (alpha). Drawing convention is shared via utils.plotting.violin_box_panel."""
     base = endpoint_color(endpoint)
-    gdef = [("CE=0 Low", strata_inf, "Low", base), ("CE=0 High", strata_inf, "High", base),
-            ("CE>0 Low", cmp_strata, "Low", GRAY), ("CE>0 High", cmp_strata, "High", GRAY)]
+    # 2-line tick labels (arm \n stratum) so 6 groups don't collide — violin_box_panel appends the
+    # n-count as a 3rd line.
+    gdef = [("CE=0\nLow", strata_inf, "Low", base), ("CE=0\nHigh", strata_inf, "High", base),
+            ("CE>0\nLow", cmp_strata, "Low", GRAY), ("CE>0\nHigh", cmp_strata, "High", GRAY),
+            (f"{HIGH_MA_LABEL}\nLow", hma_strata, "Low", HIGH_MA_COLOR),
+            (f"{HIGH_MA_LABEL}\nHigh", hma_strata, "High", HIGH_MA_COLOR)]
     groups = [
         (gl, df.loc[df["tdd_stratum"] == st].groupby("_userId")[endpoint].mean().dropna().to_numpy(),
          color, 0.35 if st == "Low" else 0.7)
         for gl, df, st, color in gdef
     ]
-    violin_box_panel(ax, groups, title=label, title_color=base, separators=(2.5,))
+    violin_box_panel(ax, groups, title=label, title_color=base, separators=(2.5, 4.5))
 
 
-def figure_8_3a_violin(strata_inf, cmp_strata):
+def figure_8_3a_violin(strata_inf, cmp_strata, hma_strata):
     """Figure 8.3a (two semantic 2×2 grids): per-user means by TDD stratum, one grid per metric
     group. Returns {filename: figure}. Endpoint colour = glycemic range (Tidepool for the
-    non-range metrics); CE=0 coloured, CE>0 grey; Low lighter / High darker."""
+    non-range metrics); CE=0 coloured, CE>0 grey, CE>=3/BE>=3 bronze; Low lighter / High darker."""
     out = {}
     for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8.6))
+        fig, axes = plt.subplots(2, 2, figsize=(13, 8.6))
         for ax, (col, label) in zip(axes.ravel(), eps):
-            _violin_panel(ax, col, label, strata_inf, cmp_strata)
-        fig.suptitle(f"Figure 8.3a — {gtitle}\nper-user means by TDD stratum", fontsize=SUPTITLE_FS)
+            _violin_panel(ax, col, label, strata_inf, cmp_strata, hma_strata)
+        fig.suptitle(f"Figure 8.3a — {gtitle}\nper-user means by TDD stratum (CE=0, CE>0, CE>=3/BE>=3)",
+                     fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.91])
         out[f"figure_8_3a_{key}.png"] = fig
     return out
@@ -430,6 +449,10 @@ def run(
 
     # Primary strata (mean-TDD reference via tdd_ratio), per nested classification.
     strata = {cls_label: _ce0_strata(pdf, flag) for flag, cls_label in CLASSIFICATIONS}
+    # High meal-announcement (CE>=3/BE>=3) days, stratified Low/High by within-user TDD like CE=0
+    # days — same _ce0_strata machinery (overlapping reference, CE>=3/BE>=3 ⊂ CE>0). Used for the
+    # §12.3 supplement contrast + the 3rd group in the stratum figures (8.3a/8.3b/8.3c).
+    hma_strata = _ce0_strata(pdf, HIGH_MA_FLAG)
 
     table_8_3a_per_user_by_stratum(strata).to_csv(
         os.path.join(output_dir, "table_8_3a_per_user_by_stratum.csv"), index=False)
@@ -437,6 +460,10 @@ def run(
         os.path.join(output_dir, "table_8_3b_within_user_contrast.csv"), index=False)
     table_8_3c_lmm(strata, nma_stats).to_csv(
         os.path.join(output_dir, "table_8_3c_lmm_sensitivity.csv"), index=False)
+    # Appendix §12.3: within-user Low−High TDD contrast on CE>=3/BE>=3 days (mirrors Table 8.3b;
+    # parallels §8.1's §12.1 high-engagement supplement). Inherits the §8.3 D12 caveat.
+    table_8_3b_within_user({HIGH_MA_LABEL: hma_strata}, nma_stats).to_csv(
+        os.path.join(output_dir, "table_12_3a_high_engagement_tdd_strata.csv"), index=False)
 
     # Sensitivities: terciles, and median-TDD reference. _tercile_strata labels Low/Mid/High;
     # the supplemental Table 8.3a reports all three, the within-user contrast uses only Low/High.
@@ -463,8 +490,8 @@ def run(
     strata_inf = strata["CE=0/BE<=inf"]
     cmp_strata = _ce0_strata(pdf, COMPARATOR_FLAG)
     figs = {}
-    figs.update(figure_8_3a_violin(strata_inf, cmp_strata))     # two 2×2 grid figures
-    figs.update(figure_8_3b_paired_delta(strata, cmp_strata))   # two 2×2 grid figures
+    figs.update(figure_8_3a_violin(strata_inf, cmp_strata, hma_strata))     # two 2×2 grid figures
+    figs.update(figure_8_3b_paired_delta(strata, cmp_strata, hma_strata))   # two 2×2 grid figures
     figs["figure_8_3c_stacked_ranges.png"] = figure_8_3c_stacked(pdf, strata_inf)
     figs["figure_8_3d_R_distribution.png"] = figure_8_3d_r_dist(strata_inf)
     figs["figure_8_3e_tir_vs_tdd_percentile.png"] = figure_8_3e_tir_vs_tdd_pct(pdf)

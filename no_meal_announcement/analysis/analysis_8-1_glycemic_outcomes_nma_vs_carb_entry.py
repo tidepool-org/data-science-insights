@@ -104,6 +104,8 @@ from utils.data_loader import (  # noqa: E402
 from utils.plotting import (  # noqa: E402
     GRAY,
     GRIDS,
+    HIGH_MA_ALPHA,
+    HIGH_MA_COLOR,
     RANGE_COLORS,
     RANGE_COLS,
     SUPTITLE_FS,
@@ -121,10 +123,8 @@ BOOTSTRAP_SEED = 20260520
 # are shared across §8.1–§8.3 via utils.plotting.
 NMA_ARM_ALPHAS = [0.30, 0.50, 0.78]   # BE=0 / BE≤1 / BE≤∞, graded by breadth
 COMPARATOR_ALPHA = 0.65
-# High meal-announcement (CE>=3/BE>=3) 5th-category styling for figures — a distinct bronze/gold
-# (the heavy-announcement end), separate from the range colours and the grey CE>0 comparator.
-HIGH_MA_COLOR = "#9c6b30"
-HIGH_MA_ALPHA = 0.70
+# High meal-announcement (CE>=3/BE>=3) 5th-category styling (bronze) now lives in utils.plotting
+# (HIGH_MA_COLOR / HIGH_MA_ALPHA), shared across §8.1–§8.3; imported above.
 
 # Behavioral metrics for Table 8.1c (CE>0 days). PLN-1008 §7.5 lists meal boluses,
 # manual/correction boluses, announced carbs, and TDD. There is no dedicated meal-bolus

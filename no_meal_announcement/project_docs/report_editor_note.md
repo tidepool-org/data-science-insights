@@ -1,7 +1,8 @@
-# Report-editor note — §8.1 & Appendix §12 (PLN-1008 NMA)
+# Report-editor note — §8.1–§8.3 & Appendix §12 (PLN-1008 NMA)
 
-_As of 2026-06-04. For whoever assembles the report from the analysis outputs. Outputs live in
-`analysis/outputs/analysis_8_1/{adult,pediatric,all}/` — every table/figure is produced per cohort._
+_As of 2026-06-05. For whoever assembles the report from the analysis outputs. Outputs live in
+`analysis/outputs/analysis_8_{1,2,3}/{adult,pediatric,all}/` — every table/figure is produced per
+cohort. Sections 1–6 below are §8.1-specific; section 7 covers the §8.2/§8.3 high-engagement additions._
 
 ## 1. Numbering scheme
 
@@ -78,3 +79,30 @@ The plan-locked Tables **8.1a/8.1b/8.1c are unchanged** in number/meaning.
   robust to temporal matching.
 
 _Provenance for every choice above lives in `decisions.md` (D5, D11, D12, D13, D15, D17)._
+
+## 7. §8.2 / §8.3 high-engagement (CE≥3/BE≥3) additions (2026-06-05, D18)
+
+The §8.1 "high-engagement" / high meal-announcement (HMA) arm (CE≥3/BE≥3) was propagated into §8.2
+and §8.3 so they parallel §8.1. The same caveat as §8.1 applies: **CE≥3/BE≥3 ⊂ CE>0**, so these are
+an **overlapping reference** ("heavy vs typical meal day"), deliberate — not a disjoint partition.
+HMA renders in **bronze** (#9c6b30) everywhere, matching §8.1's 5th arm.
+
+- **§8.2** (`analysis/outputs/analysis_8_2/{cohort}/`):
+  - Descriptive figures gain HMA as a 3rd day type beside NMA and CE>0 — **4 → 6 cells per strategy
+    pair**: `figure_8_2a_violin_grid{1,2}_*` (per-user means), `figure_8_2c_interaction_grid{1,2}_*`
+    (a bronze HMA marginal-mean line added), `figure_8_2d_stacked_bars` (HMA cells repeat across the
+    3 classification subplots — HMA doesn't vary by classification; shown for parallel comparison).
+  - **Appendix §12.2** `table_12_2a_high_engagement_interaction.csv` — the day_type ∈ {CE≥3/BE≥3, CE>0}
+    × delivery_strategy interaction (same columns as Table 8.2b; reference = CE>0, so the main
+    day-type coefficient is **CE≥3/BE≥3 − CE>0**). Thin HMA×autobolus-on cells may be `converged=False`.
+- **§8.3** (`analysis/outputs/analysis_8_3/{cohort}/`):
+  - HMA days are stratified Low/High by within-user TDD like CE=0 days and shown as a 3rd group
+    (bronze): `figure_8_3a_grid{1,2}_*` (6 violins: CE=0 / CE>0 / CE≥3-BE≥3, each Low&High),
+    `figure_8_3b_grid{1,2}_*` (3rd Low−High overlay), `figure_8_3c_stacked_ranges` (4th reference bar).
+  - **Appendix §12.3** `table_12_3a_high_engagement_tdd_strata.csv` — within-user Low−High contrast on
+    CE≥3/BE≥3 days (mirrors Table 8.3b).
+  - ⚠️ **§8.3 / §12.3 TDD results are NOT yet citable** (decisions.md D12) — propagation adds parallel
+    structure only; it does not resolve D12.
+
+The plan defines no §8.2/§8.3 high-engagement material — everything in this section is **new
+supplementary** Appendix §12 content, parallel to §8.1's §12.1. Provenance: `decisions.md` D17, D18._

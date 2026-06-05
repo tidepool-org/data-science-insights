@@ -166,6 +166,16 @@ First tranche of the post-review changes.
 - **Restricted to CE=0-contributing users** — `restrict_comparator` now zeros `in_ce_ge3_be_ge3` alongside `in_ce_gt0`, so all arms describe the same cohort (CE≥3/BE≥3 1,290 users, matching CE>0's 1,324-user cohort).
 - All 3 cohorts regenerated. **Finding:** high-engagement days modestly worse than typical CE>0 (LMM TIR −0.9 / windowed −1.1); NMA days run ~+1.6 TIR above high-engagement days (fig 8.1c).
 
+## 2026-06-05 — High meal-announcement (CE>=3/BE>=3) arm propagated through §8.2 + §8.3 (D18)
+
+Carried the D17 high-engagement / "HMA" arm (`in_ce_ge3_be_ge3`) into §8.2 and §8.3 so they parallel §8.1's treatment. Scope: §8.2 + §8.3 (§8-supp deliberately left out — exploratory/non-prespecified). MJC: "propagate the HMA users through the rest of the document, starting with 8.2." See decisions.md **D18**.
+
+- **Shared styling hoisted.** `HIGH_MA_COLOR` (#9c6b30 bronze) + `HIGH_MA_ALPHA` moved from `analysis_8-1` into `utils/plotting.py` so §8.1/§8.2/§8.3 share one definition (replace-in-place, no shim, per conventions); §8.1 now imports them.
+- **§8.2** (`analysis_8-2_nma_by_delivery_strategy.py`): HMA shown as a 3rd, overlapping day type (HMA ⊂ CE>0, bronze) beside NMA and CE>0 in the descriptive figures — 8.2a violins / 8.2c interaction lines / 8.2d stacked bars go 4 → 6 cells per strategy pair. `build_day_type_frame` parametrized by treatment flag/label; new `build_display_frame` (3 day types) + `DISPLAY_CELLS`; `fit_interaction_models` parametrized with `treatments`/`treatment_label`. New **Appendix §12.2** `table_12_2a_high_engagement_interaction.csv` — the day_type ∈ {CE>=3/BE>=3, CE>0} × delivery_strategy interaction (same columns as Table 8.2b; reference = CE>0, so main_day = HMA − CE>0). Thin HMA×autobolus_on cells caught by the existing `converged=False` guards. Also commented out the leftover `%pip`/`dbutils` notebook preamble so the script is locally runnable like §8.1/§8.3.
+- **§8.3** (`analysis_8-3_nma_tdd_stratified.py`): HMA days stratified Low/High by within-user TDD via the existing `_ce0_strata(pdf, HIGH_MA_FLAG)` — shown as a 3rd group (bronze) in figures 8.3a (6 violins), 8.3b (3rd Low−High overlay), 8.3c (4th reference bar). New **Appendix §12.3** `table_12_3a_high_engagement_tdd_strata.csv` — within-user Low−High contrast on CE>=3/BE>=3 days (reuses `table_8_3b_within_user`, mirrors Table 8.3b). **Inherits the D12 caveat** (TDD/tercile results not yet citable) — parallel structure only, does not resolve D12.
+- Docs updated: decisions.md D18 (+ D17 marked extended), architecture.md, report_editor_note.md, todo.md.
+- **Pending:** regenerate adult/pediatric/all off the snapshot + spot-check the 6-cell/6-group figures (local Bash was unavailable at edit time); flesh out `run_test_analysis_8_{2,3}.py` for the new outputs.
+
 ## Pending / To do (deferred — not yet done)
 
 - **Rest of the team-review plan (not in this commit):** §8.3 two-view rank terciles (overall-reference + CE=0-reference, same-user-set gated) + CE>0 as an arm in Tables 8.3a/b/c; §8.3 Low/High × delivery-strategy (AB/TB) cross-tab; §8.4 carb-entry-rate by delivery strategy; run-tests for the new outputs.

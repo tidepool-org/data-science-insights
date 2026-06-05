@@ -24,19 +24,27 @@ Note: autobolus_on days are sparse (~2% of user-days), so within the stringent c
 some NMA × autobolus_on cells are too small to fit; those (classification, endpoint) cells are
 guarded and emitted as converged=False NaN rows rather than aborting the table.
 
+High meal-announcement (CE>=3/BE>=3) supplement — mirrors §8.1's high-engagement treatment:
+the descriptive figures (8.2a/8.2c/8.2d) show HMA as a 3rd, overlapping day type (HMA ⊂ CE>0,
+bronze) beside NMA and CE>0 (4 → 6 cells per strategy pair); and a parallel Appendix §12.2
+interaction contrast (day_type ∈ {CE>=3/BE>=3, CE>0} × strategy) is emitted alongside.
+
 Outputs (analysis/outputs/analysis_8_2/<cohort>/):
     table_8_2a_marginal_cells.csv   (per classification × endpoint × day_type × strategy:
                                      observed per-user-mean summary + model-estimated mean)
     table_8_2b_interaction.csv      (per classification × endpoint: main day-type, main
                                      strategy, and interaction coef/CI/p + n_users/n_days/converged)
-    figure_8_2a_tir_violin_box.png  (per-user TIR by classification × strategy, NMA vs CE>0)
-    figure_8_2b_tbr_violin_box.png  (per-user time <70, same layout)
-    figure_8_2c_interaction.png     (model-estimated marginal-mean TIR interaction plot)
-    figure_8_2d_stacked_bars.png    (mean time in glycemic ranges per cell)
+    table_12_2a_high_engagement_interaction.csv  (Appendix §12.2: CE>=3/BE>=3 vs CE>0 × strategy
+                                     interaction — same columns as 8.2b; overlapping reference)
+    figure_8_2a_violin_grid{1,2}_*.png    (per-user means by strategy × day type {NMA, CE>0, HMA},
+                                           broadest arm, all 8 endpoints, two 2×2 grids)
+    figure_8_2c_interaction_grid{1,2}_*.png  (model marginal-mean interaction lines {NMA, CE>0, HMA},
+                                           broadest arm, all 8)
+    figure_8_2d_stacked_bars.png    (mean time in glycemic ranges per cell, all 3 classifications × 6 cells)
 """
 
-%pip install statsmodels
-dbutils.library.restartPython()
+# %pip install statsmodels
+# dbutils.library.restartPython()
 
 import argparse
 import importlib.util
@@ -69,6 +77,8 @@ from utils.data_loader import (  # noqa: E402
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
     ENDPOINTS,
+    HIGH_MA_FLAG,
+    HIGH_MA_LABEL,
     MIN_AGE,
     STRATEGIES,
     STRATEGY_COL,
@@ -83,6 +93,8 @@ from utils.data_loader import (  # noqa: E402
 from utils.plotting import (  # noqa: E402
     GRAY,
     GRIDS,
+    HIGH_MA_ALPHA,
+    HIGH_MA_COLOR,
     LEGEND_FS,
     RANGE_COLORS,
     RANGE_COLS,
@@ -107,24 +119,57 @@ BOOTSTRAP_SEED = 20260520
 # comparator is rendered grey.
 
 
-def build_day_type_frame(pdf, nma_flag):
-    """Long day-level frame for one classification: NMA days (the flag) labeled
-    day_type='NMA', comparator days (in_ce_gt0) labeled 'CE>0', keeping only the two known
-    delivery strategies (ambiguous excluded). The arms are disjoint (CE=0 vs CE>0), so a day
-    belongs to at most one day_type."""
+def build_day_type_frame(pdf, treatment_flag, treatment_label=NMA_LABEL):
+    """Long 2-day-type frame for one interaction fit: treatment days (`treatment_flag`) labeled
+    `treatment_label`, comparator days (in_ce_gt0) labeled 'CE>0', keeping only the two known
+    delivery strategies (ambiguous excluded). The main pass uses the classification's CE=0 flag
+    (treatment_label='NMA', disjoint from CE>0); the §12.2 supplement passes HIGH_MA_FLAG /
+    HIGH_MA_LABEL (CE>=3/BE>=3 — note this is ⊂ CE>0, an overlapping reference, as in §8.1)."""
     strat_names = [s for s, _ in STRATEGIES]
-    nma = pdf.loc[pdf[nma_flag] == True].copy()  # noqa: E712
-    nma[DAY_TYPE_COL] = NMA_LABEL
+    treat = pdf.loc[pdf[treatment_flag] == True].copy()  # noqa: E712
+    treat[DAY_TYPE_COL] = treatment_label
     cmp = pdf.loc[pdf[COMPARATOR_FLAG] == True].copy()  # noqa: E712
     cmp[DAY_TYPE_COL] = COMPARATOR_LABEL
-    frame = pd.concat([nma, cmp], ignore_index=True)
+    frame = pd.concat([treat, cmp], ignore_index=True)
     return frame[frame[STRATEGY_COL].isin(strat_names)].copy()
 
 
-def fit_interaction_models(frames, nma_stats):
-    """Fit the day_type × delivery_strategy interaction LMM for every (classification,
-    endpoint). Returns one record per cell with the coefficient summary and the model's
-    marginal cell means (None when the fit was skipped/failed).
+# Display day types for the descriptive 6-cell figures (8.2a/8.2c/8.2d): the classification's NMA
+# days, the CE>0 comparator, and the high meal-announcement arm (CE>=3/BE>=3, bronze). HMA is an
+# overlapping subset of CE>0 (HMA ⊂ CE>0) shown as its own day type — descriptive, not a disjoint
+# partition (mirrors §8.1's 5th arm). (label, facecolor-source, alpha): 'base' = endpoint colour.
+DISPLAY_CELLS = [
+    (NMA_LABEL, "base", 0.70),
+    (COMPARATOR_LABEL, GRAY, 0.55),
+    (HIGH_MA_LABEL, HIGH_MA_COLOR, HIGH_MA_ALPHA),
+]
+
+
+def build_display_frame(pdf, nma_flag):
+    """Long 3-day-type frame for the descriptive figures: NMA days (`nma_flag`) labeled 'NMA',
+    CE>0 comparator days, and HMA (CE>=3/BE>=3) days — each labeled by day_type, two strategies
+    only. HMA overlaps CE>0 (its days appear under both labels); intentional, for the descriptive
+    6-cell display only (the inferential fits use the disjoint 2-day-type frames)."""
+    strat_names = [s for s, _ in STRATEGIES]
+    parts = []
+    for flag, label in [(nma_flag, NMA_LABEL), (COMPARATOR_FLAG, COMPARATOR_LABEL),
+                        (HIGH_MA_FLAG, HIGH_MA_LABEL)]:
+        sub = pdf.loc[pdf[flag] == True].copy()  # noqa: E712
+        sub[DAY_TYPE_COL] = label
+        parts.append(sub)
+    frame = pd.concat(parts, ignore_index=True)
+    return frame[frame[STRATEGY_COL].isin(strat_names)].copy()
+
+
+def fit_interaction_models(frames, nma_stats, treatments=CLASSIFICATIONS, treatment_label=NMA_LABEL):
+    """Fit the day_type × delivery_strategy interaction LMM for every (treatment, endpoint).
+    Returns one record per cell with the coefficient summary and the model's marginal cell means
+    (None when the fit was skipped/failed).
+
+    The main pass fits the 3 nested NMA classifications (treatment day_type = 'NMA' vs CE>0). The
+    §12.2 supplement passes treatments=[(HIGH_MA_FLAG, HIGH_MA_LABEL)], treatment_label=HIGH_MA_LABEL
+    to fit the high meal-announcement contrast (CE>=3/BE>=3 vs CE>0). The day_type reference is CE>0
+    in both (alphabetical), so main_day_coef = treatment − CE>0.
 
     Guards (mirror §8.1 create_table_8_1b): a fit is attempted only when both day_type levels
     and both delivery strategies are present, all four cells have >=2 contributing users, and
@@ -135,11 +180,11 @@ def fit_interaction_models(frames, nma_stats):
         print("  §8.2 LMM skipped: statsmodels not installed — interaction columns will be "
               "NaN. Install with `%pip install statsmodels` (or use an ML runtime).")
     strat_names = [s for s, _ in STRATEGIES]
-    day_types = [NMA_LABEL, COMPARATOR_LABEL]
+    day_types = [treatment_label, COMPARATOR_LABEL]
     cells = [(d, s) for d in day_types for s in strat_names]
 
     records = []
-    for nma_flag, cls_label in CLASSIFICATIONS:
+    for treat_flag, cls_label in treatments:
         frame = frames[cls_label]
         for col, ep_label in ENDPOINTS:
             sl = frame[["_userId", DAY_TYPE_COL, STRATEGY_COL, col]].dropna(subset=[col])
@@ -259,58 +304,70 @@ HEADLINE_CLS = CLASSIFICATIONS[-1][1]   # "CE=0/BE<=inf"
 
 
 def _cell_violin_groups(frame, endpoint, base):
-    """Violin groups for the 4 (strategy × day_type) cells of one endpoint, in the shape
-    utils.plotting.violin_box_panel expects: (label, values, colour, alpha). NMA cells carry
-    `base` (the endpoint range colour), CE>0 cells grey; ordered AB-NMA, AB-CE>0 | TB-NMA, TB-CE>0."""
+    """Violin groups for the 6 (strategy × day_type) cells of one endpoint, in the shape
+    utils.plotting.violin_box_panel expects: (label, values, colour, alpha). Day types per
+    strategy: NMA (the endpoint range colour), CE>0 (grey), HMA / CE>=3/BE>=3 (bronze); ordered
+    AB-NMA, AB-CE>0, AB-HMA | TB-NMA, TB-CE>0, TB-HMA."""
     groups = []
     for s_name, s_short in STRATEGIES:
-        for d in [NMA_LABEL, COMPARATOR_LABEL]:
+        for d, color_src, alpha in DISPLAY_CELLS:
             cell = frame[(frame[STRATEGY_COL] == s_name) & (frame[DAY_TYPE_COL] == d)]
             vals = cell.groupby("_userId")[endpoint].mean().dropna().to_numpy()
-            is_nma = d == NMA_LABEL
-            groups.append((f"{s_short}\n{d}", vals, base if is_nma else GRAY,
-                           0.7 if is_nma else 0.55))
+            color = base if color_src == "base" else color_src
+            groups.append((f"{s_short}\n{d}", vals, color, alpha))
     return groups
 
 
-def make_violin_grids(frames):
-    """Figure 8.2a: per-user mean endpoints by delivery strategy × day type (NMA vs CE>0) on the
+def make_violin_grids(display_frame):
+    """Figure 8.2a: per-user mean endpoints by delivery strategy × day type {NMA, CE>0, HMA} on the
     broadest classification (CE=0/BE≤∞), as the two shared 2×2 metric grids (all 8). Returns
-    {filename: figure}. NMA cells carry the endpoint range colour, CE>0 grey; a separator divides
-    the AB strategy from TB."""
-    frame = frames[HEADLINE_CLS]
+    {filename: figure}. NMA cells carry the endpoint range colour, CE>0 grey, HMA bronze; a
+    separator divides the AB strategy block from TB."""
     out = {}
     for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8.6))
+        fig, axes = plt.subplots(2, 2, figsize=(12.5, 8.6))
         for ax, (col, label) in zip(axes.ravel(), eps):
             base = endpoint_color(col)
-            violin_box_panel(ax, _cell_violin_groups(frame, col, base),
-                             title=label, title_color=base, separators=(2.5,))
-        fig.suptitle(f"Figure 8.2a — {gtitle}\nper-user means by strategy × day type (BE≤∞)",
-                     fontsize=SUPTITLE_FS)
+            violin_box_panel(ax, _cell_violin_groups(display_frame, col, base),
+                             title=label, title_color=base, separators=(3.5,))
+        fig.suptitle(f"Figure 8.2a — {gtitle}\nper-user means by strategy × day type "
+                     f"(NMA, CE>0, CE>=3/BE>=3; BE≤∞)", fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.91])
         out[f"figure_8_2a_violin_{key}.png"] = fig
     return out
 
 
-def make_interaction_grids(records):
-    """Figure 8.2c: model-estimated marginal-mean interaction (strategy on x, NMA vs CE>0 lines)
-    on the broadest classification (CE=0/BE≤∞), as the two shared 2×2 metric grids (all 8).
-    Returns {filename: figure}. Degenerate fits show a note; NMA = endpoint colour, CE>0 = grey."""
+def make_interaction_grids(records, hma_records):
+    """Figure 8.2c: model-estimated marginal-mean interaction (strategy on x; NMA, CE>0, and the
+    high meal-announcement CE>=3/BE>=3 arm as lines) on the broadest classification (CE=0/BE≤∞), as
+    the two shared 2×2 metric grids (all 8). The NMA & CE>0 lines come from the main NMA-vs-CE>0
+    fit; the HMA line from the §12.2 HMA-vs-CE>0 fit. Returns {filename: figure}. Degenerate fits
+    show a note; NMA = endpoint colour, CE>0 = grey, HMA = bronze."""
     strat_names = [s for s, _ in STRATEGIES]
     strat_short = [sh for _, sh in STRATEGIES]
     by_ep = {r["endpoint"]: r for r in records if r["classification"] == HEADLINE_CLS}
+    by_ep_hma = {r["endpoint"]: r for r in hma_records}
     out = {}
     for key, gtitle, eps in GRIDS:
         fig, axes = plt.subplots(2, 2, figsize=(10, 8))
         for ax, (col, label) in zip(axes.ravel(), eps):
             base = endpoint_color(col)
+            plotted = False
             rec = by_ep.get(col)
             mc = rec["marginal_cells"] if rec else None
             if mc:
                 for d, color in [(NMA_LABEL, base), (COMPARATOR_LABEL, GRAY)]:
                     ys = [mc.get((d, s), {}).get("mean", np.nan) for s in strat_names]
                     ax.plot(range(len(strat_names)), ys, marker="o", label=d, color=color)
+                plotted = True
+            rec_hma = by_ep_hma.get(col)
+            mc_hma = rec_hma["marginal_cells"] if rec_hma else None
+            if mc_hma:
+                ys = [mc_hma.get((HIGH_MA_LABEL, s), {}).get("mean", np.nan) for s in strat_names]
+                ax.plot(range(len(strat_names)), ys, marker="o", label=HIGH_MA_LABEL,
+                        color=HIGH_MA_COLOR)
+                plotted = True
+            if plotted:
                 ax.legend(fontsize=LEGEND_FS)
             else:
                 ax.text(0.5, 0.5, "model not fit\n(degenerate)", ha="center", va="center",
@@ -325,16 +382,18 @@ def make_interaction_grids(records):
     return out
 
 
-def make_figure_8_2d(frames):
+def make_figure_8_2d(display_frames):
     """Figure 8.2d: stacked bar of mean % time in each glycemic range per cell (strategy ×
-    day_type), one subplot per classification. Per-user mean within cell, then averaged across
-    users (equal weighting, as in §8.1)."""
+    day_type {NMA, CE>0, HMA}), one subplot per classification. Per-user mean within cell, then
+    averaged across users (equal weighting, as in §8.1). HMA (CE>=3/BE>=3 ⊂ CE>0) does not vary by
+    classification, so its two cells repeat across subplots — shown for parallel comparison."""
     fig, axes = plt.subplots(1, len(CLASSIFICATIONS),
-                             figsize=(6 * len(CLASSIFICATIONS), 7), squeeze=False, sharey=True)
+                             figsize=(7.5 * len(CLASSIFICATIONS), 7), squeeze=False, sharey=True)
     range_keys = [rc for rc, _ in RANGE_COLS]
+    day_type_labels = [d for d, _, _ in DISPLAY_CELLS]
 
     for ax, (nma_flag, cls_label) in zip(axes[0], CLASSIFICATIONS):
-        frame = frames[cls_label].copy()
+        frame = display_frames[cls_label].copy()
         frame["r_lt54"] = frame["tbr_very_low"]
         frame["r_54_70"] = frame["tbr"] - frame["tbr_very_low"]
         frame["r_70_180"] = frame["tir"]
@@ -344,7 +403,7 @@ def make_figure_8_2d(frames):
         bar_labels, user_ns = [], []
         means = {rc: [] for rc in range_keys}
         for s_name, s_short in STRATEGIES:
-            for d in [NMA_LABEL, COMPARATOR_LABEL]:
+            for d in day_type_labels:
                 cell = frame[(frame[STRATEGY_COL] == s_name) & (frame[DAY_TYPE_COL] == d)]
                 um = cell.groupby("_userId")[range_keys].mean()
                 bar_labels.append(f"{s_short}\n{d}")
@@ -429,13 +488,25 @@ def run(
     build_table_8_2a(frames, fits).to_csv(
         os.path.join(output_dir, "table_8_2a_marginal_cells.csv"), index=False)
 
-    # Figures (shared NMA conventions): 8.2a per-user violin grids (all 8, strategy × day type,
-    # broadest arm); 8.2c interaction-marginal-mean grids (all 8, broadest arm); 8.2d stacked
-    # glycemic ranges per cell across all three classifications.
+    # Appendix §12.2: high meal-announcement (CE>=3/BE>=3) vs CE>0 × strategy interaction — same
+    # model/columns as Table 8.2b, treatment day_type = the high-engagement arm (overlapping
+    # reference, CE>=3/BE>=3 ⊂ CE>0; mirrors §8.1's §12.1 high-engagement supplement).
+    hma_frames = {HIGH_MA_LABEL: build_day_type_frame(pdf, HIGH_MA_FLAG, HIGH_MA_LABEL)}
+    hma_fits = fit_interaction_models(hma_frames, nma_stats,
+                                      treatments=[(HIGH_MA_FLAG, HIGH_MA_LABEL)],
+                                      treatment_label=HIGH_MA_LABEL)
+    build_table_8_2b(hma_fits).to_csv(
+        os.path.join(output_dir, "table_12_2a_high_engagement_interaction.csv"), index=False)
+
+    # Figures (shared NMA conventions): 8.2a per-user violin grids (all 8, strategy × day type
+    # {NMA, CE>0, HMA}, broadest arm); 8.2c interaction-marginal-mean grids (all 8, broadest arm,
+    # + HMA line); 8.2d stacked glycemic ranges per cell across all three classifications.
+    display_frames = {cls_label: build_display_frame(pdf, nma_flag)
+                      for nma_flag, cls_label in CLASSIFICATIONS}
     figures = {}
-    figures.update(make_violin_grids(frames))       # figure_8_2a_violin_grid{1,2}_*.png
-    figures.update(make_interaction_grids(fits))    # figure_8_2c_interaction_grid{1,2}_*.png
-    figures["figure_8_2d_stacked_bars.png"] = make_figure_8_2d(frames)
+    figures.update(make_violin_grids(display_frames[HEADLINE_CLS]))  # figure_8_2a_violin_grid{1,2}_*.png
+    figures.update(make_interaction_grids(fits, hma_fits))           # figure_8_2c_interaction_grid{1,2}_*.png
+    figures["figure_8_2d_stacked_bars.png"] = make_figure_8_2d(display_frames)
     for fname, fig in figures.items():
         fig.savefig(os.path.join(output_dir, fname), dpi=150)
         plt.close(fig)
