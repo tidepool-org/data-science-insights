@@ -102,9 +102,9 @@ from utils.data_loader import (  # noqa: E402
     windowed_matched_means,
 )
 from utils.plotting import (  # noqa: E402
+    DAY_TYPE_COLORS,
     GRAY,
     GRIDS,
-    HIGH_MA_ALPHA,
     HIGH_MA_COLOR,
     RANGE_COLORS,
     RANGE_COLS,
@@ -117,14 +117,11 @@ from utils.plotting import (  # noqa: E402
 BOOTSTRAP_N = 1000
 BOOTSTRAP_SEED = 20260520
 
-# Per-user violin grids show the 4 arms (3 nested NMA + CE>0). NMA arms carry the endpoint's
-# glycemic-range colour, graded light→dark by breadth (BE=0 ⊂ BE≤1 ⊂ BE≤∞); CE>0 is grey.
-# Colours, the 2×2 metric grids, RANGE_COLORS/RANGE_COLS and the violin/histogram panel helpers
-# are shared across §8.1–§8.3 via utils.plotting.
-NMA_ARM_ALPHAS = [0.30, 0.50, 0.78]   # BE=0 / BE≤1 / BE≤∞, graded by breadth
-COMPARATOR_ALPHA = 0.65
-# High meal-announcement (CE>=3/BE>=3) 5th-category styling (bronze) now lives in utils.plotting
-# (HIGH_MA_COLOR / HIGH_MA_ALPHA), shared across §8.1–§8.3; imported above.
+# Per-user violin grids show the 5 arms (3 nested NMA + CE>0 + CE>=3/BE>=3). Each arm carries its
+# fixed DAY_TYPE_COLORS colour (supersedes D13's per-endpoint arm colouring): the 3 nested NMA/CE=0
+# arms on the green ramp (dark BE=0 → TIR-green BE≤1 → light BE≤∞), CE>0 grey, HMA bronze — the same
+# day-type palette shared across §8.1–§8.3 via utils.plotting, so day types read identically.
+VIOLIN_ALPHA = 0.72   # uniform fill alpha (the distinct day-type colours, not alpha, separate arms)
 
 # Behavioral metrics for Table 8.1c (CE>0 days). PLN-1008 §7.5 lists meal boluses,
 # manual/correction boluses, announced carbs, and TDD. There is no dedicated meal-bolus
@@ -535,38 +532,35 @@ def make_stacked_bar(pdf):
     return fig
 
 
-def arm_violin_groups(pdf, endpoint, *, base=None, include_high_ma=False):
+def arm_violin_groups(pdf, endpoint, *, include_high_ma=False):
     """Per-user-mean violin groups for the arms of one column, in the shape
-    utils.plotting.violin_box_panel expects: (label, values, colour, alpha). NMA arms carry `base`
-    (default the endpoint's glycemic-range colour) graded light→dark by breadth; CE>0 is grey.
-    `base` is overridable for non-glycemic columns (e.g. the supplement's TDD/bolus). With
-    `include_high_ma=True`, appends the CE>=3/BE>=3 high meal-announcement category (bronze) as a
-    5th group (used by §8.1 Figure 8.1b; off by default so other callers stay 4-arm)."""
-    base = base or endpoint_color(endpoint)
+    utils.plotting.violin_box_panel expects: (label, values, colour, alpha). Each arm carries its
+    fixed DAY_TYPE_COLORS colour (3 nested NMA/CE=0 arms on the green ramp, CE>0 grey, HMA bronze) at
+    a uniform VIOLIN_ALPHA. With `include_high_ma=True`, appends the CE>=3/BE>=3 high meal-announcement
+    category as a 5th group (used by §8.1 Figure 8.1b; off by default so other callers stay 4-arm)."""
     groups = [
-        (lab, per_user_arm_mean(pdf, endpoint, flag).dropna().to_numpy(), base, alpha)
-        for (flag, lab), alpha in zip(CLASSIFICATIONS, NMA_ARM_ALPHAS)
+        (lab, per_user_arm_mean(pdf, endpoint, flag).dropna().to_numpy(), DAY_TYPE_COLORS[lab], VIOLIN_ALPHA)
+        for flag, lab in CLASSIFICATIONS
     ]
     cmp_vals = per_user_arm_mean(pdf, endpoint, COMPARATOR_FLAG).dropna().to_numpy()
-    groups.append((COMPARATOR_LABEL, cmp_vals, GRAY, COMPARATOR_ALPHA))
+    groups.append((COMPARATOR_LABEL, cmp_vals, DAY_TYPE_COLORS[COMPARATOR_LABEL], VIOLIN_ALPHA))
     if include_high_ma:
         hi_vals = per_user_arm_mean(pdf, endpoint, HIGH_MA_FLAG).dropna().to_numpy()
-        groups.append((HIGH_MA_LABEL, hi_vals, HIGH_MA_COLOR, HIGH_MA_ALPHA))
+        groups.append((HIGH_MA_LABEL, hi_vals, DAY_TYPE_COLORS[HIGH_MA_LABEL], VIOLIN_ALPHA))
     return groups
 
 
 def make_violin_grids(pdf):
-    """Figure 8.1b: per-user mean endpoints across the 4 arms (3 nested NMA + CE>0), as the two
-    shared 2×2 metric grids (all 8 endpoints). Returns {filename: figure}. Endpoint colour =
-    glycemic range (Tidepool brand for the 3 non-range metrics); NMA arms graded light→dark by
-    breadth, CE>0 grey; a separator divides the NMA arms from the comparator."""
+    """Figure 8.1b: per-user mean endpoints across the 5 arms (3 nested NMA + CE>0 + CE>=3/BE>=3), as
+    the two shared 2×2 metric grids (all 8 endpoints). Returns {filename: figure}. Each arm carries
+    its fixed DAY_TYPE_COLORS colour (3 nested NMA on the green ramp, CE>0 grey, HMA bronze); the
+    panel title carries the endpoint's glycemic-range colour; separators divide NMA | CE>0 | HMA."""
     out = {}
     for key, gtitle, eps in GRIDS:
         fig, axes = plt.subplots(2, 2, figsize=(11.5, 8.6))
         for ax, (col, label) in zip(axes.ravel(), eps):
-            base = endpoint_color(col)
-            violin_box_panel(ax, arm_violin_groups(pdf, col, base=base, include_high_ma=True),
-                             title=label, title_color=base, separators=(3.5, 4.5))
+            violin_box_panel(ax, arm_violin_groups(pdf, col, include_high_ma=True),
+                             title=label, title_color=endpoint_color(col), separators=(3.5, 4.5))
         fig.suptitle(f"Figure 8.1b — {gtitle}\nper-user means by arm (+ CE>=3/BE>=3)", fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.91])
         out[f"figure_8_1b_violin_{key}.png"] = fig
@@ -667,8 +661,8 @@ def make_windowed_delta_grids(pdf):
 def make_windowed_violin_grids(pdf):
     """Figure 12.1b (two 2×2 grids): per-user windowed means by arm — the 3 nested NMA arms, the CE>0
     comparator, and the CE>=3/BE>=3 high-engagement arm, each on the per-NMA-day ±(WINDOW_DAYS/2)-day
-    match. The windowed companion to the full-record violin grids (8.1b). NMA arms carry the
-    endpoint's glycemic-range colour graded light→dark by breadth; CE>0 grey; CE>=3/BE>=3 bronze."""
+    match. The windowed companion to the full-record violin grids (8.1b). Each arm carries its fixed
+    DAY_TYPE_COLORS colour (3 nested NMA on the green ramp, CE>0 grey, HMA bronze)."""
     win = {lab: windowed_matched_means(pdf, flag, COMPARATOR_FLAG, ENDPOINTS)[0]
            for flag, lab in CLASSIFICATIONS}
     broadest = CLASSIFICATIONS[-1][1]  # CE=0/BE<=inf — supplies the CE>0 windowed comparator group
@@ -677,14 +671,13 @@ def make_windowed_violin_grids(pdf):
     for key, gtitle, eps in GRIDS:
         fig, axes = plt.subplots(2, 2, figsize=(11.5, 8.6))
         for ax, (col, label) in zip(axes.ravel(), eps):
-            base = endpoint_color(col)
-            groups = [(lab, win[lab][f"{col}__nma"].dropna().to_numpy(), base, NMA_ARM_ALPHAS[i])
-                      for i, (_flag, lab) in enumerate(CLASSIFICATIONS)]
+            groups = [(lab, win[lab][f"{col}__nma"].dropna().to_numpy(), DAY_TYPE_COLORS[lab], VIOLIN_ALPHA)
+                      for _flag, lab in CLASSIFICATIONS]
             groups.append((COMPARATOR_LABEL, win[broadest][f"{col}__cmp"].dropna().to_numpy(),
-                           GRAY, COMPARATOR_ALPHA))
+                           DAY_TYPE_COLORS[COMPARATOR_LABEL], VIOLIN_ALPHA))
             groups.append((HIGH_MA_LABEL, win_hi[f"{col}__nma"].dropna().to_numpy(),
-                           HIGH_MA_COLOR, HIGH_MA_ALPHA))
-            violin_box_panel(ax, groups, title=label, title_color=base, separators=(3.5, 4.5))
+                           DAY_TYPE_COLORS[HIGH_MA_LABEL], VIOLIN_ALPHA))
+            violin_box_panel(ax, groups, title=label, title_color=endpoint_color(col), separators=(3.5, 4.5))
         fig.suptitle(f"Figure 12.1b — {gtitle}\nper-user windowed means by arm (NMA, CE>0, CE>=3/BE>=3; ±{WINDOW_DAYS // 2}d match)",
                      fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.91])
@@ -765,6 +758,8 @@ def run(
     cohort: Literal["adult", "pediatric", "all"] = "all",
     min_age=MIN_AGE,
     csv_path=None,
+    figures_only=False,
+    figs_filter=None,
 ):
     """Run Analysis 8.1 for one age cohort. Outputs land in
     outputs/analysis_8_1/<cohort>/ unless an explicit output_dir is given.
@@ -773,7 +768,13 @@ def run(
 
     Source priority: an explicit `csv_path`, else `spark.table(analysis_ready_table)` when
     a Spark session is given, else (running locally, no Spark) the CSV snapshot that
-    data_staging/export_user_day_analysis_ready.py writes — outputs/<table-name>.csv."""
+    data_staging/export_user_day_analysis_ready.py writes — outputs/<table-name>.csv.
+
+    figures_only=True skips the SLOW table writes (LMM + cluster-bootstrap contrasts) and re-renders
+    only the figures, in place (existing table CSVs untouched) — for fast figure-tweak iteration; do a
+    full run first so the tables exist. figs_filter (a substring, e.g. "8_1b") renders only matching
+    figure builders (tags: 8_1a/b/c, 12_1a/b/c) and implies figures_only."""
+    figures_only = figures_only or figs_filter is not None  # filtering figures ⇒ skip the tables
     fda_stats = load_fda_statistics()
     nma_stats = load_nma_statistics()
     here = analysis_dir()
@@ -783,8 +784,8 @@ def run(
     # renamed/removed outputs). Only the per-cohort dir is wiped — the sibling `supplement/`
     # dir (exploratory weighting-sensitivity artifacts) and the parent-level combined table
     # are left untouched.
-    if os.path.isdir(output_dir):
-        shutil.rmtree(output_dir)
+    if os.path.isdir(output_dir) and not figures_only:
+        shutil.rmtree(output_dir)  # full run starts clean; figures_only overwrites PNGs in place
     os.makedirs(output_dir, exist_ok=True)
 
     if csv_path is None and spark is None:
@@ -803,51 +804,69 @@ def run(
     pdf = filter_cohort(pdf, cohort=cohort, min_age=min_age)
     pdf = restrict_comparator(pdf)
 
-    # Method A paired contrasts.
-    contrasts = contrasts_table(pdf, fda_stats)
-    print(contrasts.to_string(index=False))
-    contrasts.to_csv(os.path.join(output_dir, "table_8_1a_expanded.csv"), index=False)
+    # ---- Tables (SLOW: LMM + cluster-bootstrap contrasts). Skipped under figures_only so a figure
+    # tweak re-renders in seconds without recomputing the statistics. ----
+    contrasts = None
+    if not figures_only:
+        # Method A paired contrasts.
+        contrasts = contrasts_table(pdf, fda_stats)
+        print(contrasts.to_string(index=False))
+        contrasts.to_csv(os.path.join(output_dir, "table_8_1a_expanded.csv"), index=False)
 
-    # Sample Information (Table 1) for this cohort — age + sex demographics.
-    create_sample_information(pdf).to_csv(
-        os.path.join(output_dir, "sample_information.csv"), index=False)
-    # Sex-missingness sensitivity (FDA §8.5 analog): recorded vs missing sex on baselines.
-    create_sex_missingness_sensitivity(pdf).to_csv(
-        os.path.join(output_dir, "sex_missingness_sensitivity.csv"), index=False)
-    # Secondary objective (§4 bullet 3): NMA-day-type frequency + per-user distribution.
-    create_nma_day_frequency(pdf).to_csv(
-        os.path.join(output_dir, "nma_day_frequency.csv"), index=False)
+        # Sample Information (Table 1) for this cohort — age + sex demographics.
+        create_sample_information(pdf).to_csv(
+            os.path.join(output_dir, "sample_information.csv"), index=False)
+        # Sex-missingness sensitivity (FDA §8.5 analog): recorded vs missing sex on baselines.
+        create_sex_missingness_sensitivity(pdf).to_csv(
+            os.path.join(output_dir, "sex_missingness_sensitivity.csv"), index=False)
+        # Secondary objective (§4 bullet 3): NMA-day-type frequency + per-user distribution.
+        create_nma_day_frequency(pdf).to_csv(
+            os.path.join(output_dir, "nma_day_frequency.csv"), index=False)
 
-    # Tables 8.1a / 8.1b / 8.1c.
-    create_table_8_1a(pdf).to_csv(os.path.join(output_dir, "table_8_1a_per_user_means.csv"), index=False)
-    create_table_8_1b(pdf, nma_stats).to_csv(os.path.join(output_dir, "table_8_1b_lmm_contrasts.csv"), index=False)
-    create_table_8_1c(pdf).to_csv(os.path.join(output_dir, "table_8_1c_behavioral_summary.csv"), index=False)
-    # Table 12.1 (windowed-comparator sensitivity): NMA vs CE>0 with a per-NMA-day ±45d match.
-    create_windowed_contrast_table(pdf, fda_stats).to_csv(
-        os.path.join(output_dir, "table_12_1a_windowed_sensitivity.csv"), index=False)
-    # Appendix §12.1: the high meal-announcement arm (CE>=3/BE>=3) contrasted vs CE>0 — full-record
-    # LMM (table_12_1b_high_engagement_lmm) + windowed (table_12_1c_high_engagement_windowed). NB CE>=3/BE>=3 ⊂ CE>0 (overlapping
-    # reference, "heavy vs typical meal day"); Table 8.1a already carries the descriptive column.
-    high_ma = [(HIGH_MA_FLAG, HIGH_MA_LABEL)]
-    create_table_8_1b(pdf, nma_stats, classifications=high_ma).to_csv(
-        os.path.join(output_dir, "table_12_1b_high_engagement_lmm.csv"), index=False)
-    create_windowed_contrast_table(pdf, fda_stats, classifications=high_ma).to_csv(
-        os.path.join(output_dir, "table_12_1c_high_engagement_windowed.csv"), index=False)
+        # Tables 8.1a / 8.1b / 8.1c.
+        create_table_8_1a(pdf).to_csv(os.path.join(output_dir, "table_8_1a_per_user_means.csv"), index=False)
+        create_table_8_1b(pdf, nma_stats).to_csv(os.path.join(output_dir, "table_8_1b_lmm_contrasts.csv"), index=False)
+        create_table_8_1c(pdf).to_csv(os.path.join(output_dir, "table_8_1c_behavioral_summary.csv"), index=False)
+        # Table 12.1 (windowed-comparator sensitivity): NMA vs CE>0 with a per-NMA-day ±45d match.
+        create_windowed_contrast_table(pdf, fda_stats).to_csv(
+            os.path.join(output_dir, "table_12_1a_windowed_sensitivity.csv"), index=False)
+        # Appendix §12.1: the high meal-announcement arm (CE>=3/BE>=3) contrasted vs CE>0 — full-record
+        # LMM (table_12_1b_high_engagement_lmm) + windowed (table_12_1c_high_engagement_windowed). NB CE>=3/BE>=3 ⊂ CE>0 (overlapping
+        # reference, "heavy vs typical meal day"); Table 8.1a already carries the descriptive column.
+        high_ma = [(HIGH_MA_FLAG, HIGH_MA_LABEL)]
+        create_table_8_1b(pdf, nma_stats, classifications=high_ma).to_csv(
+            os.path.join(output_dir, "table_12_1b_high_engagement_lmm.csv"), index=False)
+        create_windowed_contrast_table(pdf, fda_stats, classifications=high_ma).to_csv(
+            os.path.join(output_dir, "table_12_1c_high_engagement_windowed.csv"), index=False)
 
-    # Figures (shared NMA conventions). §8.1 main set: 8.1a stacked ranges by arm; 8.1b per-user
-    # violin grids (all 8 endpoints, 5 arms); 8.1c paired-difference grids (all 8, broadest arm).
-    # Appendix §12.1 windowed (±45d) companions mirror that order — 12.1a stacked, 12.1b violins, 12.1c Δ-hist.
-    figures = {"figure_8_1a_stacked_bars.png": make_stacked_bar(pdf)}
-    figures.update(make_violin_grids(pdf))         # figure_8_1b_violin_grid{1,2}_*.png
-    figures.update(make_paired_delta_grids(pdf))   # figure_8_1c_paired_delta_grid{1,2}_*.png
-    figures["figure_12_1a_windowed_stacked_bars.png"] = make_windowed_stacked_bar(pdf)
-    figures.update(make_windowed_violin_grids(pdf)) # figure_12_1b_windowed_violin_grid{1,2}_*.png
-    figures.update(make_windowed_delta_grids(pdf))  # figure_12_1c_windowed_delta_grid{1,2}_*.png
-    for fname, fig in figures.items():
-        fig.savefig(os.path.join(output_dir, fname), dpi=150)
-        plt.close(fig)
+    # ---- Figures. Each builder is a thunk → {filename: figure}, keyed by a short tag; figs_filter
+    # (a substring) renders only matching builders. §8.1 main set: 8.1a stacked ranges by arm; 8.1b
+    # per-user violin grids (all 8 endpoints, 5 arms); 8.1c paired-difference grids. Appendix §12.1
+    # windowed (±45d) companions mirror that order — 12.1a stacked, 12.1b violins, 12.1c Δ-hist. ----
+    fig_builders = {
+        "8_1a": lambda: {"figure_8_1a_stacked_bars.png": make_stacked_bar(pdf)},
+        "8_1b": lambda: make_violin_grids(pdf),
+        "8_1c": lambda: make_paired_delta_grids(pdf),
+        "12_1a": lambda: {"figure_12_1a_windowed_stacked_bars.png": make_windowed_stacked_bar(pdf)},
+        "12_1b": lambda: make_windowed_violin_grids(pdf),
+        "12_1c": lambda: make_windowed_delta_grids(pdf),
+    }
+    n = 0
+    for key, build in fig_builders.items():
+        if figs_filter and figs_filter not in key:
+            continue
+        for fname, fig in build().items():
+            fig.savefig(os.path.join(output_dir, fname), dpi=150)
+            plt.close(fig)
+            n += 1
 
-    print(f"wrote analysis 8.1 ({cohort}) outputs to {output_dir}")
+    bits = []
+    if figures_only:
+        bits.append("figures_only — tables skipped")
+    if figs_filter:
+        bits.append(f"figs~'{figs_filter}'")
+    tag = f" ({'; '.join(bits)})" if bits else ""
+    print(f"wrote analysis 8.1 ({cohort}) — {n} figure(s){tag} to {output_dir}")
     return contrasts
 
 
@@ -856,16 +875,20 @@ def main(
     analysis_ready_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
     min_age=MIN_AGE,
     csv_path=None,
+    figures_only=False,
+    figs_filter=None,
 ):
     """Orchestrate the §7.6 cohort split: adult and pediatric reported separately, plus a
     pooled `all` sanity run. Each lands in its own outputs/analysis_8_1/<cohort>/ dir. The
     §6 min-age floor (MIN_AGE=6) is applied to every cohort. Pass `csv_path` to run locally
-    off the analysis-ready CSV snapshot (no Spark)."""
+    off the analysis-ready CSV snapshot (no Spark). figures_only / figs_filter forward the
+    fast figure-only path to each cohort run."""
     for cohort in ("adult", "pediatric", "all"):
         run(spark, analysis_ready_table, output_dir=None, cohort=cohort, min_age=min_age,
-            csv_path=csv_path)
-    # Combined Sample Information (Table 1) across the three cohorts.
-    _combine_sample_information()
+            csv_path=csv_path, figures_only=figures_only, figs_filter=figs_filter)
+    # Combined Sample Information (Table 1) across the three cohorts (a table — skip in figures-only).
+    if not (figures_only or figs_filter):
+        _combine_sample_information()
 
 
 if __name__ == "__main__":
@@ -879,6 +902,12 @@ if __name__ == "__main__":
     _parser.add_argument("--min_age", type=int, default=MIN_AGE,
                          help=f"§6 min-age floor in years (default {MIN_AGE}); known-younger "
                               "users dropped, unknown-age retained")
+    _parser.add_argument("--figures-only", dest="figures_only", action="store_true",
+                         help="re-render figures only, skipping the slow LMM/bootstrap table writes "
+                              "(do a full run first so the tables exist)")
+    _parser.add_argument("--figs", dest="figs_filter", default=None,
+                         help="render only figure builders whose tag contains this substring "
+                              "(e.g. 8_1b); implies --figures-only. Tags: 8_1a/b/c, 12_1a/b/c")
     _args, _ = _parser.parse_known_args()
 
     # Databricks injects a `spark` global; a local run has none. Resolve it safely so
@@ -890,7 +919,9 @@ if __name__ == "__main__":
         _spark = None
 
     if _args.cohort is None:
-        main(_spark, _args.analysis_ready_table, min_age=_args.min_age, csv_path=_args.csv_path)
+        main(_spark, _args.analysis_ready_table, min_age=_args.min_age, csv_path=_args.csv_path,
+             figures_only=_args.figures_only, figs_filter=_args.figs_filter)
     else:
         run(_spark, _args.analysis_ready_table, _args.output_dir,
-            cohort=_args.cohort, min_age=_args.min_age, csv_path=_args.csv_path)
+            cohort=_args.cohort, min_age=_args.min_age, csv_path=_args.csv_path,
+            figures_only=_args.figures_only, figs_filter=_args.figs_filter)

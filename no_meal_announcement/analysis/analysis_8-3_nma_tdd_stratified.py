@@ -132,6 +132,7 @@ from utils.data_loader import (  # noqa: E402
     restrict_comparator,
 )
 from utils.plotting import (  # noqa: E402
+    DAY_TYPE_COLORS,
     GRAY,
     GRIDS,
     HIGH_MA_COLOR,
@@ -444,17 +445,8 @@ def figure_8_3d_r_dist(strata_inf):
     return fig
 
 
-# Day-type colours for the rank-tercile CI-bar figure (8.3g) AND the TIR-vs-TDD-percentile scatter
-# (8.3e/12.3h), so the two figures share one palette: the 3 nested CE=0 classifications on a green
-# ramp (strictest BE=0 darkest → broadest BE≤∞ lightest), CE>0 grey, CE>=3/BE>=3 (HMA) bronze. Keyed
-# by the SUPPLEMENT_ARMS section labels.
-DAY_TYPE_COLORS = {
-    "CE=0/BE=0": "#00441b",                # very dark green (strictest CE=0)
-    "CE=0/BE<=1": endpoint_color("tir"),   # = the TIR / 70-180 green (shared palette)
-    "CE=0/BE<=inf": "#b7e075",             # light yellow-green (broadest CE=0) — widened ramp so the
-    COMPARATOR_LABEL: GRAY,                #   3 nested CE=0 categories stay distinct in the 8.3e scatter
-    HIGH_MA_LABEL: HIGH_MA_COLOR,          # CE>0 grey comparator; CE>=3/BE>=3 high meal-announce bronze
-}
+# DAY_TYPE_COLORS (the shared per-day-type palette) now lives in utils.plotting (imported above) so
+# §8.1/§8.2/§8.3 share one definition.
 
 
 def figure_8_3e_tir_vs_tdd_pct(pdf, *, fig_id="8.3e", tercile_bands=False):

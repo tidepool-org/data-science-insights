@@ -91,10 +91,8 @@ from utils.data_loader import (  # noqa: E402
     restrict_comparator,
 )
 from utils.plotting import (  # noqa: E402
-    GRAY,
+    DAY_TYPE_COLORS,
     GRIDS,
-    HIGH_MA_ALPHA,
-    HIGH_MA_COLOR,
     LEGEND_FS,
     RANGE_COLORS,
     RANGE_COLS,
@@ -113,10 +111,11 @@ PRIMARY_ENDPOINT = "tir"
 
 BOOTSTRAP_SEED = 20260520
 
-# Colours (RANGE_COLORS/RANGE_COLS for the stacked bars, endpoint range colours for the violins/
-# interaction lines) and the violin panel helper are shared across §8.1–§8.3 via utils.plotting.
-# In the per-endpoint figures the NMA day-type carries the endpoint's range colour and the CE>0
-# comparator is rendered grey.
+# Colours: the violins (8.2a) + interaction lines (8.2c) use the shared fixed DAY_TYPE_COLORS palette
+# (supersedes D13's per-endpoint arm colouring) so day types read identically across §8.1–§8.3 — NMA
+# = the broadest CE=0 arm's green (this figure uses HEADLINE_CLS = CE=0/BE≤∞), CE>0 grey, CE>=3/BE>=3
+# bronze; the stacked bars (8.2d) keep RANGE_COLORS (by glycemic range). All shared via utils.plotting.
+VIOLIN_ALPHA = 0.72   # uniform fill alpha (the distinct day-type colours, not alpha, separate cells)
 
 
 def build_day_type_frame(pdf, treatment_flag, treatment_label=NMA_LABEL):
@@ -134,14 +133,16 @@ def build_day_type_frame(pdf, treatment_flag, treatment_label=NMA_LABEL):
     return frame[frame[STRATEGY_COL].isin(strat_names)].copy()
 
 
-# Display day types for the descriptive 6-cell figures (8.2a/8.2c/8.2d): the classification's NMA
-# days, the CE>0 comparator, and the high meal-announcement arm (CE>=3/BE>=3, bronze). HMA is an
-# overlapping subset of CE>0 (HMA ⊂ CE>0) shown as its own day type — descriptive, not a disjoint
-# partition (mirrors §8.1's 5th arm). (label, facecolor-source, alpha): 'base' = endpoint colour.
+# Display day types for the descriptive 6-cell figures (8.2a/8.2c): the classification's NMA days,
+# the CE>0 comparator, and the high meal-announcement arm (CE>=3/BE>=3). HMA is an overlapping subset
+# of CE>0 (HMA ⊂ CE>0) shown as its own day type — descriptive, not a disjoint partition (mirrors
+# §8.1's 5th arm). (label, colour, alpha) from the shared DAY_TYPE_COLORS: NMA = the broadest CE=0
+# arm's green (CLASSIFICATIONS[-1], = CE=0/BE≤∞, the HEADLINE_CLS these figures plot), CE>0 grey,
+# HMA bronze.
 DISPLAY_CELLS = [
-    (NMA_LABEL, "base", 0.70),
-    (COMPARATOR_LABEL, GRAY, 0.55),
-    (HIGH_MA_LABEL, HIGH_MA_COLOR, HIGH_MA_ALPHA),
+    (NMA_LABEL, DAY_TYPE_COLORS[CLASSIFICATIONS[-1][1]], VIOLIN_ALPHA),
+    (COMPARATOR_LABEL, DAY_TYPE_COLORS[COMPARATOR_LABEL], VIOLIN_ALPHA),
+    (HIGH_MA_LABEL, DAY_TYPE_COLORS[HIGH_MA_LABEL], VIOLIN_ALPHA),
 ]
 
 
@@ -303,17 +304,16 @@ def build_table_8_2a(frames, records):
 HEADLINE_CLS = CLASSIFICATIONS[-1][1]   # "CE=0/BE<=inf"
 
 
-def _cell_violin_groups(frame, endpoint, base):
+def _cell_violin_groups(frame, endpoint):
     """Violin groups for the 6 (strategy × day_type) cells of one endpoint, in the shape
-    utils.plotting.violin_box_panel expects: (label, values, colour, alpha). Day types per
-    strategy: NMA (the endpoint range colour), CE>0 (grey), HMA / CE>=3/BE>=3 (bronze); ordered
+    utils.plotting.violin_box_panel expects: (label, values, colour, alpha). Day types per strategy
+    carry their fixed DAY_TYPE_COLORS colour (NMA green, CE>0 grey, HMA bronze); ordered
     AB-NMA, AB-CE>0, AB-HMA | TB-NMA, TB-CE>0, TB-HMA."""
     groups = []
     for s_name, s_short in STRATEGIES:
-        for d, color_src, alpha in DISPLAY_CELLS:
+        for d, color, alpha in DISPLAY_CELLS:
             cell = frame[(frame[STRATEGY_COL] == s_name) & (frame[DAY_TYPE_COL] == d)]
             vals = cell.groupby("_userId")[endpoint].mean().dropna().to_numpy()
-            color = base if color_src == "base" else color_src
             groups.append((f"{s_short}\n{d}", vals, color, alpha))
     return groups
 
@@ -327,9 +327,8 @@ def make_violin_grids(display_frame):
     for key, gtitle, eps in GRIDS:
         fig, axes = plt.subplots(2, 2, figsize=(12.5, 8.6))
         for ax, (col, label) in zip(axes.ravel(), eps):
-            base = endpoint_color(col)
-            violin_box_panel(ax, _cell_violin_groups(display_frame, col, base),
-                             title=label, title_color=base, separators=(3.5,))
+            violin_box_panel(ax, _cell_violin_groups(display_frame, col),
+                             title=label, title_color=endpoint_color(col), separators=(3.5,))
         fig.suptitle(f"Figure 8.2a — {gtitle}\nper-user means by strategy × day type "
                      f"(NMA, CE>0, CE>=3/BE>=3; BE≤∞)", fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, 0.91])
@@ -356,7 +355,8 @@ def make_interaction_grids(records, hma_records):
             rec = by_ep.get(col)
             mc = rec["marginal_cells"] if rec else None
             if mc:
-                for d, color in [(NMA_LABEL, base), (COMPARATOR_LABEL, GRAY)]:
+                for d, color in [(NMA_LABEL, DAY_TYPE_COLORS[CLASSIFICATIONS[-1][1]]),
+                                 (COMPARATOR_LABEL, DAY_TYPE_COLORS[COMPARATOR_LABEL])]:
                     ys = [mc.get((d, s), {}).get("mean", np.nan) for s in strat_names]
                     ax.plot(range(len(strat_names)), ys, marker="o", label=d, color=color)
                 plotted = True
@@ -365,7 +365,7 @@ def make_interaction_grids(records, hma_records):
             if mc_hma:
                 ys = [mc_hma.get((HIGH_MA_LABEL, s), {}).get("mean", np.nan) for s in strat_names]
                 ax.plot(range(len(strat_names)), ys, marker="o", label=HIGH_MA_LABEL,
-                        color=HIGH_MA_COLOR)
+                        color=DAY_TYPE_COLORS[HIGH_MA_LABEL])
                 plotted = True
             if plotted:
                 ax.legend(fontsize=LEGEND_FS)
@@ -441,6 +441,8 @@ def run(
     cohort: Literal["adult", "pediatric", "all"] = "all",
     min_age=MIN_AGE,
     csv_path=None,
+    figures_only=False,
+    figs_filter=None,
 ):
     """Run Analysis 8.2 for one age cohort. Outputs land in outputs/analysis_8_2/<cohort>/
     unless an explicit output_dir is given. `min_age` defaults to the §6 floor (MIN_AGE=6);
@@ -448,13 +450,21 @@ def run(
 
     Source priority: an explicit `csv_path`, else `spark.table(analysis_ready_table)` when a
     Spark session is given, else (local, no Spark) the CSV snapshot that
-    data_staging/export_user_day_analysis_ready.py writes — outputs/<table-name>.csv."""
+    data_staging/export_user_day_analysis_ready.py writes — outputs/<table-name>.csv.
+
+    figures_only=True skips the table writes and re-renders only the figures, in place (existing
+    table CSVs untouched). figs_filter (a substring, e.g. "8_2a") renders only matching figure
+    builders (tags: 8_2a/8_2c/8_2d) and implies figures_only. NB the slow part is the LMM interaction
+    fit, which figure 8.2c needs — so it is computed only when tables run OR 8.2c is being rendered
+    (tweaking 8.2a/8.2d alone skips it)."""
+    figures_only = figures_only or figs_filter is not None  # filtering figures ⇒ skip the tables
     nma_stats = load_nma_statistics()
     here = analysis_dir()
     if output_dir is None:
         output_dir = os.path.join(here, "outputs", "analysis_8_2", cohort)
-    # Clear this cohort's dir first so it reflects only the current run.
-    if os.path.isdir(output_dir):
+    # Clear this cohort's dir first so it reflects only the current run (full run only; figures_only
+    # overwrites PNGs in place, leaving the table CSVs intact).
+    if os.path.isdir(output_dir) and not figures_only:
         shutil.rmtree(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -477,41 +487,63 @@ def run(
     strat_names = [s for s, _ in STRATEGIES]
     pdf = pdf[pdf[STRATEGY_COL].isin(strat_names)].copy()
 
-    # Build the per-classification NMA/CE>0 frames once; reuse for tables + figures.
+    # Build the per-classification NMA/CE>0 frames + display frames once (fast); reuse for tables +
+    # figures.
     frames = {cls_label: build_day_type_frame(pdf, nma_flag)
               for nma_flag, cls_label in CLASSIFICATIONS}
-
-    fits = fit_interaction_models(frames, nma_stats)
-    table_b = build_table_8_2b(fits)
-    print(table_b.to_string(index=False))
-    table_b.to_csv(os.path.join(output_dir, "table_8_2b_interaction.csv"), index=False)
-    build_table_8_2a(frames, fits).to_csv(
-        os.path.join(output_dir, "table_8_2a_marginal_cells.csv"), index=False)
-
-    # Appendix §12.2: high meal-announcement (CE>=3/BE>=3) vs CE>0 × strategy interaction — same
-    # model/columns as Table 8.2b, treatment day_type = the high-engagement arm (overlapping
-    # reference, CE>=3/BE>=3 ⊂ CE>0; mirrors §8.1's §12.1 high-engagement supplement).
-    hma_frames = {HIGH_MA_LABEL: build_day_type_frame(pdf, HIGH_MA_FLAG, HIGH_MA_LABEL)}
-    hma_fits = fit_interaction_models(hma_frames, nma_stats,
-                                      treatments=[(HIGH_MA_FLAG, HIGH_MA_LABEL)],
-                                      treatment_label=HIGH_MA_LABEL)
-    build_table_8_2b(hma_fits).to_csv(
-        os.path.join(output_dir, "table_12_2a_high_engagement_interaction.csv"), index=False)
-
-    # Figures (shared NMA conventions): 8.2a per-user violin grids (all 8, strategy × day type
-    # {NMA, CE>0, HMA}, broadest arm); 8.2c interaction-marginal-mean grids (all 8, broadest arm,
-    # + HMA line); 8.2d stacked glycemic ranges per cell across all three classifications.
     display_frames = {cls_label: build_display_frame(pdf, nma_flag)
                       for nma_flag, cls_label in CLASSIFICATIONS}
-    figures = {}
-    figures.update(make_violin_grids(display_frames[HEADLINE_CLS]))  # figure_8_2a_violin_grid{1,2}_*.png
-    figures.update(make_interaction_grids(fits, hma_fits))           # figure_8_2c_interaction_grid{1,2}_*.png
-    figures["figure_8_2d_stacked_bars.png"] = make_figure_8_2d(display_frames)
-    for fname, fig in figures.items():
-        fig.savefig(os.path.join(output_dir, fname), dpi=150)
-        plt.close(fig)
 
-    print(f"wrote analysis 8.2 ({cohort}) outputs to {output_dir}")
+    # The LMM interaction fits are the slow step; figure 8.2c needs them, the tables need them, but
+    # figures 8.2a/8.2d don't — so fit only when tables run OR 8.2c is among the rendered figures.
+    renders_8_2c = (not figs_filter) or (figs_filter in "8_2c")
+    fits = hma_fits = None
+    if not figures_only or renders_8_2c:
+        fits = fit_interaction_models(frames, nma_stats)
+        # Appendix §12.2: high meal-announcement (CE>=3/BE>=3) vs CE>0 × strategy interaction — same
+        # model/columns as Table 8.2b, treatment day_type = the high-engagement arm (overlapping
+        # reference, CE>=3/BE>=3 ⊂ CE>0; mirrors §8.1's §12.1 high-engagement supplement).
+        hma_frames = {HIGH_MA_LABEL: build_day_type_frame(pdf, HIGH_MA_FLAG, HIGH_MA_LABEL)}
+        hma_fits = fit_interaction_models(hma_frames, nma_stats,
+                                          treatments=[(HIGH_MA_FLAG, HIGH_MA_LABEL)],
+                                          treatment_label=HIGH_MA_LABEL)
+
+    # ---- Tables. Skipped under figures_only so a figure tweak re-renders quickly. ----
+    table_b = None
+    if not figures_only:
+        table_b = build_table_8_2b(fits)
+        print(table_b.to_string(index=False))
+        table_b.to_csv(os.path.join(output_dir, "table_8_2b_interaction.csv"), index=False)
+        build_table_8_2a(frames, fits).to_csv(
+            os.path.join(output_dir, "table_8_2a_marginal_cells.csv"), index=False)
+        build_table_8_2b(hma_fits).to_csv(
+            os.path.join(output_dir, "table_12_2a_high_engagement_interaction.csv"), index=False)
+
+    # ---- Figures. Each builder is a thunk → {filename: figure}, keyed by a short tag; figs_filter
+    # (a substring) renders only matching builders. 8.2a per-user violin grids (strategy × day type
+    # {NMA, CE>0, HMA}, broadest arm); 8.2c interaction-marginal-mean grids (+ HMA line); 8.2d stacked
+    # glycemic ranges per cell across all three classifications. ----
+    fig_builders = {
+        "8_2a": lambda: make_violin_grids(display_frames[HEADLINE_CLS]),
+        "8_2c": lambda: make_interaction_grids(fits, hma_fits),
+        "8_2d": lambda: {"figure_8_2d_stacked_bars.png": make_figure_8_2d(display_frames)},
+    }
+    n = 0
+    for key, build in fig_builders.items():
+        if figs_filter and figs_filter not in key:
+            continue
+        for fname, fig in build().items():
+            fig.savefig(os.path.join(output_dir, fname), dpi=150)
+            plt.close(fig)
+            n += 1
+
+    bits = []
+    if figures_only:
+        bits.append("figures_only — tables skipped")
+    if figs_filter:
+        bits.append(f"figs~'{figs_filter}'")
+    tag = f" ({'; '.join(bits)})" if bits else ""
+    print(f"wrote analysis 8.2 ({cohort}) — {n} figure(s){tag} to {output_dir}")
     return table_b
 
 
@@ -520,12 +552,15 @@ def main(
     analysis_ready_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
     min_age=MIN_AGE,
     csv_path=None,
+    figures_only=False,
+    figs_filter=None,
 ):
     """Orchestrate the §7.6 cohort split: adult and pediatric reported separately, plus a
-    pooled `all` sanity run. Each lands in its own outputs/analysis_8_2/<cohort>/ dir."""
+    pooled `all` sanity run. Each lands in its own outputs/analysis_8_2/<cohort>/ dir.
+    figures_only / figs_filter forward the fast figure-only path to each cohort run."""
     for cohort in ("adult", "pediatric", "all"):
         run(spark, analysis_ready_table, output_dir=None, cohort=cohort, min_age=min_age,
-            csv_path=csv_path)
+            csv_path=csv_path, figures_only=figures_only, figs_filter=figs_filter)
 
 
 if __name__ == "__main__":
@@ -539,6 +574,12 @@ if __name__ == "__main__":
     _parser.add_argument("--min_age", type=int, default=MIN_AGE,
                          help=f"§6 min-age floor in years (default {MIN_AGE}); known-younger "
                               "users dropped, unknown-age retained")
+    _parser.add_argument("--figures-only", dest="figures_only", action="store_true",
+                         help="re-render figures only, skipping the slow LMM/table writes "
+                              "(do a full run first so the tables exist)")
+    _parser.add_argument("--figs", dest="figs_filter", default=None,
+                         help="render only figure builders whose tag contains this substring "
+                              "(e.g. 8_2a); implies --figures-only. Tags: 8_2a, 8_2c, 8_2d")
     _args, _ = _parser.parse_known_args()
 
     # Databricks injects a `spark` global; a local run has none.
@@ -548,7 +589,9 @@ if __name__ == "__main__":
         _spark = None
 
     if _args.cohort is None:
-        main(_spark, _args.analysis_ready_table, min_age=_args.min_age, csv_path=_args.csv_path)
+        main(_spark, _args.analysis_ready_table, min_age=_args.min_age, csv_path=_args.csv_path,
+             figures_only=_args.figures_only, figs_filter=_args.figs_filter)
     else:
         run(_spark, _args.analysis_ready_table, _args.output_dir,
-            cohort=_args.cohort, min_age=_args.min_age, csv_path=_args.csv_path)
+            cohort=_args.cohort, min_age=_args.min_age, csv_path=_args.csv_path,
+            figures_only=_args.figures_only, figs_filter=_args.figs_filter)

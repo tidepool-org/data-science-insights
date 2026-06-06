@@ -81,6 +81,21 @@ def endpoint_color(endpoint):
     return ENDPOINT_COLORS.get(endpoint, TIDEPOOL)
 
 
+# Fixed per-day-type palette — supersedes D13's per-endpoint arm colouring for the day-type figures
+# so the day types read identically across the document: the 3 nested NMA/CE=0 classifications on a
+# green ramp (strictest BE=0 darkest → broadest BE≤∞ lightest; the mid step = the TIR/70-180 green),
+# CE>0 grey, CE>=3/BE>=3 (HMA) bronze. Shared by §8.1 (8.1b/12.1b violins), §8.2 (8.2a violins, 8.2c
+# interaction lines) and §8.3 (8.3e/8.3g). Keys = the data_loader arm labels (COMPARATOR_LABEL /
+# HIGH_MA_LABEL / the CLASSIFICATIONS labels).
+DAY_TYPE_COLORS = {
+    "CE=0/BE=0": "#00441b",                # very dark green (strictest CE=0)
+    "CE=0/BE<=1": ENDPOINT_COLORS["tir"],  # = the TIR / 70-180 green
+    "CE=0/BE<=inf": "#b7e075",             # light yellow-green (broadest CE=0)
+    "CE>0": GRAY,                          # CE>0 comparator
+    "CE>=3/BE>=3": HIGH_MA_COLOR,          # CE>=3/BE>=3 high meal-announcement (bronze)
+}
+
+
 def violin_box_panel(ax, groups, *, title=None, title_color=None, separators=(), label_fs=TICK_FS):
     """Draw the standard violin + box + dots panel into `ax`.
 

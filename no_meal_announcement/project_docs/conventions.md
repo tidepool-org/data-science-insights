@@ -61,9 +61,12 @@ Many are inherited from `FDA_real_world_data/` (NMA imports FDA components rathe
 
 ## Figures
 
-- One shared vocabulary in `utils/plotting.py`: **range-based colours** (TIR green, <70/<54
-  coral/red, >180/>250 light/dark purple; mean glucose / CV / hypo = Tidepool brand blue).
-  Treatment arm (NMA / CE=0) carries the colour; CE>0 comparator is grey.
+- One shared vocabulary in `utils/plotting.py`. **Range-based colours** (TIR green, <70/<54
+  coral/red, >180/>250 light/dark purple; mean glucose / CV / hypo = Tidepool brand blue) for the
+  stacked-range bars + paired-difference Δ-histograms + panel titles. **Arm / day-type figures**
+  (violins, interaction lines) use the **fixed `DAY_TYPE_COLORS` palette** (D13 update 2026-06-06):
+  3 nested NMA/CE=0 arms on a green ramp (dark BE=0 → TIR-green BE≤1 → light BE≤∞), CE>0 grey,
+  CE>=3/BE>=3 bronze — same day-type colours in every panel and across §8.1–§8.3.
 - Per-user figures are **two 2×2 metric grids spanning all 8 endpoints** (Grid 1 target+safety:
   TIR/<70/<54/hypo; Grid 2 hyper+overall: >180/>250/mean/CV). Violins = dots-behind / box-on-top
   (orange median); paired-difference histograms = shared bin edges + mean lines.
