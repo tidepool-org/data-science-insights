@@ -68,7 +68,7 @@ The plan-locked Tables **8.1a/8.1b/8.1c are unchanged** in number/meaning.
   characterizes mixed-behaviour periods; the full-record §8.1 stays primary.
 - **§8.1 stringent-arm directional claims:** report none where Method A and Method B (LMM) diverge;
   only CE=0/BE≤∞ is robust (decisions.md D5).
-- **§8.3 TDD/tercile results are NOT yet citable** (decisions.md D12) — if the editor touches §8.3.
+- **§8.3 TDD-stratum:** cite the **rank terciles** (Table 8.3d + §12.3g–j; D12 RESOLVED, pending MJC sign-off), not the magnitude-based strata (8.3a/b/c, 12.3a–f) — see §7 + decisions.md D12.
 
 ## 6. Headline findings (framing)
 
@@ -98,23 +98,37 @@ HMA renders in **bronze** (#9c6b30) everywhere, matching §8.1's 5th arm.
 - **§8.3** (`analysis/outputs/analysis_8_3/{cohort}/`):
   - HMA days are stratified Low/High by within-user TDD like CE=0 days and shown as a 3rd group
     (bronze): `figure_8_3a_grid{1,2}_*` (6 violins: CE=0 / CE>0 / CE≥3-BE≥3, each Low&High),
-    `figure_8_3b_grid{1,2}_*` (3rd Low−High overlay), `figure_8_3c_stacked_ranges` (4th reference bar).
+    `figure_8_3b_grid{1,2}_*` (3rd Low−High overlay), `figure_8_3c_stacked_ranges` (now **10 stacked
+    bars** = 5 day types × Low/High, with labeled %s + dashed Low→High segment connectors; legend at bottom).
   - **Table 8.3a** (`table_8_3a_per_user_by_stratum.csv`) now carries **five sections** — the 3 nested
     CE=0 classifications **plus a CE>0 and a CE≥3/BE≥3 (HMA) section**, each split Low/High by TDD
-    (matches figure 8.3a's groups).
-  - **Appendix §12.3 supplement** (flat `*_12_3*` names, cf. §12.1/§12.2) collects the §8.3
-    sensitivities in three blocks:
+    (matches figure 8.3a's groups). This is the prespecified **mean-reference binary** (R cut at 1.0).
+  - **NEW primary rank terciles (D12 RESOLVED, 2026-06-05)** — **Table 8.3d**
+    (`table_8_3d_rank_tercile_strata.csv`): the same 5 sections split into **Low/Mid/High by within-user
+    TDD rank** over the user's *all* eligible days (overall reference, à la fig 8.3e), **same-user-set
+    gated** (equal user count across strata). Figures: **`figure_8_3f_grid{1,2}`** (9-group Low/Mid/High
+    violins) + **`figure_8_3g_grid{1,2}`** (the **5 day types** — 3 nested CE=0 + CE>0 + HMA — across
+    Low/Mid/High terciles as **staggered vertical 95% CI bars**, all 8 endpoints). Headline: TIR falls
+    monotonically Low→High (all-cohort 75.6/68.2/57.9); within-user Low−High TIR +17.6 (all cohorts).
+  - **Appendix §12.3 supplement** (flat `*_12_3*` names, cf. §12.1/§12.2):
     - **Median TDD reference** (R = tdd/median): `table_12_3a_median_per_user_by_stratum`,
       `figure_12_3a_median_grid{1,2}`, `table_12_3b_median_within_user`.
     - **Rolling-30-day mean reference**: `table_12_3c_rolling_per_user_by_stratum`,
       `figure_12_3c_rolling_grid{1,2}`, `table_12_3d_rolling_within_user`.
     - **HMA arm** (CE≥3/BE≥3, mean ref): `table_12_3e_high_engagement_within_user` (8.3b parallel) +
       `table_12_3f_high_engagement_lmm` (8.3c parallel).
-    The two alternative-reference per-user tables + violins carry the same 5 sections / 6 groups as the
-    primary; the within-user contrasts are CE=0. **The empirical-tercile outputs were dropped** (they
-    were the degenerate, not-apples-to-apples part of D12) — pending the planned two-view rank-tercile rework.
-  - ⚠️ **§8.3 / §12.3 TDD results are NOT yet citable** (decisions.md D12) — this is parallel/sensitivity
-    structure; it does not resolve D12.
+    - **Rest of the rank-tercile rework** (the views not promoted to primary): `table_12_3g_ce0_rank_tercile_strata`
+      (CE=0-reference tercile) + `figure_12_3g_ce0_grid{1,2}`; `table_12_3h_rank_binary_strata` (both
+      references' balanced binary Low/High); `table_12_3i/j_rank_within_user_{overall,ce0}` (within-user
+      bottom−top contrasts); `figure_12_3i_ce0_bars_grid{1,2}` (CE=0-reference companion of fig 8.3g —
+      5 day types × terciles, staggered 95% CI bars); `figure_12_3h_overall_tercile_scatter` (fig-8.3e
+      with tercile bands).
+    The median/rolling per-user tables + violins carry the same 5 sections / 6 groups as the primary
+    binary; the **empirical-tercile outputs were dropped** and replaced by the rank terciles above (D12).
+  - ✅ **§8.3 TDD-stratum citation:** the **rank-tercile** outputs (Table 8.3d + §12.3g–j) resolve D12
+    (same-user-set gated + outlier-robust; **citable pending MJC sign-off**). The **magnitude-based**
+    strata (mean-ref binary 8.3a/b/c; median/rolling/HMA §12.3a–f) are superseded by the rank views —
+    do not cite those on their own (decisions.md D12 RESOLUTION).
 
 The plan defines no §8.2/§8.3 high-engagement material — everything in this section is **new
 supplementary** Appendix §12 content, parallel to §8.1's §12.1. Provenance: `decisions.md` D17, D18._

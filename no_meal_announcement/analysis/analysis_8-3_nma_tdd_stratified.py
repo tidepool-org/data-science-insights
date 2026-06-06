@@ -22,24 +22,41 @@ stratified Low/High by within-user TDD just like CE=0 days, shown as a 3rd group
 primary stratum figures + Table 8.3a (bronze), and emitted in the Appendix §12.3 supplement (its
 own within-user contrast + day-level LMM). Overlapping reference (CE>=3/BE>=3 ⊂ CE>0).
 
+Same-user-set-gated rank terciles (D12 rework) replace the dropped empirical terciles: each day is
+labeled Low/Mid/High (or binary Low/High) by a balanced WITHIN-USER TDD RANK, in two reference views
+— OVERALL (rank over the user's all eligible days, à la fig 8.3e) and CE=0 (rank within the arm's own
+days) — gated to users present in every stratum so the across-user means are apples-to-apples. The
+OVERALL-reference tercile is promoted to the PRIMARY section (Table 8.3d + figs 8.3f/8.3g); the CE=0
+view, both binaries, and the within-user bottom−top contrasts live in the Appendix §12.3 supplement.
+
+The rank terciles are robust to residual high-TDD outliers (300+ U/day) by construction — they cut on
+the within-user TDD RANK, not the magnitude — so no winsorization is applied. (A 300 U/day cap was
+evaluated and found immaterial: it touches ≈6 eligible days / 5 users in the snapshot, none of them
+CE=0 days, and leaves the rank strata essentially unchanged.)
+
 Appendix §12.3 supplement (§8.3 sensitivities — flat *_12_3* names; cf. §8.1 §12.1 / §8.2 §12.2):
 two alternative TDD-reference definitions (median; rolling-30-day mean), each a full mini-analysis
-(per-user-by-stratum table + violin figure + within-user contrast), plus the HMA arm (within-user
-contrast + LMM). ⚠️ All inherit the §8.3 D12 not-citable caveat. (The empirical-tercile sensitivity
-was dropped — pending the D12 two-view rank-tercile rework.)
+(per-user-by-stratum table + violin figure + within-user contrast); the HMA arm (within-user contrast
++ LMM); and the rest of the two-view rank-tercile rework (CE=0-ref tercile, both binaries, within-user
+bottom−top). The median/rolling/HMA sensitivities still inherit the §8.3 D12 not-citable caveat; see
+decisions.md for which rank-tercile outputs the D12 update lifts that caveat for.
 
 Outputs (analysis/outputs/analysis_8_3/<cohort>/) — primary (mean TDD reference):
     table_8_3a_per_user_by_stratum.csv     per section × endpoint × stratum: across-user mean±SD —
                                            sections = the 3 nested CE=0 classifications + CE>0 + CE>=3/BE>=3 (HMA)
     table_8_3b_within_user_contrast.csv    per classification × endpoint: within-user Low−High (Wilcoxon + boot CI + paired-t)
     table_8_3c_lmm_sensitivity.csv         day-level LMM outcome ~ tdd_stratum + (1|user)
+    table_8_3d_rank_tercile_strata.csv     OVERALL-ref rank TERCILES (Low/Mid/High), 5 sections,
+                                           same-user-set gated — the promoted primary tercile table
     figure_8_3a_grid{1,2}_*.png            per-user endpoints by stratum (CE=0 / CE>0 / CE>=3-BE>=3 Low&High),
                                            violin+box+dots, two 2×2 metric grids; colour = glycemic range
+    figure_8_3f_grid{1,2}_*.png            OVERALL-ref rank-tercile per-user violins (9 groups: CE=0/CE>0/HMA × Low/Mid/High)
+    figure_8_3g_grid{1,2}_*.png            OVERALL-ref: the 5 day types (3 CE=0 + CE>0 + HMA) by tercile, staggered vertical 95% CI bars, all 8 endpoints
     figure_8_3b_grid{1,2}_*.png            within-user Low−High delta histograms (CE=0 / CE>0 / CE>=3-BE>=3), two 2×2 grids
-    figure_8_3c_stacked_ranges.png         mean glycemic ranges: CE=0 Low/High vs CE>0 + CE>=3/BE>=3 references
+    figure_8_3c_stacked_ranges.png         mean glycemic ranges — 10 stacked bars (5 day types × Low/High), labeled %s + dashed Low→High segment connectors
     figure_8_3d_R_distribution.png         within-user R = tdd/mean_tdd distribution on CE=0 days
-    figure_8_3e_tir_vs_tdd_percentile.png  scatter: per-day TIR vs within-user TDD percentile, coloured by
-                                           CE/BE category (CE=0 BE=0/1/≥2 + CE>0) + 11-dot decile-mean trend
+    figure_8_3e_tir_vs_tdd_percentile.png  scatter: per-day TIR vs within-user TDD percentile, coloured by the
+                                           SAME 5 day types as fig 8.3g (DAY_TYPE_COLORS); per-day-type decile lines + overall
   Appendix §12.3 supplement:
     table_12_3a_median_per_user_by_stratum.csv   median ref — per-user-by-stratum (5 sections)
     figure_12_3a_median_grid{1,2}_*.png          median ref — per-user violin grids (6 groups)
@@ -49,13 +66,24 @@ Outputs (analysis/outputs/analysis_8_3/<cohort>/) — primary (mean TDD referenc
     table_12_3d_rolling_within_user.csv          rolling-30d ref — within-user Low−High (CE=0)
     table_12_3e_high_engagement_within_user.csv  HMA — within-user Low−High (8.3b parallel)
     table_12_3f_high_engagement_lmm.csv          HMA — day-level LMM (8.3c parallel)
+    table_12_3g_ce0_rank_tercile_strata.csv      CE=0-ref rank terciles (the other view), gated
+    table_12_3h_rank_binary_strata.csv           both refs' balanced binary Low/High, gated
+    table_12_3i_rank_within_user_overall.csv     overall-ref within-user bottom−top (binary + tercile)
+    table_12_3j_rank_within_user_ce0.csv         CE=0-ref within-user bottom−top (binary + tercile)
+    figure_12_3g_ce0_grid{1,2}_*.png             CE=0-ref rank-tercile per-user violins (9 groups)
+    figure_12_3h_overall_tercile_scatter.png     fig-8.3e scatter with overall-ref tercile bands shaded
+    figure_12_3i_ce0_bars_grid{1,2}_*.png        CE=0-ref companion of fig 8.3g: 5 day types by tercile, staggered 95% CI bars
 
 Rolling-30-day reference (§7.5) is computed in-analysis from per-day tdd_units + local_day
 (trailing 30-calendar-day mean; no staging column needed).
-Caveat: residual high-TDD outliers (300+ U/day) land in the High stratum (architecture Open
-Questions) — flagged; winsorize upstream before strong High-stratum claims.
+Residual high-TDD outliers (300+ U/day) were evaluated and not winsorized: they are ≈6 eligible days
+/ 5 users in the snapshot (none CE=0 days), the rank terciles are robust to them by construction, and
+the mean/median/rolling references inherit the staged values — so a cap was immaterial.
 
 Usage: python analysis_8-3_nma_tdd_stratified.py [--cohort {adult,pediatric,all}]
+Fast figure iteration (skips the slow LMM/bootstrap tables): add --figures-only, or --figs <tag>
+to render only matching figures (e.g. `--figs 8_3g --cohort all` ≈ 9 s vs a multi-minute full run).
+Tags: 8_3a/b/c/d/e/f/g, 12_3a/c/g/h/i. Do a full run first so the table CSVs exist.
 """
 
 # %pip install statsmodels
@@ -74,6 +102,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
 
 try:
     _ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -93,6 +122,7 @@ from utils.data_loader import (  # noqa: E402
     HIGH_MA_FLAG,
     HIGH_MA_LABEL,
     MIN_AGE,
+    SUPPLEMENT_ARMS,
     analysis_dir,
     default_analysis_ready_csv,
     filter_cohort,
@@ -115,7 +145,9 @@ from utils.plotting import (  # noqa: E402
 )
 
 MIN_REF_DAYS = 30        # ≥30 eligible days for a reliable personal TDD reference (§8.3)
-R_CUT = 1.0              # Low (R<1.0) vs High (R≥1.0)
+R_CUT = 1.0              # Low (R<1.0) vs High (R≥1.0) for the prespecified mean-reference binary
+RANK_TERCILES = (1 / 3, 2 / 3)   # within-user TDD-rank cutpoints → Low/Mid/High (balanced terciles)
+RANK_BINARY = (0.5,)             # within-user TDD-rank cutpoint → Low/High (balanced binary)
 ROLL_WINDOW_DAYS = 30    # rolling TDD reference window (§7.5)
 ROLL_MIN_DAYS = 7        # min eligible days in the window for a usable rolling reference
 BOOTSTRAP_SEED = 20260520
@@ -134,18 +166,69 @@ def _ce0_strata(pdf, nma_flag, ratio_col="tdd_ratio"):
     return df
 
 
+def _rank_strata(pdf, arm_flag, *, reference, split):
+    """One arm's TDD-reference-eligible days, labeled Low/(Mid/)High by a balanced WITHIN-USER TDD
+    RANK — the same-user-set-gated replacement for the dropped empirical terciles (D12).
+
+    reference:
+      "overall" — rank each day's tdd_units over the user's ALL eligible days (any arm; the fig-8.3e
+                  universe), then keep the arm's days. "High = high TDD vs the user's whole-day norm."
+      "ce0"     — keep the arm's days first, then rank within the arm's OWN days (the within-arm view
+                  the dropped empirical terciles intended, now rank-balanced).
+    split:
+      "tercile" — cut the within-user percentile at RANK_TERCILES → Low/Mid/High.
+      "binary"  — cut at RANK_BINARY → Low/High.
+    Ranks use method="first" (deterministic tie-break → balanced counts, no RNG). Eligibility is the
+    same MIN_REF_DAYS reference-day floor as the mean-reference strata. Gate the across-user table
+    with _same_user_set_gate; the within-user contrast (table_8_3b_within_user) is self-gating.
+    """
+    elig = pdf[(pdf["n_eligible_days_for_tdd"] >= MIN_REF_DAYS)
+               & pdf["tdd_units"].notna()].copy()
+    if reference == "overall":
+        elig["tdd_pct"] = elig.groupby("_userId")["tdd_units"].rank(pct=True, method="first")
+        df = elig[elig[arm_flag] == True].copy()  # noqa: E712
+    elif reference == "ce0":
+        df = elig[elig[arm_flag] == True].copy()  # noqa: E712
+        df["tdd_pct"] = df.groupby("_userId")["tdd_units"].rank(pct=True, method="first")
+    else:
+        raise ValueError(f"unknown reference: {reference!r}")
+
+    if split == "tercile":
+        q1, q2 = RANK_TERCILES
+        df["tdd_stratum"] = np.where(df["tdd_pct"] <= q1, "Low",
+                                     np.where(df["tdd_pct"] <= q2, "Mid", "High"))
+    elif split == "binary":
+        (q,) = RANK_BINARY
+        df["tdd_stratum"] = np.where(df["tdd_pct"] <= q, "Low", "High")
+    else:
+        raise ValueError(f"unknown split: {split!r}")
+    return df
+
+
+def _same_user_set_gate(df, strata_order):
+    """Keep only users with ≥1 day in EVERY stratum of `strata_order`, so the across-user stratum
+    means share a single user set (apples-to-apples; n_users equal across strata). This is the D12
+    fix for the dropped empirical terciles' unequal-user-set degeneracy. Returns the gated frame."""
+    needed = set(strata_order)
+    have = df.groupby("_userId")["tdd_stratum"].apply(lambda s: needed.issubset(set(s)))
+    keep = have[have].index
+    return df[df["_userId"].isin(keep)].copy()
+
+
 def _per_user_stratum_mean(df, col, stratum):
     return df[df["tdd_stratum"] == stratum].groupby("_userId")[col].mean()
 
 
-def table_8_3a_per_user_by_stratum(strata_by_cls):
-    """Across-user mean ± SD of each endpoint's per-user within-stratum mean, by section × Low/High
-    stratum, with user/day counts. Reused for the primary mean-reference Table 8.3a and the
-    Appendix §12.3 median- / rolling-reference per-user-by-stratum variants."""
+def table_8_3a_per_user_by_stratum(strata_by_cls, strata_order=("Low", "High")):
+    """Across-user mean ± SD of each endpoint's per-user within-stratum mean, by section × stratum,
+    with user/day counts. `strata_order` selects which strata (and their order) to report:
+    ("Low", "High") for the mean-reference / binary tables, ("Low", "Mid", "High") for the rank
+    tercile tables (Table 8.3d + §12.3g). Reused for the primary mean-reference Table 8.3a, the
+    Appendix §12.3 median-/rolling-reference variants, and the rank-strata tables."""
     rows = []
     for cls_label, df in strata_by_cls.items():
         for col, ep_label in ENDPOINTS:
-            for stratum in ("Low", "High"):
+            for stratum in strata_order:
                 m = _per_user_stratum_mean(df, col, stratum).dropna()
                 sub = df[df["tdd_stratum"] == stratum]
                 rows.append({
@@ -208,6 +291,47 @@ def table_8_3c_lmm(strata_by_cls, nma_stats):
     return pd.DataFrame(rows)
 
 
+def _rank_sections(pdf, *, reference, split, gate=True):
+    """{section_label: rank-stratified frame} over the 5 SUPPLEMENT_ARMS sections (3 nested CE=0
+    classifications + CE>0 + CE>=3/BE>=3) for one reference × split. The across-user table is
+    same-user-set gated (gate=True); the within-user contrast leaves it ungated (it self-gates the
+    bottom∩top intersection per user)."""
+    order = ("Low", "Mid", "High") if split == "tercile" else ("Low", "High")
+    out = {}
+    for flag, label in SUPPLEMENT_ARMS:
+        df = _rank_strata(pdf, flag, reference=reference, split=split)
+        out[label] = _same_user_set_gate(df, order) if gate else df
+    return out
+
+
+def table_rank_across_user(pdf, reference, split):
+    """Across-user mean±SD by section × endpoint × stratum for one rank `reference`
+    ({overall, ce0}) × `split` ({binary, tercile}), same-user-set gated. Tagged with reference/split
+    columns. The overall-ref tercile is the primary Table 8.3d; the rest are Appendix §12.3g/h."""
+    order = ("Low", "Mid", "High") if split == "tercile" else ("Low", "High")
+    t = table_8_3a_per_user_by_stratum(_rank_sections(pdf, reference=reference, split=split),
+                                       strata_order=order)
+    t.insert(0, "split", split)
+    t.insert(0, "reference", reference)
+    return t
+
+
+def table_rank_within_user(pdf, reference, nma_stats):
+    """Within-user bottom−top rank contrast (8.3b parallel) per section × endpoint for one rank
+    `reference`, both splits stacked (binary Low−High + tercile bottom−top; Mid ignored). Self-gating
+    (only users with ≥1 day in both bottom and top contribute, via table_8_3b_within_user's dropna).
+    Tagged with reference/split. Appendix §12.3i/j."""
+    frames = []
+    for split in ("binary", "tercile"):
+        t = table_8_3b_within_user(_rank_sections(pdf, reference=reference, split=split, gate=False),
+                                   nma_stats)
+        t.insert(0, "split", split)
+        frames.append(t)
+    out = pd.concat(frames, ignore_index=True)
+    out.insert(0, "reference", reference)
+    return out
+
+
 def _stratum_delta(df, col):
     """Per-user (Low mean − High mean) array for one endpoint."""
     low = _per_user_stratum_mean(df, col, "Low")
@@ -220,7 +344,7 @@ def figure_8_3b_paired_delta(strata_by_cls, cmp_strata, hma_strata):
     (CE=0/BE≤∞ arm), one grid per metric group; overlays CE=0 (endpoint range colour), CE>0
     (grey) and the high meal-announcement CE>=3/BE>=3 arm (bronze). Solid line = each
     distribution's mean, dashed = 0. Returns {filename: figure}. (Per-classification deltas are in
-    table_8_3b_*.csv; the CE>=3/BE>=3 contrast in table_12_3a_high_engagement_tdd_strata.csv.)"""
+    table_8_3b_*.csv; the CE>=3/BE>=3 contrast in table_12_3e_high_engagement_within_user.csv.)"""
     df = strata_by_cls["CE=0/BE<=inf"]
     out = {}
     for key, gtitle, eps in GRIDS:
@@ -240,8 +364,11 @@ def figure_8_3b_paired_delta(strata_by_cls, cmp_strata, hma_strata):
     return out
 
 
-def figure_8_3c_stacked(pdf, strata_inf):
-    """Mean % time in glycemic ranges: Low vs High CE=0 days vs CE>0 reference."""
+def figure_8_3c_stacked(strata_8_3a):
+    """Mean % time in glycemic ranges by TDD stratum, for all 5 day types (the 3 nested CE=0
+    classifications + CE>0 + CE>=3/BE>=3 HMA), each split Low/High → **10 stacked bars**. Mean-
+    reference (R = tdd/mean) binary strata, matching Table 8.3a / figure 8.3a (which `strata_8_3a`
+    carries, in SUPPLEMENT_ARMS order). A light separator divides each day type's Low|High pair."""
     def ranges(frame):
         f = frame.copy()
         f["<54"] = f["tbr_very_low"]; f["54-70"] = f["tbr"] - f["tbr_very_low"]
@@ -250,32 +377,56 @@ def figure_8_3c_stacked(pdf, strata_inf):
         um = f.groupby("_userId")[keys].mean()
         return {k: (um[k].mean() if len(um) else 0.0) for k in keys}, int(len(um))
 
-    groups = [("CE=0 Low-TDD", strata_inf[strata_inf["tdd_stratum"] == "Low"]),
-              ("CE=0 High-TDD", strata_inf[strata_inf["tdd_stratum"] == "High"]),
-              ("CE>0 (ref)", pdf[pdf[COMPARATOR_FLAG] == True]),  # noqa: E712
-              (f"{HIGH_MA_LABEL} (ref)", pdf[pdf[HIGH_MA_FLAG] == True])]  # noqa: E712
-    fig, ax = plt.subplots(figsize=(9.5, 7))
+    groups = [(f"{label}\n{st}", df[df["tdd_stratum"] == st])
+              for label, df in strata_8_3a.items() for st in ("Low", "High")]
+    fig, ax = plt.subplots(figsize=(15, 7))
     x = np.arange(len(groups))
-    bottom = np.zeros(len(groups))
-    means = {k: [] for k in RANGE_COLORS}
     ns = []
+    means = {k: [] for k in RANGE_COLORS}
     for _, frame in groups:
         m, nu = ranges(frame)
         ns.append(nu)
         for k in RANGE_COLORS:
             means[k].append(m[k])
-    for k, color in RANGE_COLORS.items():
-        vals = np.array(means[k])
-        ax.bar(x, vals, bottom=bottom, label=k, color=color, edgecolor="white")
-        bottom += vals
-    ax.set_xticks(x); ax.set_xticklabels([g for g, _ in groups])
-    ax.set_ylim(0, 108); ax.set_ylabel("Mean time in range (%)")
-    for xi, nu in enumerate(ns):
-        ax.text(xi, 101, f"users={nu}", ha="center", va="bottom", fontsize=11)
-    ax.legend(title="Glucose (mg/dL)", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=LEGEND_FS)
-    ax.set_title("Figure 8.3c: glycemic ranges by TDD stratum (CE=0) vs CE>0 & CE>=3/BE>=3 refs",
+    order = list(RANGE_COLORS)
+    seg = np.array([means[k] for k in order])               # (n_ranges, n_groups)
+    tops = np.cumsum(seg, axis=0)                            # cumulative top of each segment
+    bots = np.vstack([np.zeros(len(groups)), tops[:-1]])     # bottom of each segment
+    W = 0.8
+    for ki, (k, color) in enumerate(RANGE_COLORS.items()):
+        ax.bar(x, seg[ki], bottom=bots[ki], width=W, label=k, color=color, edgecolor="white")
+    # Labeled percentages — simple black text centred in each segment (matching §8.1): skip the
+    # smallest <54 band, offset the thin 54-70 band upward with a thin leader, label the rest centred.
+    for gi in range(len(groups)):
+        for ki, k in enumerate(order):
+            v = seg[ki, gi]
+            cen = bots[ki, gi] + v / 2.0
+            if k == "<54":
+                continue
+            if k == "54-70":
+                ax.annotate(f"{v:.1f}%", xy=(gi, cen), xytext=(0, 16), textcoords="offset points",
+                            ha="center", va="bottom", fontsize=10,
+                            arrowprops=dict(arrowstyle="-", lw=0.6, color="gray"))
+            else:
+                ax.text(gi, cen, f"{v:.1f}%", ha="center", va="center", fontsize=10)
+    # Dashed connectors across each day type's Low|High pair, one per internal segment boundary —
+    # show how each range shifts Low→High (the gap between the paired bars).
+    for j in range(0, len(groups), 2):
+        for b in range(len(order) - 1):
+            ax.plot([j + W / 2, j + 1 - W / 2], [tops[b, j], tops[b, j + 1]],
+                    ls="--", color="0.4", lw=1.0, zorder=4)
+    for sep in range(2, len(groups), 2):  # divide each day type's Low|High pair
+        ax.axvline(sep - 0.5, color="0.85", lw=1, zorder=0)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{glabel}\n(n={nu})" for (glabel, _), nu in zip(groups, ns)], fontsize=9)
+    ax.set_ylim(0, 105); ax.set_ylabel("Mean time in range (%)")
+    ax.set_xlim(-0.6, len(groups) - 0.4)
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(handles, labels, title="Glucose (mg/dL)", loc="lower center", ncol=len(labels),
+               fontsize=LEGEND_FS, bbox_to_anchor=(0.5, 0.0))
+    ax.set_title("Figure 8.3c: glycemic ranges by TDD stratum — 5 day types × Low/High (mean-ref)",
                  fontsize=TITLE_FS)
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0.1, 1, 1])  # reserve bottom for the horizontal legend
     return fig
 
 
@@ -293,51 +444,81 @@ def figure_8_3d_r_dist(strata_inf):
     return fig
 
 
-# Four mutually-exclusive day categories for figure_8_3e, each its own colour. CE=0 is split by
-# bolus-entry count on a diverging green→amber→red ramp (escalating BE: 0 / 1 / ≥2); CE>0 is the
-# grey comparator.
-CE_BE_COLORS = {
-    "CE=0/BE=0": "#1a9850",   # green
-    "CE=0/BE=1": "#f1a340",   # amber
-    "CE=0/BE≥2": "#d73027",   # red
-    "CE>0": GRAY,             # grey comparator
+# Day-type colours for the rank-tercile CI-bar figure (8.3g) AND the TIR-vs-TDD-percentile scatter
+# (8.3e/12.3h), so the two figures share one palette: the 3 nested CE=0 classifications on a green
+# ramp (strictest BE=0 darkest → broadest BE≤∞ lightest), CE>0 grey, CE>=3/BE>=3 (HMA) bronze. Keyed
+# by the SUPPLEMENT_ARMS section labels.
+DAY_TYPE_COLORS = {
+    "CE=0/BE=0": "#00441b",                # very dark green (strictest CE=0)
+    "CE=0/BE<=1": endpoint_color("tir"),   # = the TIR / 70-180 green (shared palette)
+    "CE=0/BE<=inf": "#b7e075",             # light yellow-green (broadest CE=0) — widened ramp so the
+    COMPARATOR_LABEL: GRAY,                #   3 nested CE=0 categories stay distinct in the 8.3e scatter
+    HIGH_MA_LABEL: HIGH_MA_COLOR,          # CE>0 grey comparator; CE>=3/BE>=3 high meal-announce bronze
 }
 
 
-def figure_8_3e_tir_vs_tdd_pct(pdf):
-    """For-fun scatter: per-day TIR vs the day's within-user TDD percentile, for TDD-reference-
-    eligible users, every eligible day coloured by CE/BE category — CE=0 split by bolus count
-    (BE=0 / BE=1 / BE≥2) plus the CE>0 comparator. Percentile = each day's rank of tdd_units
-    within that user's eligible days (0–100), comparable across users. Each category gets its own
-    decile-mean TIR line (11 dots on the x-ticks), plus a dashed black overall-mean line across all
-    days; the faint scatter behind shows day-level spread."""
+def figure_8_3e_tir_vs_tdd_pct(pdf, *, fig_id="8.3e", tercile_bands=False):
+    """Scatter: per-day TIR vs the day's within-user TDD percentile, for TDD-reference-eligible users,
+    coloured by the **same 5 day types as figure 8.3g** (3 nested CE=0 classifications + CE>0 +
+    CE>=3/BE>=3 HMA; DAY_TYPE_COLORS). Percentile = each day's rank of tdd_units within that user's
+    eligible days (0–100), comparable across users.
+
+    All 5 day types get a decile-mean TIR LINE (11 dots on the x-ticks) over that category's days,
+    using the same (cumulative, flag-defined) membership as 8.3g — so the lines correspond exactly.
+    Plus a dashed black overall-mean line. The scatter behind shows ALL days, each coloured by its
+    MOST-SPECIFIC day type (a clean per-day partition: CE=0 BE=0 / BE=1 / BE≥2 → dark/med/light green;
+    CE>0 HMA → bronze, the rest grey); the two big categories (HMA/CE>0) are drawn fainter so they
+    don't wash out the smaller CE=0 greens. Restricted to days in one of the 5 day types (the CE=0-
+    contributing cohort, matching 8.3g).
+
+    `tercile_bands` shades the overall-reference tercile regions (cuts at RANK_TERCILES) — the Appendix
+    §12.3h overall-ref-with-bands variant; the unshaded primary is Figure 8.3e. `fig_id` titles it."""
     df = pdf[pdf["n_eligible_days_for_tdd"] >= MIN_REF_DAYS].dropna(subset=["tdd_units", "tir"]).copy()
     df["tdd_pct"] = df.groupby("_userId")["tdd_units"].rank(pct=True) * 100.0
-    ce0 = df["carb_entry_count"] == 0
-    be = df["bolus_entry_count"]
-    df["cat"] = np.select(
-        [~ce0, ce0 & (be == 0), ce0 & (be == 1)],
-        ["CE>0", "CE=0/BE=0", "CE=0/BE=1"], default="CE=0/BE≥2")
+    # Per-day colour = most-specific day type (the tightest nested CE=0 class, else HMA, else CE>0);
+    # first match wins, so dots get one crisp DAY_TYPE_COLORS colour. Days in none of the 5 (CE>0 of
+    # non-CE=0-contributing users, zeroed by restrict_comparator) fall through to "" and are dropped.
+    f0, f1, finf = (c[0] for c in CLASSIFICATIONS)  # in_ce0_be0 / in_ce0_be_le1 / in_ce0_be_inf
+    df["dotcat"] = np.select(
+        [df[f0] == True, df[f1] == True, df[finf] == True,          # noqa: E712
+         df[HIGH_MA_FLAG] == True, df[COMPARATOR_FLAG] == True],     # noqa: E712
+        ["CE=0/BE=0", "CE=0/BE<=1", "CE=0/BE<=inf", HIGH_MA_LABEL, COMPARATOR_LABEL], default="")
+    df = df[df["dotcat"] != ""]
 
     fig, ax = plt.subplots(figsize=(9.5, 6))
+    if tercile_bands:  # overall-ref tercile regions, drawn behind the scatter
+        b_lo, b_hi = (q * 100.0 for q in RANK_TERCILES)
+        ax.axvspan(0, b_lo, color="#000000", alpha=0.04, zorder=0)
+        ax.axvspan(b_hi, 100, color="#000000", alpha=0.08, zorder=0)
+        for b in (b_lo, b_hi):
+            ax.axvline(b, color="#555555", ls=":", lw=1.5, zorder=1)
     marks = np.arange(0, 101, 10)
     edges = np.arange(-5, 106, 10)  # 10-pct-wide bins centred on the marks → dots land on ticks
 
-    # Faint scatter for density: largest category on the bottom, CE>0 drawn faintest.
-    plot_order = sorted(CE_BE_COLORS, key=lambda c: int((df["cat"] == c).sum()), reverse=True)
-    for cat in plot_order:
-        sub = df[df["cat"] == cat]
-        ax.scatter(sub["tdd_pct"], sub["tir"], s=6, color=CE_BE_COLORS[cat], linewidths=0,
-                   zorder=2, alpha=0.07 if cat == "CE>0" else 0.16)
+    # Scatter for day-level spread — ALL days plotted, same colours as the lines (DAY_TYPE_COLORS).
+    # The day types are very unequal in size (HMA + CE>0 are ~5-30× the CE=0 greens), so the two big
+    # categories are pushed into a faint, small-dot BACKDROP while the CE=0 greens are drawn larger,
+    # more opaque, and on top so they stay distinct against it (the LINES below use all days too).
+    counts = {c: int((df["dotcat"] == c).sum()) for c in DAY_TYPE_COLORS}
+    big = {COMPARATOR_LABEL, HIGH_MA_LABEL}  # the two large categories → faint backdrop
+    for cat in sorted(DAY_TYPE_COLORS, key=lambda c: counts[c], reverse=True):
+        sub = df[df["dotcat"] == cat]
+        if cat in big:
+            ax.scatter(sub["tdd_pct"], sub["tir"], s=4, color=DAY_TYPE_COLORS[cat], linewidths=0,
+                       zorder=2, alpha=0.05)
+        else:
+            ax.scatter(sub["tdd_pct"], sub["tir"], s=7, color=DAY_TYPE_COLORS[cat], linewidths=0,
+                       zorder=3, alpha=0.18)
 
-    # A decile-mean TIR line per category (11 dots on the x-ticks), in logical CE/BE order.
+    # A decile-mean TIR line per day type — over that category's (cumulative, flag-defined) days, so
+    # the lines match figure 8.3g's 5 categories exactly.
     handles = []
-    for cat in CE_BE_COLORS:
-        sub = df[df["cat"] == cat]
+    for flag, label in SUPPLEMENT_ARMS:
+        sub = df[df[flag] == True]  # noqa: E712
         binned = (sub.assign(_b=pd.cut(sub["tdd_pct"], edges, labels=marks))
                      .groupby("_b", observed=False)["tir"].mean().reindex(marks))
-        h, = ax.plot(marks, binned.to_numpy(dtype=float), "-o", color=CE_BE_COLORS[cat], lw=2,
-                     ms=5, zorder=5, label=f"{cat} (n={len(sub):,})")
+        h, = ax.plot(marks, binned.to_numpy(dtype=float), "-o", color=DAY_TYPE_COLORS[label], lw=2,
+                     ms=5, zorder=5, label=f"{label} (n={len(sub):,})")
         handles.append(h)
 
     # Overall mean TIR per decile across all categories (dashed black, on top).
@@ -353,8 +534,9 @@ def figure_8_3e_tir_vs_tdd_pct(pdf):
     ax.set_xlabel("within-user TDD percentile (all eligible days, %)")
     ax.set_ylabel("Time 70-180 mg/dL (%)")
     ax.legend(handles=handles, fontsize=LEGEND_FS)
-    ax.set_title(f"Figure 8.3e: TIR vs within-user TDD percentile by CE/BE category (n={len(df):,})",
-                 fontsize=TITLE_FS)
+    band_note = " — overall-ref tercile bands" if tercile_bands else ""
+    ax.set_title(f"Figure {fig_id}: TIR vs within-user TDD percentile by day type"
+                 f"{band_note} (n={len(df):,})", fontsize=TITLE_FS)
     fig.tight_layout()
     return fig
 
@@ -377,42 +559,114 @@ def _add_rolling_ref(pdf):
     return out.drop(columns="_d")
 
 
-def _violin_panel(ax, endpoint, label, strata_inf, cmp_strata, hma_strata):
-    """One endpoint's violin+box+dots panel, 6 groups: CE=0 Low/High + CE>0 Low/High +
-    CE>=3/BE>=3 (HMA) Low/High. CE=0 carries the endpoint's glycemic-range colour, the CE>0
-    comparator is grey, the high meal-announcement arm is bronze; Low = lighter, High = darker
-    (alpha). Drawing convention is shared via utils.plotting.violin_box_panel."""
+# Stratum shading (lighter → darker) for the violin panels — shared by the binary (Low/High) and
+# rank-tercile (Low/Mid/High) figures. Binary picks Low/High = 0.35/0.70 (unchanged from before).
+STRATUM_ALPHA = {"Low": 0.35, "Mid": 0.55, "High": 0.70}
+
+
+def _violin_panel(ax, endpoint, label, strata_inf, cmp_strata, hma_strata, *, strata=("Low", "High")):
+    """One endpoint's violin+box+dots panel: 3 arms (CE=0 / CE>0 / CE>=3/BE>=3 HMA) × `strata`
+    (Low/High for the binary figures, Low/Mid/High for the rank-tercile figures) → 6 or 9 groups.
+    CE=0 carries the endpoint's glycemic-range colour, the CE>0 comparator is grey, the high
+    meal-announcement arm is bronze; stratum = lighter→darker (alpha). Drawing convention is shared
+    via utils.plotting.violin_box_panel."""
     base = endpoint_color(endpoint)
-    # 2-line tick labels (arm \n stratum) so 6 groups don't collide — violin_box_panel appends the
+    arms = [("CE=0", strata_inf, base), ("CE>0", cmp_strata, GRAY),
+            (HIGH_MA_LABEL, hma_strata, HIGH_MA_COLOR)]
+    # 2-line tick labels (arm \n stratum) so the groups don't collide — violin_box_panel appends the
     # n-count as a 3rd line.
-    gdef = [("CE=0\nLow", strata_inf, "Low", base), ("CE=0\nHigh", strata_inf, "High", base),
-            ("CE>0\nLow", cmp_strata, "Low", GRAY), ("CE>0\nHigh", cmp_strata, "High", GRAY),
-            (f"{HIGH_MA_LABEL}\nLow", hma_strata, "Low", HIGH_MA_COLOR),
-            (f"{HIGH_MA_LABEL}\nHigh", hma_strata, "High", HIGH_MA_COLOR)]
     groups = [
-        (gl, df.loc[df["tdd_stratum"] == st].groupby("_userId")[endpoint].mean().dropna().to_numpy(),
-         color, 0.35 if st == "Low" else 0.7)
-        for gl, df, st, color in gdef
+        (f"{arm}\n{st}",
+         df.loc[df["tdd_stratum"] == st].groupby("_userId")[endpoint].mean().dropna().to_numpy(),
+         color, STRATUM_ALPHA[st])
+        for arm, df, color in arms for st in strata
     ]
-    violin_box_panel(ax, groups, title=label, title_color=base, separators=(2.5, 4.5))
+    n = len(strata)  # separators sit between arms (positions are 1-indexed → n*k + 0.5)
+    seps = tuple(n * k + 0.5 for k in range(1, len(arms)))
+    violin_box_panel(ax, groups, title=label, title_color=base, separators=seps)
 
 
 def figure_8_3a_violin(strata_inf, cmp_strata, hma_strata, *, fig_id="8.3a",
-                       fname_stem="figure_8_3a", ref_note=""):
+                       fname_stem="figure_8_3a", ref_note="", strata=("Low", "High")):
     """Per-user means by TDD stratum (two semantic 2×2 grids), one grid per metric group. Returns
     {filename: figure}. Endpoint colour = glycemic range (Tidepool for the non-range metrics); CE=0
-    coloured, CE>0 grey, CE>=3/BE>=3 bronze; Low lighter / High darker. `fig_id` / `fname_stem` /
-    `ref_note` parametrize the title + filename so the Appendix §12.3 median- and rolling-reference
-    variants reuse this (primary = Figure 8.3a; §12.3a = median ref; §12.3c = rolling ref)."""
+    coloured, CE>0 grey, CE>=3/BE>=3 bronze; stratum lighter→darker. `fig_id` / `fname_stem` /
+    `ref_note` parametrize the title + filename so the §12.3 median-/rolling-reference variants reuse
+    this (primary = Figure 8.3a; §12.3a = median ref; §12.3c = rolling ref); `strata` switches between
+    the binary Low/High figures and the rank-tercile Low/Mid/High figures (8.3f / 12.3g)."""
+    ref = f" ({ref_note})" if ref_note else ""
+    # 9-group tercile panels are wide → stack the 4 endpoints 4×1 (each panel full-width); the
+    # 6-group binary panels stay in the 2×2 grid.
+    tercile = len(strata) >= 3
+    nrows, ncols, figsize, top = (4, 1, (15, 20), 0.955) if tercile else (2, 2, (13, 8.6), 0.91)
+    out = {}
+    for key, gtitle, eps in GRIDS:
+        fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
+        for ax, (col, label) in zip(axes.ravel(), eps):
+            _violin_panel(ax, col, label, strata_inf, cmp_strata, hma_strata, strata=strata)
+        fig.suptitle(f"Figure {fig_id} — {gtitle}\nper-user means by TDD stratum (CE=0, CE>0, CE>=3/BE>=3){ref}",
+                     fontsize=SUPTITLE_FS)
+        fig.tight_layout(rect=[0, 0, 1, top])
+        out[f"{fname_stem}_{key}.png"] = fig
+    return out
+
+
+def _tercile_trend_stats(df, col, order):
+    """Across-user mean and ±1.96·SEM of the per-user within-stratum mean, per stratum (in order)."""
+    mus, los, his = [], [], []
+    for st in order:
+        m = _per_user_stratum_mean(df, col, st).dropna()
+        mu = m.mean() if len(m) else np.nan
+        sem = (m.std(ddof=1) / np.sqrt(len(m))) if len(m) > 1 else np.nan
+        mus.append(mu); los.append(mu - 1.96 * sem); his.append(mu + 1.96 * sem)
+    return np.array(mus), np.array(los), np.array(his)
+
+
+def _tercile_bars_panel(ax, endpoint, label, sections, order):
+    """One endpoint panel: x = the terciles in `order`; within each, the 5 day types as staggered
+    vertical 95% CI bars (marker = across-user mean of the per-user tercile mean, whisker = ±1.96
+    SEM), each day type's Low→Mid→High markers joined by a thin connecting line to show its
+    trajectory. y auto-scales to the estimates so the (narrow) CIs stay visible."""
+    x = np.arange(len(order))
+    labels = list(DAY_TYPE_COLORS)
+    offs = np.linspace(-0.30, 0.30, len(labels))
+    for lbl, off in zip(labels, offs):
+        mu, lo, hi = _tercile_trend_stats(sections[lbl], endpoint, order)
+        # fmt="-o": connect each day type's Low→Mid→High points (thin line) + marker + CI whisker.
+        ax.errorbar(x + off, mu, yerr=np.vstack([mu - lo, hi - mu]), fmt="-o", ms=5, lw=1.6,
+                    color=DAY_TYPE_COLORS[lbl], ecolor=DAY_TYPE_COLORS[lbl],
+                    elinewidth=2.2, capsize=3, zorder=3)
+    ax.set_xticks(x); ax.set_xticklabels(order)
+    ax.set_xlabel("within-user TDD tercile")
+    ax.set_title(label, color=endpoint_color(endpoint), fontsize=TITLE_FS)
+    ax.margins(x=0.12)
+
+
+def figure_8_3g_rank_tercile_bars(pdf, *, reference="overall", fig_id="8.3g",
+                                  fname_stem="figure_8_3g", ref_note="overall TDD-rank ref"):
+    """Figure 8.3g (two semantic 2×2 grids → all 8 endpoints): the **5 day types** (3 nested CE=0
+    classifications + CE>0 + CE>=3/BE>=3 HMA) across within-user TDD rank terciles (Low/Mid/High),
+    same-user-set gated. Each day type at each tercile is a staggered vertical 95% CI bar (marker =
+    across-user mean of the per-user tercile mean, whisker = ±1.96 SEM). `reference` switches the
+    ranking universe — `overall` (rank over the user's all eligible days, à la 8.3e) is the primary
+    Figure 8.3g; `ce0` (rank within the arm's own days) is the Appendix §12.3 companion. Returns
+    {filename: figure}."""
+    order = ("Low", "Mid", "High")
+    sections = _rank_sections(pdf, reference=reference, split="tercile")  # 5 SUPPLEMENT_ARMS, gated
+    handles = [Line2D([0], [0], marker="o", color=DAY_TYPE_COLORS[lbl], lw=0, ms=8,
+                      label=f"{lbl} (n={sections[lbl]['_userId'].nunique()})")
+               for lbl in DAY_TYPE_COLORS]
     ref = f" ({ref_note})" if ref_note else ""
     out = {}
     for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(13, 8.6))
+        fig, axes = plt.subplots(2, 2, figsize=(13, 8.8))
         for ax, (col, label) in zip(axes.ravel(), eps):
-            _violin_panel(ax, col, label, strata_inf, cmp_strata, hma_strata)
-        fig.suptitle(f"Figure {fig_id} — {gtitle}\nper-user means by TDD stratum (CE=0, CE>0, CE>=3/BE>=3){ref}",
-                     fontsize=SUPTITLE_FS)
-        fig.tight_layout(rect=[0, 0, 1, 0.91])
+            _tercile_bars_panel(ax, col, label, sections, order)
+        fig.legend(handles=handles, loc="lower center", ncol=5, fontsize=LEGEND_FS,
+                   bbox_to_anchor=(0.5, 0.0))
+        fig.suptitle(f"Figure {fig_id} — {gtitle}\nday types by within-user TDD rank tercile{ref}; "
+                     f"whiskers = 95% CI, same-user-set gated", fontsize=SUPTITLE_FS)
+        fig.tight_layout(rect=[0, 0.06, 1, 0.91])
         out[f"{fname_stem}_{key}.png"] = fig
     return out
 
@@ -424,14 +678,26 @@ def run(
     cohort="all",
     min_age=MIN_AGE,
     csv_path=None,
+    figures_only=False,
+    figs_filter=None,
 ):
-    """Run §8.3 for one age cohort → outputs/analysis_8_3/<cohort>/."""
+    """Run §8.3 for one age cohort → outputs/analysis_8_3/<cohort>/.
+
+    figures_only=True skips the SLOW table writes (day-level LMM fits + cluster-bootstrap CIs) and
+    re-renders only the figures, in place (existing table CSVs are left untouched, not cleared) — for
+    fast figure-tweak iteration. Do a full run first so the tables exist; then iterate with
+    --figures-only.
+
+    figs_filter (a substring, e.g. "8_3g") renders ONLY the figure builders whose tag contains it,
+    skipping the rest — so iterating on one figure avoids re-rendering the others (notably the
+    8.3e/12.3h scatters). Implies figures_only (you're tweaking a figure)."""
+    figures_only = figures_only or figs_filter is not None  # filtering figures ⇒ skip the tables
     nma_stats = load_nma_statistics()
     here = analysis_dir()
     if output_dir is None:
         output_dir = os.path.join(here, "outputs", "analysis_8_3", cohort)
-    if os.path.isdir(output_dir):
-        shutil.rmtree(output_dir)
+    if os.path.isdir(output_dir) and not figures_only:
+        shutil.rmtree(output_dir)  # full run starts clean; figures_only overwrites PNGs in place
     os.makedirs(output_dir, exist_ok=True)
 
     if csv_path is None and spark is None:
@@ -448,34 +714,17 @@ def run(
     pdf = filter_cohort(pdf, cohort=cohort, min_age=min_age)
     pdf = restrict_comparator(pdf)
 
-    # Primary strata (mean-TDD reference via tdd_ratio), per nested classification.
+    # ---- Strata frames (FAST: groupby/where; no LMM or bootstrap). Computed up front because BOTH
+    # the tables and the figures consume them; under figures_only the slow table writes below are
+    # skipped while these (and the figures) still run. ----
+    # Primary strata (mean-TDD reference via tdd_ratio) per nested classification, + the CE>0
+    # comparator and the high meal-announcement (CE>=3/BE>=3, ⊂ CE>0) arm, each stratified Low/High
+    # with the same _ce0_strata machinery.
     strata = {cls_label: _ce0_strata(pdf, flag) for flag, cls_label in CLASSIFICATIONS}
-    # CE>0 comparator and the high meal-announcement (CE>=3/BE>=3) arm, both stratified Low/High by
-    # within-user TDD with the same _ce0_strata machinery (HMA: overlapping reference, CE>=3/BE>=3 ⊂
-    # CE>0). Used as the extra Table 8.3a sections + the §12.3 contrast + the 3rd/4th groups in the
-    # stratum figures (8.3a/8.3b/8.3c).
     cmp_strata = _ce0_strata(pdf, COMPARATOR_FLAG)
     hma_strata = _ce0_strata(pdf, HIGH_MA_FLAG)
-
-    # Table 8.3a (primary, mean reference): the 3 nested CE=0 classifications plus a CE>0 and a
-    # CE>=3/BE>=3 (HMA) section, each split Low/High by TDD (matches figure 8.3a's groups).
     strata_8_3a = {**strata, COMPARATOR_LABEL: cmp_strata, HIGH_MA_LABEL: hma_strata}
-    table_8_3a_per_user_by_stratum(strata_8_3a).to_csv(
-        os.path.join(output_dir, "table_8_3a_per_user_by_stratum.csv"), index=False)
-    table_8_3b_within_user(strata, nma_stats).to_csv(
-        os.path.join(output_dir, "table_8_3b_within_user_contrast.csv"), index=False)
-    table_8_3c_lmm(strata, nma_stats).to_csv(
-        os.path.join(output_dir, "table_8_3c_lmm_sensitivity.csv"), index=False)
-
-    # Appendix §12.3 — §8.3 sensitivities (flat *_12_3* names; cf. §8.1 §12.1 / §8.2 §12.2). Three
-    # blocks: two alternative TDD-reference definitions (median; rolling-30-day mean), each a full
-    # mini-analysis (per-user-by-stratum table + violin figure + within-user contrast), and the
-    # high meal-announcement (CE>=3/BE>=3) arm (within-user contrast + day-level LMM, the 8.3c
-    # parallel). All overlapping references; ⚠️ inherit the §8.3 D12 not-citable caveat. (The
-    # empirical-tercile sensitivity was dropped — pending the D12 two-view rank-tercile rework.)
-
-    # §12.3a/b — median TDD reference (R = tdd / median_tdd_user). The per-user-by-stratum table +
-    # violin carry the same 5 sections / 6 groups as the primary; the within-user contrast is CE=0.
+    # §12.3a/b median-reference frames (R = tdd / median_tdd_user).
     pdf_med = pdf.copy()
     pdf_med["tdd_ratio_median"] = pdf_med["tdd_units"] / pdf_med["median_tdd_user"]
     med = {cls_label: _ce0_strata(pdf_med, flag, ratio_col="tdd_ratio_median")
@@ -483,52 +732,106 @@ def run(
     med_8_3a = {**med,
                 COMPARATOR_LABEL: _ce0_strata(pdf_med, COMPARATOR_FLAG, ratio_col="tdd_ratio_median"),
                 HIGH_MA_LABEL: _ce0_strata(pdf_med, HIGH_MA_FLAG, ratio_col="tdd_ratio_median")}
-    table_8_3a_per_user_by_stratum(med_8_3a).to_csv(
-        os.path.join(output_dir, "table_12_3a_median_per_user_by_stratum.csv"), index=False)
-    table_8_3b_within_user(med, nma_stats).to_csv(
-        os.path.join(output_dir, "table_12_3b_median_within_user.csv"), index=False)
-
-    # §12.3c/d — rolling-30-day mean TDD reference (computed in-analysis from per-day tdd_units +
-    # local_day; §7.5).
+    # §12.3c/d rolling-30-day-reference frames (computed in-analysis from per-day tdd_units + local_day).
     pdf_roll = _add_rolling_ref(pdf)
     roll = {cls_label: _ce0_strata(pdf_roll, flag, ratio_col="tdd_ratio_rolling")
             for flag, cls_label in CLASSIFICATIONS}
     roll_8_3a = {**roll,
                  COMPARATOR_LABEL: _ce0_strata(pdf_roll, COMPARATOR_FLAG, ratio_col="tdd_ratio_rolling"),
                  HIGH_MA_LABEL: _ce0_strata(pdf_roll, HIGH_MA_FLAG, ratio_col="tdd_ratio_rolling")}
-    table_8_3a_per_user_by_stratum(roll_8_3a).to_csv(
-        os.path.join(output_dir, "table_12_3c_rolling_per_user_by_stratum.csv"), index=False)
-    table_8_3b_within_user(roll, nma_stats).to_csv(
-        os.path.join(output_dir, "table_12_3d_rolling_within_user.csv"), index=False)
 
-    # §12.3e/f — high meal-announcement (CE>=3/BE>=3) arm, mean reference: within-user Low−High
-    # contrast (8.3b parallel) + day-level LMM outcome ~ tdd_stratum + (1|user) (8.3c parallel).
-    table_8_3b_within_user({HIGH_MA_LABEL: hma_strata}, nma_stats).to_csv(
-        os.path.join(output_dir, "table_12_3e_high_engagement_within_user.csv"), index=False)
-    table_8_3c_lmm({HIGH_MA_LABEL: hma_strata}, nma_stats).to_csv(
-        os.path.join(output_dir, "table_12_3f_high_engagement_lmm.csv"), index=False)
+    # ---- Tables (SLOW: day-level LMM fits + cluster-bootstrap CIs). Skipped under figures_only so a
+    # figure tweak re-renders in seconds without recomputing the statistics. The fast across-user
+    # mean tables (8.3a/d, 12.3a/c/g/h) are bundled here too for one clean guard. ----
+    if not figures_only:
+        # Primary: Table 8.3a (mean-ref binary, 5 sections) + 8.3b/8.3c (within-user + LMM) + Table
+        # 8.3d (OVERALL-reference rank TERCILES — the D12 apples-to-apples replacement, 5 sections).
+        table_8_3a_per_user_by_stratum(strata_8_3a).to_csv(
+            os.path.join(output_dir, "table_8_3a_per_user_by_stratum.csv"), index=False)
+        table_8_3b_within_user(strata, nma_stats).to_csv(
+            os.path.join(output_dir, "table_8_3b_within_user_contrast.csv"), index=False)
+        table_8_3c_lmm(strata, nma_stats).to_csv(
+            os.path.join(output_dir, "table_8_3c_lmm_sensitivity.csv"), index=False)
+        table_rank_across_user(pdf, "overall", "tercile").to_csv(
+            os.path.join(output_dir, "table_8_3d_rank_tercile_strata.csv"), index=False)
 
-    # Figures (broadest CE=0 arm for stratum-level figures; CE>0 + HMA also split Low/High,
-    # computed above).
+        # Appendix §12.3 — sensitivities (median + rolling alt TDD references: per-user table +
+        # within-user contrast each), the HMA arm (within-user + LMM), and the rest of the rank
+        # rework (CE=0-ref tercile, both-ref binary, within-user bottom−top). ⚠️ the magnitude-based
+        # tables inherit the §8.3 D12 not-citable caveat; the rank tables resolve it.
+        table_8_3a_per_user_by_stratum(med_8_3a).to_csv(
+            os.path.join(output_dir, "table_12_3a_median_per_user_by_stratum.csv"), index=False)
+        table_8_3b_within_user(med, nma_stats).to_csv(
+            os.path.join(output_dir, "table_12_3b_median_within_user.csv"), index=False)
+        table_8_3a_per_user_by_stratum(roll_8_3a).to_csv(
+            os.path.join(output_dir, "table_12_3c_rolling_per_user_by_stratum.csv"), index=False)
+        table_8_3b_within_user(roll, nma_stats).to_csv(
+            os.path.join(output_dir, "table_12_3d_rolling_within_user.csv"), index=False)
+        table_8_3b_within_user({HIGH_MA_LABEL: hma_strata}, nma_stats).to_csv(
+            os.path.join(output_dir, "table_12_3e_high_engagement_within_user.csv"), index=False)
+        table_8_3c_lmm({HIGH_MA_LABEL: hma_strata}, nma_stats).to_csv(
+            os.path.join(output_dir, "table_12_3f_high_engagement_lmm.csv"), index=False)
+        table_rank_across_user(pdf, "ce0", "tercile").to_csv(
+            os.path.join(output_dir, "table_12_3g_ce0_rank_tercile_strata.csv"), index=False)
+        pd.concat([table_rank_across_user(pdf, "overall", "binary"),
+                   table_rank_across_user(pdf, "ce0", "binary")], ignore_index=True).to_csv(
+            os.path.join(output_dir, "table_12_3h_rank_binary_strata.csv"), index=False)
+        table_rank_within_user(pdf, "overall", nma_stats).to_csv(
+            os.path.join(output_dir, "table_12_3i_rank_within_user_overall.csv"), index=False)
+        table_rank_within_user(pdf, "ce0", nma_stats).to_csv(
+            os.path.join(output_dir, "table_12_3j_rank_within_user_ce0.csv"), index=False)
+
+    # ---- Figures. Each builder is a thunk → {filename: figure}, keyed by a short tag. `figs_filter`
+    # (a substring) renders only the matching builders — so iterating on one figure skips the others
+    # (notably the dense fig 8.3e/12.3h scatters). Broadest CE=0 arm for the stratum figures;
+    # CE>0 + HMA also split Low/High (computed above). ----
     strata_inf = strata["CE=0/BE<=inf"]
-    figs = {}
-    figs.update(figure_8_3a_violin(strata_inf, cmp_strata, hma_strata))     # primary, figure_8_3a_grid{1,2}
-    # Appendix §12.3 median- and rolling-reference violin variants (figs 12.3a / 12.3c).
-    figs.update(figure_8_3a_violin(med_8_3a["CE=0/BE<=inf"], med_8_3a[COMPARATOR_LABEL],
-                                   med_8_3a[HIGH_MA_LABEL], fig_id="12.3a", ref_note="median TDD ref",
-                                   fname_stem="figure_12_3a_median"))
-    figs.update(figure_8_3a_violin(roll_8_3a["CE=0/BE<=inf"], roll_8_3a[COMPARATOR_LABEL],
-                                   roll_8_3a[HIGH_MA_LABEL], fig_id="12.3c", ref_note="rolling-30-day TDD ref",
-                                   fname_stem="figure_12_3c_rolling"))
-    figs.update(figure_8_3b_paired_delta(strata, cmp_strata, hma_strata))   # two 2×2 grid figures
-    figs["figure_8_3c_stacked_ranges.png"] = figure_8_3c_stacked(pdf, strata_inf)
-    figs["figure_8_3d_R_distribution.png"] = figure_8_3d_r_dist(strata_inf)
-    figs["figure_8_3e_tir_vs_tdd_percentile.png"] = figure_8_3e_tir_vs_tdd_pct(pdf)
-    for fname, fig in figs.items():
-        fig.savefig(os.path.join(output_dir, fname), dpi=150)
-        plt.close(fig)
 
-    print(f"wrote analysis 8.3 ({cohort}) outputs to {output_dir}")
+    def _tercile_arms(reference):
+        a = lambda flag: _rank_strata(pdf, flag, reference=reference, split="tercile")  # noqa: E731
+        return a(CLASSIFICATIONS[-1][0]), a(COMPARATOR_FLAG), a(HIGH_MA_FLAG)
+
+    fig_builders = {
+        "8_3a": lambda: figure_8_3a_violin(strata_inf, cmp_strata, hma_strata),       # primary violins
+        "12_3a": lambda: figure_8_3a_violin(med_8_3a["CE=0/BE<=inf"], med_8_3a[COMPARATOR_LABEL],
+                                            med_8_3a[HIGH_MA_LABEL], fig_id="12.3a", ref_note="median TDD ref",
+                                            fname_stem="figure_12_3a_median"),
+        "12_3c": lambda: figure_8_3a_violin(roll_8_3a["CE=0/BE<=inf"], roll_8_3a[COMPARATOR_LABEL],
+                                            roll_8_3a[HIGH_MA_LABEL], fig_id="12.3c", ref_note="rolling-30-day TDD ref",
+                                            fname_stem="figure_12_3c_rolling"),
+        "8_3b": lambda: figure_8_3b_paired_delta(strata, cmp_strata, hma_strata),
+        "8_3c": lambda: {"figure_8_3c_stacked_ranges.png": figure_8_3c_stacked(strata_8_3a)},
+        "8_3d": lambda: {"figure_8_3d_R_distribution.png": figure_8_3d_r_dist(strata_inf)},
+        "8_3e": lambda: {"figure_8_3e_tir_vs_tdd_percentile.png": figure_8_3e_tir_vs_tdd_pct(pdf)},
+        "8_3f": lambda: figure_8_3a_violin(*_tercile_arms("overall"), fig_id="8.3f",       # overall-ref tercile violins
+                                           ref_note="overall TDD-rank terciles", fname_stem="figure_8_3f",
+                                           strata=("Low", "Mid", "High")),
+        "8_3g": lambda: figure_8_3g_rank_tercile_bars(pdf, reference="overall"),           # 5-day-type CI bars
+        "12_3g": lambda: figure_8_3a_violin(*_tercile_arms("ce0"), fig_id="12.3g",          # CE=0-ref tercile violins
+                                            ref_note="CE=0 TDD-rank terciles", fname_stem="figure_12_3g_ce0",
+                                            strata=("Low", "Mid", "High")),
+        "12_3i": lambda: figure_8_3g_rank_tercile_bars(pdf, reference="ce0", fig_id="12.3i",
+                                                       fname_stem="figure_12_3i_ce0_bars",
+                                                       ref_note="CE=0 TDD-rank ref"),
+        "12_3h": lambda: {"figure_12_3h_overall_tercile_scatter.png":
+                          figure_8_3e_tir_vs_tdd_pct(pdf, fig_id="12.3h", tercile_bands=True)},
+    }
+    n = 0
+    for key, build in fig_builders.items():
+        if figs_filter and figs_filter not in key:
+            continue
+        for fname, fig in build().items():
+            fig.savefig(os.path.join(output_dir, fname), dpi=150)
+            plt.close(fig)
+            n += 1
+
+    bits = []
+    if figures_only:
+        bits.append("figures_only — tables skipped")
+    if figs_filter:
+        bits.append(f"figs~'{figs_filter}'")
+    tag = f" ({'; '.join(bits)})" if bits else ""
+    print(f"wrote analysis 8.3 ({cohort}) — {n} figure(s){tag} to {output_dir}")
 
 
 def main(
@@ -536,10 +839,12 @@ def main(
     analysis_ready_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
     min_age=MIN_AGE,
     csv_path=None,
+    figures_only=False,
+    figs_filter=None,
 ):
     for cohort in ("adult", "pediatric", "all"):
         run(spark, analysis_ready_table, output_dir=None, cohort=cohort, min_age=min_age,
-            csv_path=csv_path)
+            csv_path=csv_path, figures_only=figures_only, figs_filter=figs_filter)
 
 
 if __name__ == "__main__":
@@ -549,6 +854,12 @@ if __name__ == "__main__":
     _parser.add_argument("--output_dir", default=None)
     _parser.add_argument("--cohort", default=None, choices=["adult", "pediatric", "all"])
     _parser.add_argument("--min_age", type=int, default=MIN_AGE)
+    _parser.add_argument("--figures-only", dest="figures_only", action="store_true",
+                         help="re-render figures only, skipping the slow LMM/bootstrap table writes "
+                              "(do a full run first so the tables exist)")
+    _parser.add_argument("--figs", dest="figs_filter", default=None,
+                         help="render only figure builders whose tag contains this substring "
+                              "(e.g. 8_3g); implies --figures-only. Tags: 8_3a/b/c/d/e/f/g, 12_3a/c/g/h/i")
     _args, _ = _parser.parse_known_args()
 
     try:
@@ -557,7 +868,9 @@ if __name__ == "__main__":
         _spark = None
 
     if _args.cohort is None:
-        main(_spark, _args.analysis_ready_table, min_age=_args.min_age, csv_path=_args.csv_path)
+        main(_spark, _args.analysis_ready_table, min_age=_args.min_age, csv_path=_args.csv_path,
+             figures_only=_args.figures_only, figs_filter=_args.figs_filter)
     else:
         run(_spark, _args.analysis_ready_table, _args.output_dir,
-            cohort=_args.cohort, min_age=_args.min_age, csv_path=_args.csv_path)
+            cohort=_args.cohort, min_age=_args.min_age, csv_path=_args.csv_path,
+            figures_only=_args.figures_only, figs_filter=_args.figs_filter)
