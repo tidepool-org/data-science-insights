@@ -50,10 +50,12 @@ HIGH_MA_LABEL = "CE>=3/BE>=3"
 # The 5-category arm set for the supplement / violins (3 NMA + CE>0 + high meal-announcement).
 SUPPLEMENT_ARMS = FIGURE_ARMS + [(HIGH_MA_FLAG, HIGH_MA_LABEL)]
 
-# §7.3 delivery strategies: (column value, short label). Any other / null strategy is
-# "ambiguous" and excluded (the staging CASE currently emits only these two values). Shared by
-# §8.2 (day-type × strategy interaction) and §8.3 (Low/High × strategy cross-tab) — single source.
-STRATEGIES = [("autobolus_on", "AB"), ("temp_basal_only", "TB")]
+# §7.3 delivery strategies: (column value, short label), in DISPLAY order (TB before AB, per MJC) —
+# this drives the §8.2 figure cell/line/x-axis order and the table row order. The LMM reference is
+# AB (autobolus_on), set alphabetically by statsmodels regardless of this list order, so coefficients
+# are unaffected by the ordering. Any other / null strategy is "ambiguous" and excluded (the staging
+# CASE currently emits only these two values). Shared by §8.2 + §8.3 (cross-tab) — single source.
+STRATEGIES = [("temp_basal_only", "TB"), ("autobolus_on", "AB")]
 STRATEGY_COL = "delivery_strategy"
 
 # §6 / PLN-1001 minimum age (years), applied in analysis via filter_cohort. Users KNOWN to

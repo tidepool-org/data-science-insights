@@ -88,10 +88,12 @@ an **overlapping reference** ("heavy vs typical meal day"), deliberate — not a
 HMA renders in **bronze** (#9c6b30) everywhere, matching §8.1's 5th arm.
 
 - **§8.2** (`analysis/outputs/analysis_8_2/{cohort}/`):
-  - Descriptive figures gain HMA as a 3rd day type beside NMA and CE>0 — **4 → 6 cells per strategy
-    pair**: `figure_8_2a_violin_grid{1,2}_*` (per-user means), `figure_8_2c_interaction_grid{1,2}_*`
-    (a bronze HMA marginal-mean line added), `figure_8_2d_stacked_bars` (HMA cells repeat across the
-    3 classification subplots — HMA doesn't vary by classification; shown for parallel comparison).
+  - **Colour + 5-day-type update (2026-06-06):** the descriptive day-type figures now use the shared
+    fixed `DAY_TYPE_COLORS` palette (3 nested NMA/CE=0 greens, CE>0 grey, HMA bronze) and show **all 5
+    day types** (matching §8.1's 8.1b): `figure_8_2a_violin_grid{1,2}_*` — 10 cells (5 day
+    types, each day type's TB|AB pair adjacent — TB lighter, AB darker, with a mean-connector line) laid out **4×1** (full-width); `figure_8_2c_interaction_grid{1,2}_*` — 5 marginal-mean
+    lines (one per nested NMA arm + CE>0 + HMA). `figure_8_2d_stacked_bars` is unchanged (range-coloured;
+    HMA cells repeat across the 3 classification subplots — HMA doesn't vary by classification).
   - **Appendix §12.2** `table_12_2a_high_engagement_interaction.csv` — the day_type ∈ {CE≥3/BE≥3, CE>0}
     × delivery_strategy interaction (same columns as Table 8.2b; reference = CE>0, so the main
     day-type coefficient is **CE≥3/BE≥3 − CE>0**). Thin HMA×autobolus-on cells may be `converged=False`.
