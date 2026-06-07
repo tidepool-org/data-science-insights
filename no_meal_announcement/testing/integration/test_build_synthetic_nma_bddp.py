@@ -226,13 +226,39 @@ def test_known_low_high_tdd_low_segment_has_lower_basal_rate():
 
 
 # ---------------------------------------------------------------------------
+# 6.12 nma_user_known_hma (HMA — CE>=3/BE>=3 arm)
+# ---------------------------------------------------------------------------
+
+def test_known_hma_shape():
+    """30 days: 6 CE=0/BE=0 + 24 HMA days (3 meal + 3 non-meal normal boluses each → CE=3 / BE=6),
+    split 12 AB / 12 TB. All boluses are subType='normal' (autoboluses carry an HK flag, not a
+    distinct subtype)."""
+    rows = nb._archetype_known_hma()
+    assert len(_days_with_cbg(rows)) == 30
+    # 24 HMA days × 3 meals = 72 food records (the 6 CE=0 days have none).
+    assert len(_by_type(rows, "food")) == 24 * 3
+    assert _carb_sum(rows) == 24 * 3 * 30.0
+    # All boluses subType='normal': CE=0 day = 5 (auto); HMA-AB = 3 meal + 3 non-meal + 5 auto = 11;
+    # HMA-TB = 3 + 3 + 0 = 6.
+    assert len(_by_type(rows, "bolus", subtype="normal")) == 6 * 5 + 12 * 11 + 12 * 6
+    assert len(_by_type(rows, "basal")) == 30
+
+
+def test_known_hma_is_registered_as_a_pair():
+    """Both HMA users share the builder; the 2nd carries its own _userId so each HMA × strategy cell
+    has >=2 distinct users (the HMA LMMs converge)."""
+    assert {"nma_user_known_hma", "nma_user_known_hma_2"} <= set(nb.ARCHETYPES)
+    assert {r["_userId"] for r in nb.ARCHETYPES["nma_user_known_hma_2"]()} == {"nma_user_known_hma_2"}
+
+
+# ---------------------------------------------------------------------------
 # 6.11 build_synthetic_nma_bddp aggregate (no Spark — exercise _build_rows
 # and _to_bddp_row)
 # ---------------------------------------------------------------------------
 
-def test_archetypes_dict_has_10_users():
-    assert len(nb.ARCHETYPES) == 10
-    assert set(nb.ARCHETYPES) == set(nb.DEMOGRAPHICS)
+def test_archetypes_dict_user_count():
+    assert len(nb.ARCHETYPES) == 13
+    assert set(nb.ARCHETYPES) == set(nb.DEMOGRAPHICS) == set(nb.ARCHETYPE_DAYS) == set(nb.USER_GENDER)
 
 
 def test_build_rows_sums_archetype_counts():
@@ -241,9 +267,9 @@ def test_build_rows_sums_archetype_counts():
     assert len(rows) == expected
 
 
-def test_build_rows_distinct_user_count_is_10():
+def test_build_rows_distinct_user_count():
     rows = nb._build_rows()
-    assert len({r["_userId"] for r in rows if r["_userId"]}) == 10
+    assert len({r["_userId"] for r in rows if r["_userId"]}) == len(nb.ARCHETYPES)
 
 
 def test_to_bddp_row_has_all_bddp_columns():
@@ -260,21 +286,13 @@ def test_to_bddp_row_defaults_timezone_offset():
     assert expanded["timezoneOffset"] == nb.TZ_OFFSET_MIN
 
 
-@pytest.mark.parametrize("uid", sorted(["nma_user_pure_be0", "nma_user_mixed",
-                                         "nma_user_low_coverage", "nma_user_below_min_days",
-                                         "nma_user_pediatric", "nma_user_ambiguous_strategy",
-                                         "nma_user_tdd_drift", "nma_user_known_paired_diff",
-                                         "nma_user_known_interaction", "nma_user_known_low_high_tdd"]))
+@pytest.mark.parametrize("uid", sorted(nb.ARCHETYPES))
 def test_every_archetype_has_demographics(uid):
     assert uid in nb.DEMOGRAPHICS
     assert isinstance(nb.DEMOGRAPHICS[uid]["dob"], date)
 
 
-@pytest.mark.parametrize("uid", sorted(["nma_user_pure_be0", "nma_user_mixed",
-                                         "nma_user_low_coverage", "nma_user_below_min_days",
-                                         "nma_user_pediatric", "nma_user_ambiguous_strategy",
-                                         "nma_user_tdd_drift", "nma_user_known_paired_diff",
-                                         "nma_user_known_interaction", "nma_user_known_low_high_tdd"]))
+@pytest.mark.parametrize("uid", sorted(nb.ARCHETYPES))
 def test_every_archetype_uses_consistent_userid(uid):
     builder = nb.ARCHETYPES[uid]
     rows = builder()

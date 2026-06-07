@@ -163,6 +163,13 @@ def _assert_recovers_paired_diff_design(spark, tables, raw_pdf, tmp_dir):
     assert len(glob.glob(os.path.join(out_all, "figure_8_1b_violin_*.png"))) == 2
     assert len(glob.glob(os.path.join(out_all, "figure_8_1c_paired_delta_*.png"))) == 2
 
+    # ── G. the HMA (CE>=3/BE>=3) archetype pair populates the HMA arm → its LMM converges ──
+    hma = pd.read_csv(os.path.join(out_all, "table_12_1b_high_engagement_lmm.csv"))
+    hma_tir = hma[hma["endpoint"] == "tir"]
+    assert len(hma_tir) == 1, "missing HMA LMM TIR row (table_12_1b)"
+    assert bool(hma_tir.iloc[0]["converged"]), (
+        "HMA-vs-CE>0 LMM (Table 12.1b) should converge on TIR with the nma_user_known_hma pair")
+
 
 def main(spark=None):
     """Build the pipeline, then run the §8.1 checks against it. run_pipeline.run is idempotent

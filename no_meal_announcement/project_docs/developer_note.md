@@ -6,8 +6,10 @@ what the report needs back from the analysis/code, data-consistency issues seen 
 outputs, and the output "contract" the report depends on. Newest dated entries at the top; methodology
 source of truth stays in [decisions.md](decisions.md)._
 
-_Status as of 2026-06-07. The report (`RPT-1008 Data Analysis Report Template.docx`) currently reflects
-analysis runs through `analysis_8_4` @ 2026-06-06 20:08; §8.1/§8.2 still on earlier runs (see ask #2)._
+_Status as of 2026-06-07. The report (`RPT-1008 Data Analysis Report Template.docx`) reflects:
+`analysis_8_4` @ 2026-06-06 20:08, `analysis_8_2` @ 2026-06-06 11:01 (figures expanded to all 5 day
+types), and `analysis_8_1` tables @ 2026-06-04 with figures re-rendered @ 2026-06-06 10:05 (cosmetic
+recolor). All §8.1/§8.2 body tables verified against the current CSVs (match) — see resolved ask #2._
 
 ## 1. Open asks (need a developer answer or action)
 
@@ -16,9 +18,12 @@ analysis runs through `analysis_8_4` @ 2026-06-06 20:08; §8.1/§8.2 still on ea
    in the prior render. The CE=0 day set is unchanged (83,825 user-days); the *entire* reduction is in
    the **CE>0** arm (793,525 → 496,311). This matches same-user-set gating, but please confirm it's the
    gate and not an unintended join/filter before the report is finalized. (Mirrors report Reviewer-Note 4.)
-2. **Flag any value drift in §8.1 (re-ran 2026-06-06 10:05) and §8.2 (11:01).** The report's §8.1/§8.2
-   tables were populated from earlier runs; those dirs re-ran today. The report editor will diff, but a
-   one-line "X changed / nothing changed" from your side avoids a blind re-sync.
+2. **~~Flag any value drift in §8.1 / §8.2~~ — RESOLVED 2026-06-07.** Report editor diffed every §8.1
+   and §8.2 body table (8.1a, 8.1b, 8.1c, 8.2a, 8.2b) against the current CSVs: **all match** (§8.1 table
+   CSVs are unchanged since 2026-06-04; §8.2 tables match the 11:01 run). Figures were re-embedded: §8.1
+   was a cosmetic recolor (solid green/gray/bronze violins, same 5 arms/data), and **§8.2 figures
+   expanded to all 5 day types** (3 nested NMA + CE>0 + HMA — the same "all groups" expansion as §8.4;
+   captions updated, Figure 8.2a is now a portrait 4-row layout). No code action needed.
 3. **§8.2 in-image figure titles.** Figures 8.2a–8.2c bake *in-image* titles that read "8.2c / 8.2d"
    (old numbering) while the report captions are 8.2a/8.2b/8.2c. Either regenerate with corrected
    in-image titles, or drop the in-image "Figure N" titles entirely (the report captions supply the

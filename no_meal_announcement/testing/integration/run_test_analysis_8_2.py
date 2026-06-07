@@ -147,6 +147,13 @@ def _assert_recovers_interaction_design(spark, tables, raw_pdf, tmp_dir):
     else:
         assert pd.isna(rb["interaction_coef"]), "non-converged 8.2b row must have NaN interaction_coef (guard)"
 
+    # ── C2. the §12.2 HMA (CE>=3/BE>=3) × strategy interaction converges (HMA archetype pair) ──
+    t122 = pd.read_csv(os.path.join(out_all, "table_12_2a_high_engagement_interaction.csv"))
+    h_tir = t122[t122["endpoint"] == "tir"]
+    assert len(h_tir) == 1, "missing §12.2 HMA interaction TIR row"
+    assert bool(h_tir.iloc[0]["converged"]), (
+        "§12.2 HMA × strategy interaction (Table 12.2a) should converge on TIR with the HMA pair")
+
     # ── D. all §8.2 artifacts written (cohort='all') ──────────────────────────
     for csv in ("table_8_2a_marginal_cells.csv", "table_8_2b_interaction.csv",
                 "table_12_2a_high_engagement_interaction.csv"):

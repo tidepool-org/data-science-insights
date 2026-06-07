@@ -73,6 +73,8 @@ DEMOGRAPHICS = {
     "nma_user_known_interaction":  {"dob": date(1985, 1, 1)},   # 39
     "nma_user_known_low_high_tdd": {"dob": date(1985, 1, 1)},   # 39
     "nma_user_ce_pos_only":        {"dob": date(1988, 1, 1)},   # 36 — comparator-restriction probe
+    "nma_user_known_hma":          {"dob": date(1985, 1, 1)},   # 39 — HMA (CE>=3/BE>=3) arm
+    "nma_user_known_hma_2":        {"dob": date(1985, 1, 1)},   # 39 — HMA pair (2nd user → LMM converges)
 }
 
 # Per-archetype window length (days from START_DAY). Drives build_loop_recommendations
@@ -90,6 +92,8 @@ ARCHETYPE_DAYS = {
     "nma_user_known_interaction":  20,
     "nma_user_known_low_high_tdd": 30,
     "nma_user_ce_pos_only":        14,
+    "nma_user_known_hma":          30,
+    "nma_user_known_hma_2":        30,
 }
 
 # Per-user sex for the analysis-ready LEFT JOIN to user_gender (§8.1 Sample
@@ -107,6 +111,8 @@ USER_GENDER = {
     "nma_user_known_interaction":  "F",
     "nma_user_known_low_high_tdd": "F",
     "nma_user_ce_pos_only":        "M",
+    "nma_user_known_hma":          "M",
+    "nma_user_known_hma_2":        "F",
 }
 
 
@@ -334,6 +340,39 @@ def _archetype_ce_pos_only(uid="nma_user_ce_pos_only"):
     return rows
 
 
+def _archetype_known_hma(uid="nma_user_known_hma"):
+    """6.12 — 30 days, a high meal-announcement (HMA, CE>=3/BE>=3) user. 6 CE=0/BE=0 AB days (so it
+    is a CE=0-contributing user — restrict_comparator keeps its HMA flag, and these are the NMA side
+    of the §8.1 windowed HMA contrast) + 24 HMA days, each with **3 meal + 3 non-meal normal boluses**
+    (carb_entry_count=3 → CE>=3, manual_normal_bolus_count=6 → BE>=3), split **12 AB** (5 autoboluses
+    → automatic_bolus_count>=3) / **12 TB** (0 autoboluses → temp_basal_only).
+
+    Exercises the HMA code paths that the rest of the fixture leaves empty: §8.1's HMA column +
+    HMA-vs-CE>0 LMM (`table_12_1b_high_engagement_lmm`) + windowed HMA, and §8.2's §12.2 HMA ×
+    delivery_strategy interaction (`table_12_2a`). Registered as a PAIR (`nma_user_known_hma` + `_2`,
+    identical design) so every HMA × strategy cell has >=2 distinct users and the HMA LMMs CONVERGE.
+    TIR: CE=0 days 70, HMA-AB 64, HMA-TB 60. (All boluses are subType='normal'; autoboluses carry an
+    HK AutomaticallyIssued flag, not a distinct subtype.)"""
+    rows = []
+    d = 0
+    for _ in range(6):   # CE=0/BE=0 AB — CE=0-contributing + the NMA side of the windowed HMA match
+        day = START_DAY + timedelta(days=d); d += 1
+        rows.extend(make_cbg_rows_at_target_tir(uid, day, tir_pct=70.0))
+        rows.extend(_archetype_bolus(uid, day, "ce0_be0"))
+        rows.append(make_basal_row(uid, day))
+    for _ in range(12):  # HMA-AB: CE>=3 (3 meals) AND BE>=3 (3 meal + 3 non-meal manual) + 5 autoboluses
+        day = START_DAY + timedelta(days=d); d += 1
+        rows.extend(make_cbg_rows_at_target_tir(uid, day, tir_pct=64.0))
+        rows.extend(make_bolus_events(uid, day, n_meal=3, n_non_meal=3, n_autobolus=5, carbs_per_meal=30.0))
+        rows.append(make_basal_row(uid, day))
+    for _ in range(12):  # HMA-TB: same CE>=3/BE>=3, 0 autoboluses → temp_basal_only
+        day = START_DAY + timedelta(days=d); d += 1
+        rows.extend(make_cbg_rows_at_target_tir(uid, day, tir_pct=60.0))
+        rows.extend(make_bolus_events(uid, day, n_meal=3, n_non_meal=3, n_autobolus=0, carbs_per_meal=30.0))
+        rows.append(make_basal_row(uid, day))
+    return rows
+
+
 ARCHETYPES = {
     "nma_user_pure_be0":           _archetype_pure_be0,
     "nma_user_mixed":              _archetype_mixed,
@@ -346,6 +385,9 @@ ARCHETYPES = {
     "nma_user_known_interaction":  _archetype_known_interaction,
     "nma_user_known_low_high_tdd": _archetype_known_low_high_tdd,
     "nma_user_ce_pos_only":        _archetype_ce_pos_only,
+    # HMA pair (identical design) — gives the CE>=3/BE>=3 LMMs >=2 users/cell so they converge.
+    "nma_user_known_hma":          _archetype_known_hma,
+    "nma_user_known_hma_2":        lambda: _archetype_known_hma("nma_user_known_hma_2"),
 }
 
 
