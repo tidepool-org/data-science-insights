@@ -116,6 +116,19 @@ def _ensure_staging_on_path():
         sys.path.insert(0, staging_dir)
 
 
+def pseudonymize_uid(raw):
+    """Mirror export_user_day_analysis_ready's salted-SHA256 `_userId` pseudonymization (D16) so an
+    integration test can find an archetype by its raw name in the (hashed) analysis-ready table.
+
+    The staging SQL emits `concat('u', substr(sha2(concat(_userId, USERID_SALT), 256), 1, 16))`;
+    this reproduces it byte-for-byte. USERID_SALT is imported from the staging module (not hardcoded)
+    so the helper tracks the real salt if it ever changes."""
+    import hashlib
+    _ensure_staging_on_path()
+    from export_user_day_analysis_ready import USERID_SALT  # noqa: E402
+    return "u" + hashlib.sha256((raw + USERID_SALT).encode("utf-8")).hexdigest()[:16]
+
+
 def _all_terminal_tables_exist(spark):
     for key in TERMINAL_TABLES:
         if not spark.catalog.tableExists(TABLES[key]):

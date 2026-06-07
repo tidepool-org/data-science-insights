@@ -47,10 +47,13 @@ except ImportError:
     import run_pipeline as _run_pipeline  # type: ignore  # noqa: E402
 
 A81_FILE = "analysis_8-1_glycemic_outcomes_nma_vs_carb_entry.py"
-PAIRED_USER = "nma_user_known_paired_diff"
-CE_POS_ONLY_USER = "nma_user_ce_pos_only"
-PEDIATRIC_USER = "nma_user_pediatric"
-EXCLUDED_USERS = ("nma_user_low_coverage", "nma_user_below_min_days")
+# Archetype `_userId`s are pseudonymized (salted SHA-256, D16) in the analysis-ready table, so match
+# the hashed id the table actually carries — raw name → hash via run_pipeline.pseudonymize_uid.
+PAIRED_USER = _run_pipeline.pseudonymize_uid("nma_user_known_paired_diff")
+CE_POS_ONLY_USER = _run_pipeline.pseudonymize_uid("nma_user_ce_pos_only")
+PEDIATRIC_USER = _run_pipeline.pseudonymize_uid("nma_user_pediatric")
+EXCLUDED_USERS = tuple(_run_pipeline.pseudonymize_uid(u)
+                       for u in ("nma_user_low_coverage", "nma_user_below_min_days"))
 
 
 def _ensure_statsmodels():
@@ -117,7 +120,7 @@ def _assert_recovers_paired_diff_design(spark, tables, raw_pdf, tmp_dir):
     exp_nma, exp_cmp = float(wide["NMA"].mean()), float(wide["CMP"].mean())
     exp_diff = float((wide["NMA"] - wide["CMP"]).mean())
 
-    contrasts = pd.read_csv(os.path.join(out_all, "method_a_contrasts.csv"))
+    contrasts = pd.read_csv(os.path.join(out_all, "table_8_1a_expanded.csv"))
     row = contrasts[(contrasts["classification"] == "CE=0/BE=0")
                     & (contrasts["endpoint"] == "tir")].iloc[0]
     assert abs(row["nma_mean"] - exp_nma) < 0.5, (row["nma_mean"], exp_nma)
@@ -150,7 +153,7 @@ def _assert_recovers_paired_diff_design(spark, tables, raw_pdf, tmp_dir):
         assert u not in elig_user_set, f"{u} should be excluded (coverage / <10 days)"
 
     # ── F. all §8.1 artifacts written (cohort='all') ──────────────────────────
-    for csv in ("method_a_contrasts.csv", "sample_information.csv",
+    for csv in ("table_8_1a_expanded.csv", "sample_information.csv",
                 "sex_missingness_sensitivity.csv", "nma_day_frequency.csv",
                 "table_8_1a_per_user_means.csv", "table_8_1b_lmm_contrasts.csv",
                 "table_8_1c_behavioral_summary.csv"):
