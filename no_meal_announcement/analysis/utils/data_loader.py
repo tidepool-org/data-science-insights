@@ -225,6 +225,14 @@ def windowed_matched_means(pdf, nma_flag, cmp_flag, endpoints, half=WINDOW_HALF)
             rec[f"{ep}__cmp"] = np.nanmean(local[keep])
         rows.append(rec)
     per_user = pd.DataFrame(rows)
+    if per_user.empty:
+        # No user had a matched NMA day (e.g. an arm with no qualifying days — like the HMA arm in a
+        # cohort/fixture with no CE>=3/BE>=3 days). Return an EMPTY frame that still carries the
+        # {ep}__nma / {ep}__cmp columns, so callers get empty Series rather than a KeyError on a
+        # column-less frame (the guarded callers check len()>0; the figure builders index by column).
+        per_user = pd.DataFrame(columns=(["_userId"]
+                                         + [f"{ep}__nma" for ep in ep_cols]
+                                         + [f"{ep}__cmp" for ep in ep_cols]))
     coverage = {"total_nma_days": total_nma, "matched_nma_days": matched_nma,
                 "n_users_matched": len(per_user)}
     return per_user, coverage

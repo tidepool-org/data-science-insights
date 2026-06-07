@@ -1,8 +1,9 @@
-# Report-editor note — §8.1–§8.3 & Appendix §12 (PLN-1008 NMA)
+# Report-editor note — §8.1–§8.4 & Appendix §12 (PLN-1008 NMA)
 
-_As of 2026-06-05. For whoever assembles the report from the analysis outputs. Outputs live in
-`analysis/outputs/analysis_8_{1,2,3}/{adult,pediatric,all}/` — every table/figure is produced per
-cohort. Sections 1–6 below are §8.1-specific; section 7 covers the §8.2/§8.3 high-engagement additions._
+_As of 2026-06-06. For whoever assembles the report from the analysis outputs. Outputs live in
+`analysis/outputs/analysis_8_{1,2,3,4}/{adult,pediatric,all}/` — every table/figure is produced per
+cohort. Sections 1–6 below are §8.1-specific; section 7 covers the §8.2/§8.3 high-engagement additions;
+section 8 covers the new §8.4 delivery-strategy analysis._
 
 ## 1. Numbering scheme
 
@@ -68,7 +69,7 @@ The plan-locked Tables **8.1a/8.1b/8.1c are unchanged** in number/meaning.
   characterizes mixed-behaviour periods; the full-record §8.1 stays primary.
 - **§8.1 stringent-arm directional claims:** report none where Method A and Method B (LMM) diverge;
   only CE=0/BE≤∞ is robust (decisions.md D5).
-- **§8.3 TDD-stratum:** cite the **rank terciles** (Table 8.3d + §12.3g–j; D12 RESOLVED, pending MJC sign-off), not the magnitude-based strata (8.3a/b/c, 12.3a–f) — see §7 + decisions.md D12.
+- **§8.3 TDD-stratum:** cite the **rank terciles** (Table 8.3d + §12.3g–j; D12 RESOLVED), not the magnitude-based strata (8.3a/b/c, 12.3a–f) — see §7 + decisions.md D12.
 
 ## 6. Headline findings (framing)
 
@@ -128,9 +129,56 @@ HMA renders in **bronze** (#9c6b30) everywhere, matching §8.1's 5th arm.
     The median/rolling per-user tables + violins carry the same 5 sections / 6 groups as the primary
     binary; the **empirical-tercile outputs were dropped** and replaced by the rank terciles above (D12).
   - ✅ **§8.3 TDD-stratum citation:** the **rank-tercile** outputs (Table 8.3d + §12.3g–j) resolve D12
-    (same-user-set gated + outlier-robust; **citable pending MJC sign-off**). The **magnitude-based**
+    (same-user-set gated + outlier-robust; **citable**, D12 resolved). The **magnitude-based**
     strata (mean-ref binary 8.3a/b/c; median/rolling/HMA §12.3a–f) are superseded by the rank views —
     do not cite those on their own (decisions.md D12 RESOLUTION).
 
 The plan defines no §8.2/§8.3 high-engagement material — everything in this section is **new
 supplementary** Appendix §12 content, parallel to §8.1's §12.1. Provenance: `decisions.md` D17, D18._
+
+## 8. §8.4 delivery strategy (AB vs TB) × TDD stratum × day type + carb-entry-rate (2026-06-06, D19)
+
+_⚠️ **SECONDARY / EXPLORATORY** — not a primary citable claim, and it **inherits §8.3's D12 status**
+(citable; D12 resolved). Two delivery-strategy objectives in one module
+(`analysis_8-4_…stratified.py` → `outputs/analysis_8_4/<cohort>/`). The plan defines no §8.4 content;
+this is all new. **§8.2 is unaffected.** AB = `autobolus_on`, TB = `temp_basal_only`. ⚠️ SECONDARY/EXPLORATORY; inherits §8.3's D12-resolved rank-tercile status._
+
+- **Part 1 — glycemic outcomes × within-user TDD stratum × strategy.** Does the AB-vs-TB difference
+  depend on TDD stratum (and day type)? Headline day type = **CE=0/BE≤1 vs CE>0**; strata = the §8.3
+  same-user-set-gated **within-user TDD rank**, **overall reference**, **binary Low/High** (the
+  cell-viable main axis). Estimand = a per-day-type 2-way interaction LMM
+  `outcome ~ tdd_stratum * delivery_strategy + (1|user)`; the **stratum × strategy interaction**
+  (does the AB−TB gap differ Low vs High?) is the inferential headline, with the equal-user-weight
+  cross-tab as the Method-A anchor. **Main outputs:**
+  - `table_8_4a_strategy_cross_binary.csv` — **all 5 day types** × strategy × endpoint × stratum:
+    across-user mean±SD + `n_users` + `n_days` (composite same-user-set gated → `n_users` equal across
+    a day type's cells). The 3 nested NMA arms (CE=0/BE=0 ⊂ BE≤1 ⊂ BE≤∞), CE>0, and HMA (CE≥3/BE≥3).
+  - `table_8_4b_strategy_interaction.csv` — **all 5 day types**, one per-day-type fit each:
+    `stratum_main_coef_low_minus_high`, `strategy_main_coef_tb_minus_ab`, `interaction_coef` (+ CI/p),
+    `converged`, `n_users`/`n_days`.
+  - `figure_8_4a_grid{1,2}_*.png` — the summary figure: AB vs TB across Low/High strata (staggered
+    95% CI bars; colour = day type, **alpha = strategy: AB darker / TB lighter**; no p-values).
+- **Part 2 — carb-entry-rate by strategy** ("are users more likely to log carbs on TB vs AB days?"):
+  `table_8_4c_carb_entry_by_strategy.csv` (within-user paired TB−AB: fraction of days with ≥1 carb
+  entry + carb entries/day, Method A + supportive LMM) + `figure_8_4b_carb_entry_by_strategy.png`.
+- **Appendix §12.4** (alternative axes, on the headline CE=0/BE≤1 vs CE>0 pair):
+  `table_12_4a_strategy_cross_tercile.csv` (rank **terciles** Low/Mid/High — the "both" sketch),
+  `table_12_4c_strategy_cross_ce0_binary.csv` (**CE=0-reference** companion),
+  `table_12_4d_strategy_within_user.csv` (within-user AB−TB within each fixed stratum); figures
+  `figure_12_4a_tercile_grid{1,2}` / `figure_12_4b_all5_grid{1,2}` (the all-5-day-type figure
+  companion of Table 8.4a — too busy for the main section) / `figure_12_4c_ce0_grid{1,2}`.
+  (The standalone all-5 binary cross-tab table was folded into Table 8.4a.)
+- **Caveats to preserve in any prose/captions:**
+  - **Same-day entanglement / endogeneity:** a day's delivery strategy is itself a behavioural outcome
+    (`automatic_bolus_count ≥ 3`), not randomized — AB-vs-TB confounds strategy with whatever drove it.
+    Part 2 is the extreme case (carb logging mechanically pushes a day toward TB) → descriptive only.
+  - **D11 + report within stratum:** High-TDD CE=0 days run much worse (intake confound), so report the
+    strategy contrast **within stratum** (TDD rank held fixed), never pooled.
+  - **D5 gate:** no directional claim where the equal-user-weight cross-tab and the LMM diverge in sign
+    (this fires for the Part-2 carb-rate metric).
+- **Headline findings (exploratory):** CE=0/BE≤1 — AB runs ≈ **+8.6 TIR** above TB, and the
+  **interaction is n.s.** (the gap does **not** differ Low vs High). Part 2 — users log carbs on a
+  **smaller** fraction of TB days than AB days (the surprising direction); the carb-rate metric is
+  Method-A/Method-B sign-divergent → **no directional claim**.
+
+Provenance: `decisions.md` D19._

@@ -95,6 +95,12 @@ DAY_TYPE_COLORS = {
     "CE>=3/BE>=3": HIGH_MA_COLOR,          # CE>=3/BE>=3 high meal-announcement (bronze)
 }
 
+# Delivery-strategy fill alpha for the §8.4 strategy figures: colour stays the day type's
+# DAY_TYPE_COLORS, alpha cues the strategy — autobolus_on darker, temp_basal_only lighter (TB-first
+# display via data_loader.STRATEGIES). Keyed by the delivery_strategy column value. Matches §8.2's
+# local encoding so AB/TB read identically across the document. (§8.2 keeps its own local copy.)
+STRATEGY_ALPHA = {"autobolus_on": 0.78, "temp_basal_only": 0.40}
+
 
 def violin_box_panel(ax, groups, *, title=None, title_color=None, separators=(), label_fs=TICK_FS):
     """Draw the standard violin + box + dots panel into `ax`.
