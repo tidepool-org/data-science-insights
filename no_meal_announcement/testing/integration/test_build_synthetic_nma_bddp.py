@@ -23,6 +23,7 @@ from FDA_real_world_data.testing.integration.build_synthetic_bddp import (  # ty
 )
 
 from integration import build_synthetic_nma_bddp as nb  # type: ignore # noqa: E402
+import nma_test_helpers as _nh  # type: ignore # noqa: E402  — for _AUTO_PAYLOAD (autobolus marker)
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +48,18 @@ def _carb_sum(rows):
     return total
 
 
+def _autoboluses(rows):
+    """Bolus rows carrying the HealthKit AutomaticallyIssued flag. Autoboluses are emitted with
+    subType='normal' (like all Loop boluses) + the _AUTO_PAYLOAD flag; the classifier counts them as
+    automatic, NOT toward BE — so count by the flag, not by subType."""
+    return [r for r in rows if r["type"] == "bolus" and r.get("payload") == _nh._AUTO_PAYLOAD]
+
+
+def _manual_boluses(rows):
+    """Manual normal boluses (meal + non-meal) = BE; excludes the HK-flagged autoboluses."""
+    return [r for r in rows if r["type"] == "bolus" and r.get("payload") != _nh._AUTO_PAYLOAD]
+
+
 # ---------------------------------------------------------------------------
 # 6.1 nma_user_pure_be0
 # ---------------------------------------------------------------------------
@@ -54,8 +67,8 @@ def _carb_sum(rows):
 def test_pure_be0_shape():
     rows = nb._archetype_pure_be0()
     assert len(_by_type(rows, "cbg")) == 14 * 288
-    assert len(_by_type(rows, "bolus", subtype="normal")) == 0
-    assert len(_by_type(rows, "bolus", subtype="automated")) == 14 * 5
+    assert len(_manual_boluses(rows)) == 0          # CE=0/BE=0 → no manual normal boluses (BE=0)
+    assert len(_autoboluses(rows)) == 14 * 5        # 5 autoboluses/day (subType='normal' + HK flag)
     assert len(_by_type(rows, "food")) == 0
     assert _carb_sum(rows) == 0.0
     assert len(_by_type(rows, "basal")) == 14
@@ -74,9 +87,9 @@ def test_mixed_shape():
     assert len(_by_type(rows, "cbg")) == 14 * 288
     # Non-meal normal boluses: 3×0 + 3×1 + 3×5 + 5×0 = 18
     # Meal normal boluses:     3×0 + 3×0 + 3×0 + 5×2 = 10
-    # Total normal-subType bolus rows = 18 + 10 = 28
-    assert len(_by_type(rows, "bolus", subtype="normal")) == 28
-    assert len(_by_type(rows, "bolus", subtype="automated")) == 14 * 5
+    # Total manual normal boluses (BE) = 18 + 10 = 28
+    assert len(_manual_boluses(rows)) == 28
+    assert len(_autoboluses(rows)) == 14 * 5
     # Food records: 5 CE>0 days × 2 meals = 10
     assert len(_by_type(rows, "food")) == 10
     # Carbs: 10 meals × 30g = 300
@@ -94,7 +107,7 @@ def test_low_coverage_has_half_the_cbg():
     assert len(cbg) == 14 * 144
     # All other shape is CE=0/BE=0.
     assert _carb_sum(rows) == 0.0
-    assert len(_by_type(rows, "bolus", subtype="normal")) == 0
+    assert len(_manual_boluses(rows)) == 0
     assert len(_by_type(rows, "basal")) == 14
 
 
@@ -150,11 +163,11 @@ def test_tdd_drift_basal_rate_rises_monotonically():
     """Day 0 basal rate < day 59 basal rate by design."""
     rows = nb._archetype_tdd_drift()
     basals = sorted(_by_type(rows, "basal"), key=lambda r: r["time_string"])
-    assert basals[0]["normal"] < basals[-1]["normal"]
+    assert basals[0]["rate"] < basals[-1]["rate"]
     # Sanity: 30 U/day target → basal_u ≈ 18 → rate ≈ 0.75 U/hr.
-    # And 80 U/day target → basal_u ≈ 48 → rate ≈ 2.0 U/hr.
-    assert 0.7 < basals[0]["normal"] < 0.8
-    assert 1.9 < basals[-1]["normal"] < 2.1
+    # And 80 U/day target → basal_u ≈ 48 → rate ≈ 2.0 U/hr.  (basal rate lands in `rate`, not `normal`.)
+    assert 0.7 < basals[0]["rate"] < 0.8
+    assert 1.9 < basals[-1]["rate"] < 2.1
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +208,7 @@ def test_known_interaction_spans_20_days_in_four_cells():
     rows = nb._archetype_known_interaction()
     assert len(_days_with_cbg(rows)) == 20
     # AB cells (10 days): 5 autoboluses/day = 50
-    assert len(_by_type(rows, "bolus", subtype="automated")) == 50
+    assert len(_autoboluses(rows)) == 50
     # TB cells (10 days): 0 autoboluses; 1 non-meal each
     # AB CE>0 cell (5 days): 2 meals each = 10 food rows
     # TB CE>0 cell (5 days): 2 meals each = 10 food rows
@@ -209,11 +222,11 @@ def test_known_interaction_spans_20_days_in_four_cells():
 def test_known_low_high_tdd_spans_30_days_all_ce0_be0():
     rows = nb._archetype_known_low_high_tdd()
     assert len(_days_with_cbg(rows)) == 30
-    # All days CE=0/BE=0: no food, no normal boluses.
+    # All days CE=0/BE=0: no food, no manual normal boluses.
     assert len(_by_type(rows, "food")) == 0
-    assert len(_by_type(rows, "bolus", subtype="normal")) == 0
+    assert len(_manual_boluses(rows)) == 0
     # 30 days × 5 autoboluses
-    assert len(_by_type(rows, "bolus", subtype="automated")) == 30 * 5
+    assert len(_autoboluses(rows)) == 30 * 5
 
 
 def test_known_low_high_tdd_low_segment_has_lower_basal_rate():
@@ -221,8 +234,8 @@ def test_known_low_high_tdd_low_segment_has_lower_basal_rate():
     basals = sorted(_by_type(rows, "basal"), key=lambda r: r["time_string"])
     low_seg = basals[:15]
     high_seg = basals[15:]
-    assert all(b["normal"] == 0.625 for b in low_seg)
-    assert all(b["normal"] == 1.25 for b in high_seg)
+    assert all(b["rate"] == 0.625 for b in low_seg)
+    assert all(b["rate"] == 1.25 for b in high_seg)
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +291,8 @@ def test_to_bddp_row_has_all_bddp_columns():
     fail otherwise)."""
     minimal = next(iter(nb._archetype_pure_be0()))
     expanded = nb._to_bddp_row(minimal)
-    assert set(expanded) == set(BDDP_COLUMNS)
+    # _to_bddp_row expands to NMA_BDDP_COLUMNS (= BDDP_COLUMNS + the NMA-only `rate` column).
+    assert set(expanded) == set(nb.NMA_BDDP_COLUMNS)
 
 
 def test_to_bddp_row_defaults_timezone_offset():

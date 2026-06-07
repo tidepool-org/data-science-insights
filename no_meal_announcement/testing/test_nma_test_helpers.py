@@ -61,11 +61,13 @@ def test_make_bolus_events_subtype_breakdown():
     bolus = [r for r in rows if r["type"] == "bolus"]
     food = [r for r in rows if r["type"] == "food"]
 
-    normal = [r for r in bolus if r["subType"] == "normal"]
-    automated = [r for r in bolus if r["subType"] == "automated"]
+    # All Loop boluses (incl. autoboluses) are subType='normal'; autoboluses are told apart by the
+    # HealthKit AutomaticallyIssued flag in the payload (the classifier counts them as automatic).
+    manual = [r for r in bolus if r.get("payload") != nma._AUTO_PAYLOAD]
+    automated = [r for r in bolus if r.get("payload") == nma._AUTO_PAYLOAD]
 
-    assert len(normal) == 2 + 3, "normal-subType bolus = meal + non_meal"
-    assert len(automated) == 4, "automated-subType bolus = n_autobolus"
+    assert len(manual) == 2 + 3, "manual normal boluses (BE) = meal + non_meal"
+    assert len(automated) == 4, "autoboluses = n_autobolus (HK-flagged, subType='normal')"
     assert len(food) == 2, "one food record per meal"
 
 
