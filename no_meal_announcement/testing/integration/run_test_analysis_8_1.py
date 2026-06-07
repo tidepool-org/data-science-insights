@@ -160,8 +160,8 @@ def _assert_recovers_paired_diff_design(spark, tables, raw_pdf, tmp_dir):
         p = os.path.join(out_all, csv)
         assert os.path.exists(p) and os.path.getsize(p) > 0, f"missing/empty {csv}"
     assert os.path.exists(os.path.join(out_all, "figure_8_1a_stacked_bars.png"))
-    assert len(glob.glob(os.path.join(out_all, "figure_8_1b_violin_*.png"))) == 2
-    assert len(glob.glob(os.path.join(out_all, "figure_8_1c_paired_delta_*.png"))) == 2
+    assert os.path.exists(os.path.join(out_all, "figure_8_1b_violin_4x2.png"))  # merged to one 4×2
+    assert os.path.exists(os.path.join(out_all, "figure_8_1c_paired_delta_4x2.png"))  # merged to one 4×2
 
     # ── G. the HMA (CE>=3/BE>=3) archetype pair populates the HMA arm → its LMM converges ──
     hma = pd.read_csv(os.path.join(out_all, "table_12_1b_high_engagement_lmm.csv"))

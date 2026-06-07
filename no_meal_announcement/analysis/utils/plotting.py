@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 import matplotlib as mpl
+import matplotlib.pyplot as plt
 
 # House style: larger fonts across every NMA figure. All four analyses import this module (after
 # matplotlib.use("Agg")), so this rcParams bump applies everywhere; the explicit sizes below feed
@@ -83,16 +84,17 @@ def endpoint_color(endpoint):
 
 # Fixed per-day-type palette — supersedes D13's per-endpoint arm colouring for the day-type figures
 # so the day types read identically across the document: the 3 nested NMA/CE=0 classifications on a
-# green ramp (strictest BE=0 darkest → broadest BE≤∞ lightest; the mid step = the TIR/70-180 green),
-# CE>0 grey, CE>=3/BE>=3 (HMA) bronze. Shared by §8.1 (8.1b/12.1b violins), §8.2 (8.2a violins, 8.2c
-# interaction lines) and §8.3 (8.3e/8.3g). Keys = the data_loader arm labels (COMPARATOR_LABEL /
-# HIGH_MA_LABEL / the CLASSIFICATIONS labels).
+# Tidepool-brand BLUE ramp (strictest BE=0 darkest → headline BE≤1 the brand blue → broadest BE≤∞
+# lightest), CE>0 grey, CE>=3/BE>=3 (HMA) bronze. (Was a green ramp; the green read as a TIR/in-range
+# cue the day-type figures don't need — per MJC 2026-06-07.) Shared by §8.1 (8.1b/12.1b violins), §8.2
+# (8.2a violins, 8.2c lines), §8.3 (8.3a/8.3e/8.3g, 12.3a/c/i) and §8.4 (strategy bars). Keys = the
+# data_loader arm labels (COMPARATOR_LABEL / HIGH_MA_LABEL / the CLASSIFICATIONS labels).
 DAY_TYPE_COLORS = {
-    "CE=0/BE=0": "#00441b",                # very dark green (strictest CE=0)
-    "CE=0/BE<=1": ENDPOINT_COLORS["tir"],  # = the TIR / 70-180 green
-    "CE=0/BE<=inf": "#b7e075",             # light yellow-green (broadest CE=0)
-    "CE>0": GRAY,                          # CE>0 comparator
-    "CE>=3/BE>=3": HIGH_MA_COLOR,          # CE>=3/BE>=3 high meal-announcement (bronze)
+    "CE=0/BE=0": "#1f3a93",       # dark Tidepool blue (strictest CE=0)
+    "CE=0/BE<=1": TIDEPOOL,       # Tidepool brand blue (the headline arm)
+    "CE=0/BE<=inf": "#aab8ff",    # light Tidepool blue (broadest CE=0)
+    "CE>0": GRAY,                 # CE>0 comparator
+    "CE>=3/BE>=3": HIGH_MA_COLOR, # CE>=3/BE>=3 high meal-announcement (bronze)
 }
 
 # Delivery-strategy fill alpha for the §8.4 strategy figures: colour stays the day type's
@@ -166,3 +168,34 @@ def overlay_hist_panel(ax, series, *, xlabel="", title=None, title_color=None, b
     ax.legend(fontsize=LEGEND_FS, loc="upper right")
     if title is not None:
         ax.set_title(title, fontsize=TITLE_FS, color=title_color or "#000000")
+
+
+# Title→panel reservation for the merged 4×2 grid (tighter than the legacy split grids' 0.90–0.92,
+# which left a wide whitespace band above the panels). The suptitle leads the figure, then the panels.
+GRID_TOP_MERGED = 0.955
+
+
+def render_4x2_grid(panel_fn, *, fig_stem, subtitle, figsize=(12, 15.5), bottom=0.0,
+                    top=GRID_TOP_MERGED, decorate=None):
+    """Render all 8 endpoints (both GRIDS, grid1 then grid2 order) as a SINGLE 4×2 figure →
+    ``{f"{fig_stem}_4x2.png": fig}``.
+
+    The merge-eligible figures (line / bar / Δ-histogram grids) ship as one full-width PNG instead of
+    the legacy ``grid1_target_safety`` + ``grid2_hyper_overall`` pair — halving the report embeds.
+    Dense violin grids stay split (their own builders keep the GRIDS loop).
+
+    panel_fn(ax, col, label): draws one endpoint's panel. decorate(fig): optional, adds a shared
+    figure-level legend (call before layout); pair it with ``bottom`` to reserve space. The suptitle
+    leads with both grid titles + ``subtitle`` — NO baked-in "Figure X.Xy" prefix (the report caption
+    owns the figure number, so the in-image number can't contradict it).
+    """
+    eps = [ep for _, _, eps in GRIDS for ep in eps]   # 8 endpoints, grid1 (target+safety) then grid2
+    fig, axes = plt.subplots(4, 2, figsize=figsize)
+    for ax, (col, label) in zip(axes.ravel(), eps):
+        panel_fn(ax, col, label)
+    if decorate is not None:
+        decorate(fig)
+    head = " · ".join(t for _, t, _ in GRIDS)
+    fig.suptitle(f"{head}\n{subtitle}", fontsize=SUPTITLE_FS)
+    fig.tight_layout(rect=[0, bottom, 1, top])
+    return {f"{fig_stem}_4x2.png": fig}

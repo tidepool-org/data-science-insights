@@ -136,6 +136,7 @@ from utils.plotting import (  # noqa: E402
     TITLE_FS,
     endpoint_color,
     overlay_hist_panel,
+    render_4x2_grid,
 )
 
 # Headline day type (per MJC): the CE=0/BE<=1 nested NMA arm, vs the CE>0 comparator. The main figure
@@ -387,9 +388,9 @@ def _strategy_trend_panel(ax, endpoint, label, cells, order):
     ax.margins(x=0.16)
 
 
-def figure_8_4a_strategy_bars(pdf, arms, *, reference="overall", split="binary", fig_id="8.4a",
+def figure_8_4a_strategy_bars(pdf, arms, *, reference="overall", split="binary",
                               fname_stem="figure_8_4a", ref_note="overall TDD-rank ref"):
-    """THE §8.4 summary figure family (two 2×2 grids → all 8 endpoints): AB vs TB across within-user
+    """THE §8.4 summary figure family (single 4×2 grid → all 8 endpoints): AB vs TB across within-user
     TDD strata, one staggered 95% CI bar per (day type, strategy) cell, same-user-set gated. Colour =
     day type (DAY_TYPE_COLORS), alpha = strategy (AB darker / TB lighter). Parametrized by `arms`
     (MAIN_ARMS for the headline; APPENDIX_ARMS for the all-5 breakout), `reference` (overall|ce0) and
@@ -409,19 +410,18 @@ def figure_8_4a_strategy_bars(pdf, arms, *, reference="overall", split="binary",
                       label=f"{arm_label} · {s_short} (n={n_by_cell[(arm_label, s_short)]})")
                for arm_flag, arm_label in arms for s_name, s_short in STRATEGIES]
     ref = f" ({ref_note})" if ref_note else ""
-    out = {}
-    for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(13, 9.0))
-        for ax, (col, label) in zip(axes.ravel(), eps):
-            _strategy_trend_panel(ax, col, label, cells, order)
-        ncol = min(len(handles), 4)
-        fig.legend(handles=handles, loc="lower center", ncol=ncol, fontsize=LEGEND_FS,
+
+    def panel(ax, col, label):
+        _strategy_trend_panel(ax, col, label, cells, order)
+
+    def legend(fig):
+        fig.legend(handles=handles, loc="lower center", ncol=min(len(handles), 5), fontsize=LEGEND_FS,
                    bbox_to_anchor=(0.5, 0.0))
-        fig.suptitle(f"Figure {fig_id} — {gtitle}\nAB vs TB across within-user TDD strata{ref}; "
-                     f"whiskers = 95% CI, same-user-set gated", fontsize=SUPTITLE_FS)
-        fig.tight_layout(rect=[0, 0.08, 1, 0.92])
-        out[f"{fname_stem}_{key}.png"] = fig
-    return out
+
+    return render_4x2_grid(panel, fig_stem=fname_stem,
+                           subtitle=f"AB vs TB across within-user TDD strata{ref}; "
+                                    f"whiskers = 95% CI, same-user-set gated",
+                           figsize=(13, 16), bottom=0.06, decorate=legend)
 
 
 def figure_8_4b_carb(per_frac, per_rate):
@@ -436,10 +436,10 @@ def figure_8_4b_carb(per_frac, per_rate):
         delta = (tab["temp_basal_only"] - tab["autobolus_on"]).dropna().to_numpy()
         overlay_hist_panel(ax, [(delta, "TB − AB", TIDEPOOL)],
                            xlabel=f"per-user Δ {xlab} (TB − AB)", title=title)
-    fig.suptitle("Figure 8.4b — within-user carb-logging by delivery strategy (TB − AB)\n"
+    fig.suptitle("Within-user carb-logging by delivery strategy (TB − AB)\n"
                  "positive ⇒ more carb logging on TB days; ⚠️ same-day entanglement (descriptive only)",
                  fontsize=SUPTITLE_FS)
-    fig.tight_layout(rect=[0, 0, 1, 0.9])
+    fig.tight_layout(rect=[0, 0, 1, 0.92])
     return fig
 
 
@@ -520,13 +520,13 @@ def run(
         "8_4b": lambda: {"figure_8_4b_carb_entry_by_strategy.png":
                          figure_8_4b_carb(per_frac, per_rate)},
         "12_4a": lambda: figure_8_4a_strategy_bars(
-            pdf, MAIN_ARMS, reference=PRIMARY_REFERENCE, split="tercile", fig_id="12.4a",
+            pdf, MAIN_ARMS, reference=PRIMARY_REFERENCE, split="tercile",
             fname_stem="figure_12_4a_tercile", ref_note="overall TDD-rank terciles"),
         "12_4b": lambda: figure_8_4a_strategy_bars(
-            pdf, APPENDIX_ARMS, reference=PRIMARY_REFERENCE, split="binary", fig_id="12.4b",
+            pdf, APPENDIX_ARMS, reference=PRIMARY_REFERENCE, split="binary",
             fname_stem="figure_12_4b_all5", ref_note="all 5 day types, overall ref"),
         "12_4c": lambda: figure_8_4a_strategy_bars(
-            pdf, MAIN_ARMS, reference="ce0", split="binary", fig_id="12.4c",
+            pdf, MAIN_ARMS, reference="ce0", split="binary",
             fname_stem="figure_12_4c_ce0", ref_note="CE=0 TDD-rank ref"),
     }
     n = 0

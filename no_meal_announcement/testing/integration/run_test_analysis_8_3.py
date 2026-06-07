@@ -116,8 +116,8 @@ def _assert_recovers_low_high_design(spark, tables, raw_pdf, tmp_dir):
                 "table_8_3c_lmm_sensitivity.csv", "table_8_3d_rank_tercile_strata.csv"):
         p = os.path.join(out_all, csv)
         assert os.path.exists(p) and os.path.getsize(p) > 0, f"missing/empty {csv}"
-    assert len(glob.glob(os.path.join(out_all, "figure_8_3f_grid*.png"))) == 2, "missing fig 8.3f grids"
-    assert len(glob.glob(os.path.join(out_all, "figure_8_3g_grid*.png"))) == 2, "missing fig 8.3g grids"
+    assert len(glob.glob(os.path.join(out_all, "figure_8_3f_grid*.png"))) == 2, "missing fig 8.3f grids (violins stay split)"
+    assert os.path.exists(os.path.join(out_all, "figure_8_3g_4x2.png")), "missing fig 8.3g 4×2 (merged)"
 
 
 def main(spark=None):

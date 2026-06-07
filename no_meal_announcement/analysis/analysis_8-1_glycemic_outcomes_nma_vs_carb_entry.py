@@ -111,6 +111,7 @@ from utils.plotting import (  # noqa: E402
     SUPTITLE_FS,
     endpoint_color,
     overlay_hist_panel,
+    render_4x2_grid,
     violin_box_panel,
 )
 
@@ -527,7 +528,7 @@ def make_stacked_bar(pdf):
     for xi, (u, dd) in enumerate(zip(user_ns, day_ns)):
         ax.text(xi, 101, f"users={u}\ndays={dd}", ha="center", va="bottom", fontsize=11)
 
-    ax.set_title("Figure 8.1a: Mean time in glycemic ranges by arm", fontsize=SUPTITLE_FS)
+    ax.set_title("Mean time in glycemic ranges by arm", fontsize=SUPTITLE_FS)
     fig.tight_layout()
     return fig
 
@@ -552,45 +553,40 @@ def arm_violin_groups(pdf, endpoint, *, include_high_ma=False):
 
 def make_violin_grids(pdf):
     """Figure 8.1b: per-user mean endpoints across the 5 arms (3 nested NMA + CE>0 + CE>=3/BE>=3), as
-    the two shared 2×2 metric grids (all 8 endpoints). Returns {filename: figure}. Each arm carries
-    its fixed DAY_TYPE_COLORS colour (3 nested NMA on the green ramp, CE>0 grey, HMA bronze); the
-    panel title carries the endpoint's glycemic-range colour; separators divide NMA | CE>0 | HMA."""
-    out = {}
-    for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(11.5, 8.6))
-        for ax, (col, label) in zip(axes.ravel(), eps):
-            violin_box_panel(ax, arm_violin_groups(pdf, col, include_high_ma=True),
-                             title=label, title_color=endpoint_color(col), separators=(3.5, 4.5))
-        fig.suptitle(f"Figure 8.1b — {gtitle}\nper-user means by arm (+ CE>=3/BE>=3)", fontsize=SUPTITLE_FS)
-        fig.tight_layout(rect=[0, 0, 1, 0.91])
-        out[f"figure_8_1b_violin_{key}.png"] = fig
-    return out
+    a single 4×2 metric grid (all 8 endpoints). Returns {filename: figure}. Each arm carries its fixed
+    DAY_TYPE_COLORS colour (3 nested NMA on the green ramp, CE>0 grey, HMA bronze); the panel title
+    carries the endpoint's glycemic-range colour; separators divide NMA | CE>0 | HMA."""
+    def panel(ax, col, label):
+        violin_box_panel(ax, arm_violin_groups(pdf, col, include_high_ma=True),
+                         title=label, title_color=endpoint_color(col), separators=(3.5, 4.5))
+
+    return render_4x2_grid(panel, fig_stem="figure_8_1b_violin",
+                           subtitle="per-user means by arm (+ CE>=3/BE>=3)", figsize=(14, 17))
 
 
 def make_paired_delta_grids(pdf):
-    """Figure 8.1c: within-user paired differences (NMA − CE>0) for the broadest arm (CE=0/BE≤∞,
-    the headline), as the two shared 2×2 metric grids (all 8 endpoints). Returns {filename:
-    figure}. Stricter-arm contrasts are in Tables 8.1a/8.1b. Endpoint range colour; solid line =
-    mean, dashed = 0."""
-    headline_flag = CLASSIFICATIONS[-1][0]  # in_ce0_be_inf
-    out = {}
-    for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-        for ax, (col, label) in zip(axes.ravel(), eps):
-            base = endpoint_color(col)
-            nma = per_user_arm_mean(pdf, col, headline_flag)
-            cmp = per_user_arm_mean(pdf, col, COMPARATOR_FLAG)
-            hi = per_user_arm_mean(pdf, col, HIGH_MA_FLAG)
-            delta = pd.DataFrame({"NMA": nma, "CMP": cmp}).dropna().eval("NMA - CMP").to_numpy()
-            hi_delta = pd.DataFrame({"NMA": nma, "HI": hi}).dropna().eval("NMA - HI").to_numpy()
-            overlay_hist_panel(ax, [(delta, "NMA − CE>0", base),
-                                    (hi_delta, "NMA − CE>=3/BE>=3", HIGH_MA_COLOR)],
-                               xlabel="per-user Δ (NMA − comparator)", title=label, title_color=base)
-        fig.suptitle(f"Figure 8.1c — {gtitle}\nwithin-user differences: NMA − CE>0 and NMA − CE>=3/BE>=3 (BE≤∞)",
-                     fontsize=SUPTITLE_FS)
-        fig.tight_layout(rect=[0, 0, 1, 0.92])
-        out[f"figure_8_1c_paired_delta_{key}.png"] = fig
-    return out
+    """Figure 8.1c: within-user paired differences (NMA − CE>0) for the headline arm (CE=0/BE≤1),
+    as a single 4×2 metric grid (all 8 endpoints). Returns {filename: figure}. CE=0/BE≤1's
+    TIR/TAR/mean-glucose/CV contrasts are method-robust — Method A & Method B concur in sign on all
+    three nested arms (post-D7-regen snapshot, decisions.md D5 update 2026-06-07); the Method-A-vs-B
+    divergence caveat attaches to the below-range endpoints (<54, <70) only. The other arms'
+    contrasts are in Tables 8.1a/8.1b. Endpoint range colour; solid line = mean, dashed = 0."""
+    headline_flag = CLASSIFICATIONS[1][0]  # in_ce0_be_le1 — CE=0/BE<=1, the headline NMA arm
+
+    def panel(ax, col, label):
+        base = endpoint_color(col)
+        nma = per_user_arm_mean(pdf, col, headline_flag)
+        cmp = per_user_arm_mean(pdf, col, COMPARATOR_FLAG)
+        hi = per_user_arm_mean(pdf, col, HIGH_MA_FLAG)
+        delta = pd.DataFrame({"NMA": nma, "CMP": cmp}).dropna().eval("NMA - CMP").to_numpy()
+        hi_delta = pd.DataFrame({"NMA": nma, "HI": hi}).dropna().eval("NMA - HI").to_numpy()
+        overlay_hist_panel(ax, [(delta, "NMA − CE>0", base),
+                                (hi_delta, "NMA − CE>=3/BE>=3", HIGH_MA_COLOR)],
+                           xlabel="per-user Δ (NMA − comparator)", title=label, title_color=base)
+
+    return render_4x2_grid(panel, fig_stem="figure_8_1c_paired_delta",
+                           subtitle="within-user differences (NMA − CE>0, NMA − CE>=3/BE>=3) — "
+                                    "headline NMA arm: CE=0 / BE≤1")
 
 
 def create_windowed_contrast_table(pdf, fda_stats, classifications=CLASSIFICATIONS):
@@ -634,55 +630,52 @@ def create_windowed_contrast_table(pdf, fda_stats, classifications=CLASSIFICATIO
 
 
 def make_windowed_delta_grids(pdf):
-    """Figure 12.1c (two 2×2 grids; last in the windowed set, mirroring main 8.1c): within-user
-    windowed Δ on the broadest arm (CE=0/BE≤∞), per-NMA-day ±(WINDOW_DAYS/2)-day match — overlays
-    NMA − CE>0 and NMA − CE>=3/BE>=3 (the windowed companion to the full-record paired-delta grids
-    8.1c). NMA−CE>0 in the endpoint range colour, NMA−CE>=3/BE>=3 in bronze; mean line, dashed 0."""
-    headline_flag = CLASSIFICATIONS[-1][0]  # in_ce0_be_inf
+    """Figure 12.1c (single 4×2 grid; last in the windowed set, mirroring main 8.1c): within-user
+    windowed Δ on the headline arm (CE=0/BE≤1), per-NMA-day ±(WINDOW_DAYS/2)-day match — overlays
+    NMA − CE>0 and NMA − CE>=3/BE>=3 (the windowed companion to the full-record paired-delta grid
+    8.1c). NMA−CE>0 in the endpoint range colour, NMA−CE>=3/BE>=3 in bronze; mean line, dashed 0.
+    CE=0/BE≤1's TIR/TAR/mean-glucose/CV contrasts are method-robust (Method A & B concur in sign on
+    all three nested arms, post-D7-regen snapshot, decisions.md D5 update 2026-06-07); the
+    Method-A-vs-B divergence caveat attaches to the below-range endpoints (<54, <70) only."""
+    headline_flag = CLASSIFICATIONS[1][0]  # in_ce0_be_le1 — CE=0/BE<=1, the headline NMA arm
     per_user, _ = windowed_matched_means(pdf, headline_flag, COMPARATOR_FLAG, ENDPOINTS)
     per_user_hi, _ = windowed_matched_means(pdf, headline_flag, HIGH_MA_FLAG, ENDPOINTS)
-    out = {}
-    for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-        for ax, (col, label) in zip(axes.ravel(), eps):
-            base = endpoint_color(col)
-            delta = (per_user[f"{col}__nma"] - per_user[f"{col}__cmp"]).dropna().to_numpy()
-            hi_delta = (per_user_hi[f"{col}__nma"] - per_user_hi[f"{col}__cmp"]).dropna().to_numpy()
-            overlay_hist_panel(ax, [(delta, "NMA − CE>0 (win)", base),
-                                    (hi_delta, "NMA − CE>=3/BE>=3 (win)", HIGH_MA_COLOR)],
-                               xlabel="per-user Δ (windowed)", title=label, title_color=base)
-        fig.suptitle(f"Figure 12.1c — {gtitle}\nwithin-user windowed Δ: NMA − CE>0 and NMA − CE>=3/BE>=3 (±{WINDOW_DAYS // 2}d, BE≤∞)",
-                     fontsize=SUPTITLE_FS)
-        fig.tight_layout(rect=[0, 0, 1, 0.92])
-        out[f"figure_12_1c_windowed_delta_{key}.png"] = fig
-    return out
+
+    def panel(ax, col, label):
+        base = endpoint_color(col)
+        delta = (per_user[f"{col}__nma"] - per_user[f"{col}__cmp"]).dropna().to_numpy()
+        hi_delta = (per_user_hi[f"{col}__nma"] - per_user_hi[f"{col}__cmp"]).dropna().to_numpy()
+        overlay_hist_panel(ax, [(delta, "NMA − CE>0 (win)", base),
+                                (hi_delta, "NMA − CE>=3/BE>=3 (win)", HIGH_MA_COLOR)],
+                           xlabel="per-user Δ (windowed)", title=label, title_color=base)
+
+    return render_4x2_grid(panel, fig_stem="figure_12_1c_windowed_delta",
+                           subtitle=f"within-user windowed Δ (NMA − CE>0, NMA − CE>=3/BE>=3; "
+                                    f"±{WINDOW_DAYS // 2}d) — headline NMA arm: CE=0 / BE≤1")
 
 
 def make_windowed_violin_grids(pdf):
-    """Figure 12.1b (two 2×2 grids): per-user windowed means by arm — the 3 nested NMA arms, the CE>0
+    """Figure 12.1b (single 4×2 grid): per-user windowed means by arm — the 3 nested NMA arms, the CE>0
     comparator, and the CE>=3/BE>=3 high-engagement arm, each on the per-NMA-day ±(WINDOW_DAYS/2)-day
-    match. The windowed companion to the full-record violin grids (8.1b). Each arm carries its fixed
+    match. The windowed companion to the full-record violin grid (8.1b). Each arm carries its fixed
     DAY_TYPE_COLORS colour (3 nested NMA on the green ramp, CE>0 grey, HMA bronze)."""
     win = {lab: windowed_matched_means(pdf, flag, COMPARATOR_FLAG, ENDPOINTS)[0]
            for flag, lab in CLASSIFICATIONS}
     broadest = CLASSIFICATIONS[-1][1]  # CE=0/BE<=inf — supplies the CE>0 windowed comparator group
     win_hi = windowed_matched_means(pdf, HIGH_MA_FLAG, COMPARATOR_FLAG, ENDPOINTS)[0]
-    out = {}
-    for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(11.5, 8.6))
-        for ax, (col, label) in zip(axes.ravel(), eps):
-            groups = [(lab, win[lab][f"{col}__nma"].dropna().to_numpy(), DAY_TYPE_COLORS[lab], VIOLIN_ALPHA)
-                      for _flag, lab in CLASSIFICATIONS]
-            groups.append((COMPARATOR_LABEL, win[broadest][f"{col}__cmp"].dropna().to_numpy(),
-                           DAY_TYPE_COLORS[COMPARATOR_LABEL], VIOLIN_ALPHA))
-            groups.append((HIGH_MA_LABEL, win_hi[f"{col}__nma"].dropna().to_numpy(),
-                           DAY_TYPE_COLORS[HIGH_MA_LABEL], VIOLIN_ALPHA))
-            violin_box_panel(ax, groups, title=label, title_color=endpoint_color(col), separators=(3.5, 4.5))
-        fig.suptitle(f"Figure 12.1b — {gtitle}\nper-user windowed means by arm (NMA, CE>0, CE>=3/BE>=3; ±{WINDOW_DAYS // 2}d match)",
-                     fontsize=SUPTITLE_FS)
-        fig.tight_layout(rect=[0, 0, 1, 0.91])
-        out[f"figure_12_1b_windowed_violin_{key}.png"] = fig
-    return out
+
+    def panel(ax, col, label):
+        groups = [(lab, win[lab][f"{col}__nma"].dropna().to_numpy(), DAY_TYPE_COLORS[lab], VIOLIN_ALPHA)
+                  for _flag, lab in CLASSIFICATIONS]
+        groups.append((COMPARATOR_LABEL, win[broadest][f"{col}__cmp"].dropna().to_numpy(),
+                       DAY_TYPE_COLORS[COMPARATOR_LABEL], VIOLIN_ALPHA))
+        groups.append((HIGH_MA_LABEL, win_hi[f"{col}__nma"].dropna().to_numpy(),
+                       DAY_TYPE_COLORS[HIGH_MA_LABEL], VIOLIN_ALPHA))
+        violin_box_panel(ax, groups, title=label, title_color=endpoint_color(col), separators=(3.5, 4.5))
+
+    return render_4x2_grid(panel, fig_stem="figure_12_1b_windowed_violin",
+                           subtitle=f"per-user windowed means by arm (NMA, CE>0, CE>=3/BE>=3; "
+                                    f"±{WINDOW_DAYS // 2}d match)", figsize=(14, 17))
 
 
 def make_windowed_stacked_bar(pdf):
@@ -745,7 +738,7 @@ def make_windowed_stacked_bar(pdf):
     ax.legend(title="Glucose (mg/dL)", bbox_to_anchor=(1.01, 1), loc="upper left")
     for xi, u in enumerate(user_ns):
         ax.text(xi, 101, f"users={u}", ha="center", va="bottom", fontsize=11)
-    ax.set_title(f"Figure 12.1a: windowed mean time in glycemic ranges by arm (±{WINDOW_DAYS // 2}d match)",
+    ax.set_title(f"Windowed mean time in glycemic ranges by arm (±{WINDOW_DAYS // 2}d match)",
                  fontsize=SUPTITLE_FS)
     fig.tight_layout()
     return fig

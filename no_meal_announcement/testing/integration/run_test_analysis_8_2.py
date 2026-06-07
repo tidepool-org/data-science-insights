@@ -159,8 +159,8 @@ def _assert_recovers_interaction_design(spark, tables, raw_pdf, tmp_dir):
                 "table_12_2a_high_engagement_interaction.csv"):
         p = os.path.join(out_all, csv)
         assert os.path.exists(p) and os.path.getsize(p) > 0, f"missing/empty {csv}"
-    assert len(glob.glob(os.path.join(out_all, "figure_8_2a_violin_*.png"))) == 2
-    assert len(glob.glob(os.path.join(out_all, "figure_8_2c_interaction_*.png"))) == 2
+    assert len(glob.glob(os.path.join(out_all, "figure_8_2a_violin_*.png"))) == 2  # violins stay split
+    assert os.path.exists(os.path.join(out_all, "figure_8_2c_interaction_4x2.png"))  # merged to one 4×2
     assert os.path.exists(os.path.join(out_all, "figure_8_2d_stacked_bars.png"))
 
 

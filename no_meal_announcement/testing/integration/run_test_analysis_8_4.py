@@ -130,9 +130,9 @@ def _assert_strategy_outputs(spark, tables, raw_pdf, tmp_dir):
                 "table_12_4c_strategy_cross_ce0_binary.csv", "table_12_4d_strategy_within_user.csv"):
         p = os.path.join(out_all, csv)
         assert os.path.exists(p) and os.path.getsize(p) > 0, f"missing/empty {csv}"
-    assert len(glob.glob(os.path.join(out_all, "figure_8_4a_grid*.png"))) == 2, "missing fig 8.4a grids"
+    assert os.path.exists(os.path.join(out_all, "figure_8_4a_4x2.png")), "missing fig 8.4a 4×2 (merged)"
     assert os.path.exists(os.path.join(out_all, "figure_8_4b_carb_entry_by_strategy.png"))
-    assert len(glob.glob(os.path.join(out_all, "figure_12_4b_all5*.png"))) == 2, "missing fig 12.4b all-5 grids"
+    assert os.path.exists(os.path.join(out_all, "figure_12_4b_all5_4x2.png")), "missing fig 12.4b all-5 4×2 (merged)"
 
 
 def main(spark=None):

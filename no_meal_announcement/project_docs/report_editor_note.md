@@ -5,6 +5,69 @@ _As of 2026-06-06. For whoever assembles the report from the analysis outputs. O
 cohort. Sections 1–6 below are §8.1-specific; section 7 covers the §8.2/§8.3 high-engagement additions;
 section 8 covers the new §8.4 delivery-strategy analysis._
 
+## 0. Figure layout update — 2026-06-07 (re-embed needed; developer_note §0 ask #1)
+
+Three figure changes; **regenerate all cohorts and re-embed**. No data/statistics changed — purely the
+in-image titles, the title→panel spacing, and the grid packing.
+
+1. **In-image "Figure X.Xy" prefix removed from every figure.** The report **caption is now the single
+   source** of each figure's number, so the in-image title can no longer contradict it (this fixes the
+   old report Fig 8.2b/8.2c showing "8.2c"/"8.2d"). The in-image title now leads with the descriptive
+   text only (e.g. "Time in range & hypoglycemia · …").
+2. **Tighter title→panel gap** — the wide whitespace band above the panels is gone (cosmetic).
+3. **Some dual 2×2 grids merged into a single 4×2** (one full-width PNG instead of a `grid1`+`grid2`
+   pair — halves those embeds). **Filename map — replace the pair with the single image:**
+
+   | was (two embeds: `…_grid1_target_safety.png` + `…_grid2_hyper_overall.png`) | now (one full-width embed) |
+   |---|---|
+   | `figure_8_1b_violin_grid{1,2}_*.png` | `figure_8_1b_violin_4x2.png` |
+   | `figure_12_1b_windowed_violin_grid{1,2}_*.png` | `figure_12_1b_windowed_violin_4x2.png` |
+   | `figure_8_1c_paired_delta_grid{1,2}_*.png` | `figure_8_1c_paired_delta_4x2.png` |
+   | `figure_12_1c_windowed_delta_grid{1,2}_*.png` | `figure_12_1c_windowed_delta_4x2.png` |
+   | `figure_8_2c_interaction_grid{1,2}_*.png` | `figure_8_2c_interaction_4x2.png` |
+   | `figure_8_3b_grid{1,2}_*.png` | `figure_8_3b_4x2.png` |
+   | `figure_8_3g_grid{1,2}_*.png` | `figure_8_3g_4x2.png` |
+   | `figure_12_3i_ce0_bars_grid{1,2}_*.png` | `figure_12_3i_ce0_bars_4x2.png` |
+   | `figure_8_4a_grid{1,2}_*.png` | `figure_8_4a_4x2.png` |
+   | `figure_12_4a_tercile_grid{1,2}_*.png` | `figure_12_4a_tercile_4x2.png` |
+   | `figure_12_4b_all5_grid{1,2}_*.png` | `figure_12_4b_all5_4x2.png` |
+   | `figure_12_4c_ce0_grid{1,2}_*.png` | `figure_12_4c_ce0_4x2.png` |
+
+   **Unchanged — still a `grid1`+`grid2` pair** (denser violins — 10-cell strategy / 9-group tercile;
+   merging to 4×2 would crowd them): `figure_8_2a_violin`, `figure_8_3a`, `figure_8_3f`,
+   `figure_12_3a_median`, `figure_12_3c_rolling`, `figure_12_3g_ce0`. Single-panel figures (8.1a, 12.1a,
+   8.2d, 8.3c/d/e, 12.3h, 8.4b) are unchanged.
+
+4. **Headline NMA arm switched to CE=0/BE≤1 (was CE=0/BE≤∞) — content change, re-read the captions.**
+   The figures that feature a **single** NMA arm now use **CE=0/BE≤1** (matching §8.4): **Figure 8.1c**
+   (within-user paired-Δ), **Figure 12.1c** (windowed twin), and **§8.2 Figure 8.2c**'s single CE>0
+   comparator line. Their in-image titles now name the arm ("headline NMA arm: CE=0 / BE≤1"); please
+   align the report captions. ✅ **D5 update (decisions.md D5, 2026-06-07):** the CE=0/BE≤1 headline's
+   **TIR / TAR / mean-glucose / CV** contrasts are **method-robust** — Method A and Method B concur in
+   sign on all three nested arms — so these are **directionally citable, not descriptive-only**.
+   **Remove any "stringent arm → frame descriptively / indeterminate / no robust directional claim"
+   language** that was attached to the BE≤1 headline. The **only** remaining caveat is on the
+   **below-range / hypoglycemia endpoints (time <54, time <70)**: those carry the Method-A-vs-B
+   divergence note across all arms, so report **mean *and* median** (no single estimate) for them.
+   The all-arms figures (8.1a/8.1b/12.1b, 8.2a/8.2d) and every §8.1 table still show all 3 nested NMA
+   arms + CE>0 + HMA — unchanged.
+5. **§8.3 single-CE=0-arm figure sweep + palette recolor — re-read the §8.3 captions and re-embed.**
+   - **Single-CE=0-arm sweep (content change).** §8.3 figures that previously featured **one** CE=0 arm
+     used the broadest (BE≤∞); now: **Figure 8.3a** + its Appendix twins **12.3a** (median-ref) /
+     **12.3c** (rolling-ref) show **all 5 day types** (3 nested CE=0 + CE>0 + HMA) as **two 4×1 grids**
+     (binary Low/High violins). **Figures 8.3b** (Low−High Δ-histogram), **8.3d** (within-user
+     R-distribution), **8.3f** (rank-tercile violins), and **12.3g** (CE=0-reference tercile violins)
+     now feature the **explicit CE=0/BE≤1 arm** (labelled "CE=0 / BE≤1"). Align the captions to name
+     the arm / the 5-day-type set. **All §8.3 tables already break out the 3 nested arms — unchanged.**
+   - **`DAY_TYPE_COLORS` palette: green → Tidepool-blue ramp (content-neutral recolor — re-embed only).**
+     The 3 nested CE=0 arms now read **dark Tidepool blue (#1f3a93, BE=0) → brand blue (#607cff, the
+     headline BE≤1) → light blue (#aab8ff, BE≤∞)** instead of the old green ramp (whose mid step
+     collided with the TIR/70-180 in-range green). **CE>0 grey and HMA bronze are unchanged.** Applies
+     to every day-type figure (§8.1b/12.1b, §8.2a/8.2c, §8.3a/8.3e/8.3g + 12.3a/12.3c/12.3i, §8.4 bars);
+     the range-coloured figures (stacked bars, Δ-histograms, the 3-arm strata violins 8.3f/12.3g, 8.3d)
+     keep their endpoint/range colours. **No data/statistics changed** — swap the embedded PNGs for the
+     regenerated ones (all three cohorts).
+
 ## 1. Numbering scheme
 
 - **§8.1 = the main analysis** — matches the governing plan (PLN-1008) exactly: Tables 8.1a/8.1b/8.1c
@@ -67,8 +130,11 @@ The plan-locked Tables **8.1a/8.1b/8.1c are unchanged** in number/meaning.
   with a contemporaneous comparator within ±45d): the broadest arm matches ~70% of CE=0 days; the
   unmatched are predominantly sustained / pure non-announcers, **not** data-coverage gaps. It
   characterizes mixed-behaviour periods; the full-record §8.1 stays primary.
-- **§8.1 stringent-arm directional claims:** report none where Method A and Method B (LMM) diverge;
-  only CE=0/BE≤∞ is robust (decisions.md D5).
+- **§8.1 directional claims (D5 update 2026-06-07):** Method A and Method B **concur in sign on all
+  three NMA arms** for **TIR / TAR / mean glucose / CV** (post-D7-regen snapshot) — these are
+  **method-robust, directionally citable** on every arm including the CE=0/BE≤1 headline. The
+  Method-A-vs-B **divergence caveat attaches to the below-range / hypoglycemia endpoints only**
+  (time <54, time <70): report **mean *and* median** for those, across all arms (decisions.md D5).
 - **§8.3 TDD-stratum:** cite the **rank terciles** (Table 8.3d + §12.3g–j; D12 RESOLVED), not the magnitude-based strata (8.3a/b/c, 12.3a–f) — see §7 + decisions.md D12.
 
 ## 6. Headline findings (framing)

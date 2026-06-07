@@ -142,6 +142,7 @@ from utils.plotting import (  # noqa: E402
     TITLE_FS,
     endpoint_color,
     overlay_hist_panel,
+    render_4x2_grid,
     violin_box_panel,
 )
 from utils.strata import (  # noqa: E402
@@ -177,28 +178,24 @@ BOOTSTRAP_SEED = 20260520
 
 
 def figure_8_3b_paired_delta(strata_by_cls, cmp_strata, hma_strata):
-    """Figure 8.3b (two semantic 2×2 grids): within-user Low−High TDD delta histograms
-    (CE=0/BE≤∞ arm), one grid per metric group; overlays CE=0 (endpoint range colour), CE>0
-    (grey) and the high meal-announcement CE>=3/BE>=3 arm (bronze). Solid line = each
-    distribution's mean, dashed = 0. Returns {filename: figure}. (Per-classification deltas are in
-    table_8_3b_*.csv; the CE>=3/BE>=3 contrast in table_12_3e_high_engagement_within_user.csv.)"""
-    df = strata_by_cls["CE=0/BE<=inf"]
-    out = {}
-    for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-        for ax, (col, label) in zip(axes.ravel(), eps):
-            base = endpoint_color(col)
-            overlay_hist_panel(
-                ax,
-                [(_stratum_delta(df, col), "CE=0", base),
-                 (_stratum_delta(cmp_strata, col), "CE>0", GRAY),
-                 (_stratum_delta(hma_strata, col), HIGH_MA_LABEL, HIGH_MA_COLOR)],
-                xlabel="per-user Low−High Δ", title=label, title_color=base)
-        fig.suptitle(f"Figure 8.3b — {gtitle}\nwithin-user Low − High differences (BE≤∞)",
-                     fontsize=SUPTITLE_FS)
-        fig.tight_layout(rect=[0, 0, 1, 0.92])
-        out[f"figure_8_3b_{key}.png"] = fig
-    return out
+    """Figure 8.3b (single 4×2 grid): within-user Low−High TDD delta histograms for the headline
+    CE=0/BE≤1 arm, all 8 endpoints; overlays CE=0/BE≤1 (endpoint range colour), CE>0 (grey) and the
+    high meal-announcement CE>=3/BE>=3 arm (bronze). Solid line = each distribution's mean, dashed = 0.
+    Returns {filename: figure}. (All 3 nested arms' deltas are in table_8_3b_*.csv; the CE>=3/BE>=3
+    contrast in table_12_3e_high_engagement_within_user.csv.)"""
+    df = strata_by_cls["CE=0/BE<=1"]
+
+    def panel(ax, col, label):
+        base = endpoint_color(col)
+        overlay_hist_panel(
+            ax,
+            [(_stratum_delta(df, col), "CE=0/BE<=1", base),
+             (_stratum_delta(cmp_strata, col), "CE>0", GRAY),
+             (_stratum_delta(hma_strata, col), HIGH_MA_LABEL, HIGH_MA_COLOR)],
+            xlabel="per-user Low−High Δ", title=label, title_color=base)
+
+    return render_4x2_grid(panel, fig_stem="figure_8_3b",
+                           subtitle="within-user Low − High differences — headline arm: CE=0 / BE≤1")
 
 
 def figure_8_3c_stacked(strata_8_3a):
@@ -261,22 +258,22 @@ def figure_8_3c_stacked(strata_8_3a):
     handles, labels = ax.get_legend_handles_labels()
     fig.legend(handles, labels, title="Glucose (mg/dL)", loc="lower center", ncol=len(labels),
                fontsize=LEGEND_FS, bbox_to_anchor=(0.5, 0.0))
-    ax.set_title("Figure 8.3c: glycemic ranges by TDD stratum — 5 day types × Low/High (mean-ref)",
+    ax.set_title("Glycemic ranges by TDD stratum — 5 day types × Low/High (mean-ref)",
                  fontsize=TITLE_FS)
     fig.tight_layout(rect=[0, 0.1, 1, 1])  # reserve bottom for the horizontal legend
     return fig
 
 
-def figure_8_3d_r_dist(strata_inf):
-    """Within-user R = tdd/mean_tdd distribution on CE=0 days, with the R=1.0 cut."""
+def figure_8_3d_r_dist(ce0_strata):
+    """Within-user R = tdd/mean_tdd distribution on the headline CE=0/BE≤1 days, with the R=1.0 cut."""
     fig, ax = plt.subplots(figsize=(9, 5))
-    r = strata_inf["tdd_ratio"].clip(0, 3).dropna()
+    r = ce0_strata["tdd_ratio"].clip(0, 3).dropna()
     ax.hist(r, bins=60, color="#607cff", edgecolor="white", alpha=0.85)
     ax.axvline(R_CUT, color="#E03830", ls="--", lw=2, label="R = 1.0 (Low | High)")
     ax.set_xlabel("R = day TDD / user mean TDD (clipped at 3)")
-    ax.set_ylabel("CE=0 user-days")
+    ax.set_ylabel("CE=0/BE≤1 user-days")
     ax.legend()
-    ax.set_title("Figure 8.3d: within-user TDD ratio on CE=0 days", fontsize=TITLE_FS)
+    ax.set_title("Within-user TDD ratio on CE=0/BE≤1 days", fontsize=TITLE_FS)
     fig.tight_layout()
     return fig
 
@@ -285,7 +282,7 @@ def figure_8_3d_r_dist(strata_inf):
 # §8.1/§8.2/§8.3 share one definition.
 
 
-def figure_8_3e_tir_vs_tdd_pct(pdf, *, fig_id="8.3e", tercile_bands=False):
+def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False):
     """Scatter: per-day TIR vs the day's within-user TDD percentile, for TDD-reference-eligible users,
     coloured by the **same 5 day types as figure 8.3g** (3 nested CE=0 classifications + CE>0 +
     CE>=3/BE>=3 HMA; DAY_TYPE_COLORS). Percentile = each day's rank of tdd_units within that user's
@@ -300,7 +297,7 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, fig_id="8.3e", tercile_bands=False):
     contributing cohort, matching 8.3g).
 
     `tercile_bands` shades the overall-reference tercile regions (cuts at RANK_TERCILES) — the Appendix
-    §12.3h overall-ref-with-bands variant; the unshaded primary is Figure 8.3e. `fig_id` titles it."""
+    §12.3h overall-ref-with-bands variant; the unshaded primary is Figure 8.3e."""
     df = pdf[pdf["n_eligible_days_for_tdd"] >= MIN_REF_DAYS].dropna(subset=["tdd_units", "tir"]).copy()
     df["tdd_pct"] = df.groupby("_userId")["tdd_units"].rank(pct=True) * 100.0
     # Per-day colour = most-specific day type (the tightest nested CE=0 class, else HMA, else CE>0);
@@ -363,7 +360,7 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, fig_id="8.3e", tercile_bands=False):
     ax.set_ylabel("Time 70-180 mg/dL (%)")
     ax.legend(handles=handles, fontsize=LEGEND_FS)
     band_note = " — overall-ref tercile bands" if tercile_bands else ""
-    ax.set_title(f"Figure {fig_id}: TIR vs within-user TDD percentile by day type"
+    ax.set_title(f"TIR vs within-user TDD percentile by day type"
                  f"{band_note} (n={len(df):,})", fontsize=TITLE_FS)
     fig.tight_layout()
     return fig
@@ -392,14 +389,15 @@ def _add_rolling_ref(pdf):
 STRATUM_ALPHA = {"Low": 0.35, "Mid": 0.55, "High": 0.70}
 
 
-def _violin_panel(ax, endpoint, label, strata_inf, cmp_strata, hma_strata, *, strata=("Low", "High")):
+def _violin_panel(ax, endpoint, label, ce0_strata, cmp_strata, hma_strata, *, strata=("Low", "High"),
+                  ce0_label="CE=0"):
     """One endpoint's violin+box+dots panel: 3 arms (CE=0 / CE>0 / CE>=3/BE>=3 HMA) × `strata`
     (Low/High for the binary figures, Low/Mid/High for the rank-tercile figures) → 6 or 9 groups.
-    CE=0 carries the endpoint's glycemic-range colour, the CE>0 comparator is grey, the high
-    meal-announcement arm is bronze; stratum = lighter→darker (alpha). Drawing convention is shared
-    via utils.plotting.violin_box_panel."""
+    The CE=0 arm carries the endpoint's glycemic-range colour, the CE>0 comparator is grey, the high
+    meal-announcement arm is bronze; stratum = lighter→darker (alpha). `ce0_label` names the CE=0 arm
+    explicitly (e.g. "CE=0/BE<=1" for 8.3f). Drawing convention is shared via plotting.violin_box_panel."""
     base = endpoint_color(endpoint)
-    arms = [("CE=0", strata_inf, base), ("CE>0", cmp_strata, GRAY),
+    arms = [(ce0_label, ce0_strata, base), ("CE>0", cmp_strata, GRAY),
             (HIGH_MA_LABEL, hma_strata, HIGH_MA_COLOR)]
     # 2-line tick labels (arm \n stratum) so the groups don't collide — violin_box_panel appends the
     # n-count as a 3rd line.
@@ -414,27 +412,60 @@ def _violin_panel(ax, endpoint, label, strata_inf, cmp_strata, hma_strata, *, st
     violin_box_panel(ax, groups, title=label, title_color=base, separators=seps)
 
 
-def figure_8_3a_violin(strata_inf, cmp_strata, hma_strata, *, fig_id="8.3a",
-                       fname_stem="figure_8_3a", ref_note="", strata=("Low", "High")):
+def figure_8_3a_violin(ce0_strata, cmp_strata, hma_strata, *,
+                       fname_stem="figure_8_3a", ref_note="", strata=("Low", "High"), ce0_label="CE=0"):
     """Per-user means by TDD stratum (two semantic 2×2 grids), one grid per metric group. Returns
     {filename: figure}. Endpoint colour = glycemic range (Tidepool for the non-range metrics); CE=0
-    coloured, CE>0 grey, CE>=3/BE>=3 bronze; stratum lighter→darker. `fig_id` / `fname_stem` /
-    `ref_note` parametrize the title + filename so the §12.3 median-/rolling-reference variants reuse
-    this (primary = Figure 8.3a; §12.3a = median ref; §12.3c = rolling ref); `strata` switches between
-    the binary Low/High figures and the rank-tercile Low/Mid/High figures (8.3f / 12.3g)."""
+    coloured, CE>0 grey, CE>=3/BE>=3 bronze; stratum lighter→darker. `fname_stem` / `ref_note`
+    parametrize the filename + title so the §12.3 median-/rolling-reference variants reuse this
+    (§12.3a = median ref; §12.3c = rolling ref); `strata` switches between the binary Low/High figures
+    and the rank-tercile Low/Mid/High figures (8.3f / 12.3g). `ce0_label` names the CE=0 arm explicitly
+    (8.3f passes the BE≤1 arm as "CE=0/BE<=1")."""
     ref = f" ({ref_note})" if ref_note else ""
     # 9-group tercile panels are wide → stack the 4 endpoints 4×1 (each panel full-width); the
     # 6-group binary panels stay in the 2×2 grid.
     tercile = len(strata) >= 3
-    nrows, ncols, figsize, top = (4, 1, (15, 20), 0.955) if tercile else (2, 2, (13, 8.6), 0.91)
+    nrows, ncols, figsize, top = (4, 1, (15, 20), 0.96) if tercile else (2, 2, (13, 8.6), 0.94)
     out = {}
     for key, gtitle, eps in GRIDS:
         fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
         for ax, (col, label) in zip(axes.ravel(), eps):
-            _violin_panel(ax, col, label, strata_inf, cmp_strata, hma_strata, strata=strata)
-        fig.suptitle(f"Figure {fig_id} — {gtitle}\nper-user means by TDD stratum (CE=0, CE>0, CE>=3/BE>=3){ref}",
+            _violin_panel(ax, col, label, ce0_strata, cmp_strata, hma_strata, strata=strata,
+                          ce0_label=ce0_label)
+        fig.suptitle(f"{gtitle}\nper-user means by TDD stratum ({ce0_label}, CE>0, CE>=3/BE>=3){ref}",
                      fontsize=SUPTITLE_FS)
         fig.tight_layout(rect=[0, 0, 1, top])
+        out[f"{fname_stem}_{key}.png"] = fig
+    return out
+
+
+def figure_8_3a_5way_violin(strata, cmp_strata, hma_strata, *, fname_stem="figure_8_3a", ref_note=""):
+    """Figure 8.3a (two 4×1 grids → all 8 endpoints): per-user mean endpoints by TDD stratum for ALL
+    **5 day types** (the 3 nested CE=0 arms + CE>0 + CE>=3/BE>=3 HMA), each split Low/High → 10
+    violins per panel. The 10-cell panels are wide, so the 4 endpoints of each grid stack 4×1
+    (full-width, à la §8.2a). Colour = day type (DAY_TYPE_COLORS — 3 nested CE=0 on a Tidepool-blue
+    ramp, CE>0 grey, HMA bronze), alpha = stratum (Low lighter / High darker); the panel title carries
+    the endpoint colour. Mean-reference (R = tdd/mean) binary strata. A separator divides each day
+    type's Low|High pair. Returns {filename: figure}."""
+    sections = ([(lab, strata[lab]) for _flag, lab in CLASSIFICATIONS]
+                + [(COMPARATOR_LABEL, cmp_strata), (HIGH_MA_LABEL, hma_strata)])
+    order = ("Low", "High")
+    ref = f" ({ref_note})" if ref_note else ""
+    out = {}
+    for key, gtitle, eps in GRIDS:
+        fig, axes = plt.subplots(4, 1, figsize=(16, 20))
+        for ax, (col, label) in zip(axes.ravel(), eps):
+            groups = [
+                (f"{lab}\n{st}",
+                 df.loc[df["tdd_stratum"] == st].groupby("_userId")[col].mean().dropna().to_numpy(),
+                 DAY_TYPE_COLORS[lab], STRATUM_ALPHA[st])
+                for lab, df in sections for st in order
+            ]
+            seps = tuple(len(order) * k + 0.5 for k in range(1, len(sections)))
+            violin_box_panel(ax, groups, title=label, title_color=endpoint_color(col), separators=seps)
+        fig.suptitle(f"{gtitle}\nper-user means by TDD stratum — 5 day types × Low/High{ref}",
+                     fontsize=SUPTITLE_FS)
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
         out[f"{fname_stem}_{key}.png"] = fig
     return out
 
@@ -459,9 +490,9 @@ def _tercile_bars_panel(ax, endpoint, label, sections, order):
     ax.margins(x=0.12)
 
 
-def figure_8_3g_rank_tercile_bars(pdf, *, reference="overall", fig_id="8.3g",
+def figure_8_3g_rank_tercile_bars(pdf, *, reference="overall",
                                   fname_stem="figure_8_3g", ref_note="overall TDD-rank ref"):
-    """Figure 8.3g (two semantic 2×2 grids → all 8 endpoints): the **5 day types** (3 nested CE=0
+    """Figure 8.3g (single 4×2 grid → all 8 endpoints): the **5 day types** (3 nested CE=0
     classifications + CE>0 + CE>=3/BE>=3 HMA) across within-user TDD rank terciles (Low/Mid/High),
     same-user-set gated. Each day type at each tercile is a staggered vertical 95% CI bar (marker =
     across-user mean of the per-user tercile mean, whisker = ±1.96 SEM). `reference` switches the
@@ -474,18 +505,18 @@ def figure_8_3g_rank_tercile_bars(pdf, *, reference="overall", fig_id="8.3g",
                       label=f"{lbl} (n={sections[lbl]['_userId'].nunique()})")
                for lbl in DAY_TYPE_COLORS]
     ref = f" ({ref_note})" if ref_note else ""
-    out = {}
-    for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(13, 8.8))
-        for ax, (col, label) in zip(axes.ravel(), eps):
-            _tercile_bars_panel(ax, col, label, sections, order)
+
+    def panel(ax, col, label):
+        _tercile_bars_panel(ax, col, label, sections, order)
+
+    def legend(fig):
         fig.legend(handles=handles, loc="lower center", ncol=5, fontsize=LEGEND_FS,
                    bbox_to_anchor=(0.5, 0.0))
-        fig.suptitle(f"Figure {fig_id} — {gtitle}\nday types by within-user TDD rank tercile{ref}; "
-                     f"whiskers = 95% CI, same-user-set gated", fontsize=SUPTITLE_FS)
-        fig.tight_layout(rect=[0, 0.06, 1, 0.91])
-        out[f"{fname_stem}_{key}.png"] = fig
-    return out
+
+    return render_4x2_grid(panel, fig_stem=fname_stem,
+                           subtitle=f"day types by within-user TDD rank tercile{ref}; "
+                                    f"whiskers = 95% CI, same-user-set gated",
+                           figsize=(13, 16), bottom=0.05, decorate=legend)
 
 
 def run(
@@ -600,38 +631,38 @@ def run(
 
     # ---- Figures. Each builder is a thunk → {filename: figure}, keyed by a short tag. `figs_filter`
     # (a substring) renders only the matching builders — so iterating on one figure skips the others
-    # (notably the dense fig 8.3e/12.3h scatters). Broadest CE=0 arm for the stratum figures;
+    # (notably the dense fig 8.3e/12.3h scatters). 8.3a/12.3a/12.3c show all 5 day types; the
+    # single-CE=0-arm figures (8.3b/8.3d/8.3f, 12.3g) feature the headline CE=0/BE≤1 arm (D20);
     # CE>0 + HMA also split Low/High (computed above). ----
-    strata_inf = strata["CE=0/BE<=inf"]
-
-    def _tercile_arms(reference):
+    def _tercile_arms(reference, ce0_flag=CLASSIFICATIONS[-1][0]):
         a = lambda flag: _rank_strata(pdf, flag, reference=reference, split="tercile")  # noqa: E731
-        return a(CLASSIFICATIONS[-1][0]), a(COMPARATOR_FLAG), a(HIGH_MA_FLAG)
+        return a(ce0_flag), a(COMPARATOR_FLAG), a(HIGH_MA_FLAG)
 
     fig_builders = {
-        "8_3a": lambda: figure_8_3a_violin(strata_inf, cmp_strata, hma_strata),       # primary violins
-        "12_3a": lambda: figure_8_3a_violin(med_8_3a["CE=0/BE<=inf"], med_8_3a[COMPARATOR_LABEL],
-                                            med_8_3a[HIGH_MA_LABEL], fig_id="12.3a", ref_note="median TDD ref",
-                                            fname_stem="figure_12_3a_median"),
-        "12_3c": lambda: figure_8_3a_violin(roll_8_3a["CE=0/BE<=inf"], roll_8_3a[COMPARATOR_LABEL],
-                                            roll_8_3a[HIGH_MA_LABEL], fig_id="12.3c", ref_note="rolling-30-day TDD ref",
-                                            fname_stem="figure_12_3c_rolling"),
+        "8_3a": lambda: figure_8_3a_5way_violin(strata, cmp_strata, hma_strata,        # 5-day-type violins (4×1)
+                                                ref_note="mean-ref"),
+        "12_3a": lambda: figure_8_3a_5way_violin(med, med_8_3a[COMPARATOR_LABEL],       # 5-day-type, median ref
+                                                 med_8_3a[HIGH_MA_LABEL], ref_note="median TDD ref",
+                                                 fname_stem="figure_12_3a_median"),
+        "12_3c": lambda: figure_8_3a_5way_violin(roll, roll_8_3a[COMPARATOR_LABEL],     # 5-day-type, rolling ref
+                                                 roll_8_3a[HIGH_MA_LABEL], ref_note="rolling-30-day TDD ref",
+                                                 fname_stem="figure_12_3c_rolling"),
         "8_3b": lambda: figure_8_3b_paired_delta(strata, cmp_strata, hma_strata),
         "8_3c": lambda: {"figure_8_3c_stacked_ranges.png": figure_8_3c_stacked(strata_8_3a)},
-        "8_3d": lambda: {"figure_8_3d_R_distribution.png": figure_8_3d_r_dist(strata_inf)},
+        "8_3d": lambda: {"figure_8_3d_R_distribution.png": figure_8_3d_r_dist(strata["CE=0/BE<=1"])},
         "8_3e": lambda: {"figure_8_3e_tir_vs_tdd_percentile.png": figure_8_3e_tir_vs_tdd_pct(pdf)},
-        "8_3f": lambda: figure_8_3a_violin(*_tercile_arms("overall"), fig_id="8.3f",       # overall-ref tercile violins
+        "8_3f": lambda: figure_8_3a_violin(*_tercile_arms("overall", ce0_flag=CLASSIFICATIONS[1][0]),  # overall-ref tercile violins (CE=0/BE<=1)
                                            ref_note="overall TDD-rank terciles", fname_stem="figure_8_3f",
-                                           strata=("Low", "Mid", "High")),
+                                           strata=("Low", "Mid", "High"), ce0_label="CE=0/BE<=1"),
         "8_3g": lambda: figure_8_3g_rank_tercile_bars(pdf, reference="overall"),           # 5-day-type CI bars
-        "12_3g": lambda: figure_8_3a_violin(*_tercile_arms("ce0"), fig_id="12.3g",          # CE=0-ref tercile violins
+        "12_3g": lambda: figure_8_3a_violin(*_tercile_arms("ce0", ce0_flag=CLASSIFICATIONS[1][0]),   # CE=0-ref tercile violins (CE=0/BE<=1)
                                             ref_note="CE=0 TDD-rank terciles", fname_stem="figure_12_3g_ce0",
-                                            strata=("Low", "Mid", "High")),
-        "12_3i": lambda: figure_8_3g_rank_tercile_bars(pdf, reference="ce0", fig_id="12.3i",
+                                            strata=("Low", "Mid", "High"), ce0_label="CE=0/BE<=1"),
+        "12_3i": lambda: figure_8_3g_rank_tercile_bars(pdf, reference="ce0",
                                                        fname_stem="figure_12_3i_ce0_bars",
                                                        ref_note="CE=0 TDD-rank ref"),
         "12_3h": lambda: {"figure_12_3h_overall_tercile_scatter.png":
-                          figure_8_3e_tir_vs_tdd_pct(pdf, fig_id="12.3h", tercile_bands=True)},
+                          figure_8_3e_tir_vs_tdd_pct(pdf, tercile_bands=True)},
     }
     n = 0
     for key, build in fig_builders.items():

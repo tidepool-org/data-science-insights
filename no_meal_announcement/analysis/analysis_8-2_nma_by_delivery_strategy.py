@@ -100,6 +100,7 @@ from utils.plotting import (  # noqa: E402
     TICK_FS,
     TITLE_FS,
     endpoint_color,
+    render_4x2_grid,
     violin_box_panel,
 )
 
@@ -112,8 +113,8 @@ PRIMARY_ENDPOINT = "tir"
 BOOTSTRAP_SEED = 20260520
 
 # Colours: the violins (8.2a) + interaction lines (8.2c) use the shared fixed DAY_TYPE_COLORS palette
-# (supersedes D13's per-endpoint arm colouring) so day types read identically across §8.1–§8.3 — NMA
-# = the broadest CE=0 arm's green (this figure uses HEADLINE_CLS = CE=0/BE≤∞), CE>0 grey, CE>=3/BE>=3
+# (supersedes D13's per-endpoint arm colouring) so day types read identically across §8.1–§8.3 — the
+# generic NMA label (8.2d/DISPLAY_CELLS) takes the broadest CE=0 arm's green, CE>0 grey, CE>=3/BE>=3
 # bronze; the stacked bars (8.2d) keep RANGE_COLORS (by glycemic range). All shared via utils.plotting.
 VIOLIN_ALPHA = 0.72   # day-type fill alpha (the distinct day-type colours separate the day types)
 # In 8.2a the AB/TB pair of a day type sits adjacent (same day-type colour), so the strategy is cued
@@ -323,9 +324,10 @@ def build_table_8_2a(frames, records):
 
 
 # The per-endpoint figures show all 5 day types (8.2a violins → 10 cells/strategy-pair; 8.2c lines →
-# one line per nested NMA arm + CE>0 + HMA), each from its own fit/frame. HEADLINE_CLS (the broadest
-# CE=0/BE≤∞ arm) supplies 8.2c's single CE>0 comparator line. Cells/lines use DAY_TYPE_COLORS.
-HEADLINE_CLS = CLASSIFICATIONS[-1][1]   # "CE=0/BE<=inf"
+# one line per nested NMA arm + CE>0 + HMA), each from its own fit/frame. HEADLINE_CLS (the headline
+# CE=0/BE≤1 arm, matching §8.1c/§8.4) supplies 8.2c's single CE>0 comparator line. Cells/lines use
+# DAY_TYPE_COLORS.
+HEADLINE_CLS = CLASSIFICATIONS[1][1]   # "CE=0/BE<=1" — the headline NMA arm
 
 
 def _cell_violin_groups(frame, endpoint):
@@ -363,9 +365,9 @@ def make_violin_grids(display_frame):
             for i in range(0, len(groups), n_strat):
                 ax.plot([i + 1, i + 2], means[i:i + 2], color="#222222", lw=1.4, marker="D",
                         ms=5, mec="white", mew=0.6, zorder=6)
-        fig.suptitle(f"Figure 8.2a — {gtitle}\nper-user means by strategy × day type "
+        fig.suptitle(f"{gtitle}\nper-user means by strategy × day type "
                      f"(3 nested NMA, CE>0, CE>=3/BE>=3)", fontsize=SUPTITLE_FS)
-        fig.tight_layout(rect=[0, 0, 1, 0.955])
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
         out[f"figure_8_2a_violin_{key}.png"] = fig
     return out
 
@@ -377,7 +379,8 @@ def make_interaction_grids(records, hma_records):
     from that classification's own NMA-vs-CE>0 fit; the single CE>0 line from the broadest fit
     (CE=0/BE≤∞); the HMA line from the §12.2 HMA-vs-CE>0 fit. Lines use the shared DAY_TYPE_COLORS
     (3 nested greens, CE>0 grey, HMA bronze); panel title = endpoint colour. Returns
-    {filename: figure}; a panel with no fitted line shows a degenerate note."""
+    {filename: figure} (a single 4×2 grid over all 8 endpoints); a panel with no fitted line shows a
+    degenerate note."""
     strat_names = [s for s, _ in STRATEGIES]
     strat_short = [sh for _, sh in STRATEGIES]
     by_cls_ep = {(r["classification"], r["endpoint"]): r for r in records}
@@ -394,34 +397,29 @@ def make_interaction_grids(records, hma_records):
         ax.plot(range(len(strat_names)), ys, marker="o", label=label, color=color)
         return True
 
-    out = {}
-    for key, gtitle, eps in GRIDS:
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-        for ax, (col, label) in zip(axes.ravel(), eps):
-            plotted = False
-            # 3 nested NMA/CE=0 arms — each line from its own fit (treatment day_type = 'NMA').
-            for _flag, cls_label in CLASSIFICATIONS:
-                plotted |= _line(ax, by_cls_ep.get((cls_label, col)), NMA_LABEL, cls_label,
-                                 DAY_TYPE_COLORS[cls_label])
-            # CE>0 comparator — one line, from the broadest classification's fit.
-            plotted |= _line(ax, by_cls_ep.get((HEADLINE_CLS, col)), COMPARATOR_LABEL,
-                             COMPARATOR_LABEL, DAY_TYPE_COLORS[COMPARATOR_LABEL])
-            # CE>=3/BE>=3 high meal-announcement arm — from the §12.2 fit.
-            plotted |= _line(ax, by_ep_hma.get(col), HIGH_MA_LABEL, HIGH_MA_LABEL,
-                             DAY_TYPE_COLORS[HIGH_MA_LABEL])
-            if plotted:
-                ax.legend(fontsize=LEGEND_FS)
-            else:
-                ax.text(0.5, 0.5, "model not fit\n(degenerate)", ha="center", va="center",
-                        transform=ax.transAxes, fontsize=11, color="gray")
-            ax.set_xticks(range(len(strat_names)))
-            ax.set_xticklabels(strat_short)
-            ax.set_title(label, fontsize=TITLE_FS, color=endpoint_color(col))
-        fig.suptitle(f"Figure 8.2c — {gtitle}\nday-type × strategy interaction (marginal means)",
-                     fontsize=SUPTITLE_FS)
-        fig.tight_layout(rect=[0, 0, 1, 0.92])
-        out[f"figure_8_2c_interaction_{key}.png"] = fig
-    return out
+    def panel(ax, col, label):
+        plotted = False
+        # 3 nested NMA/CE=0 arms — each line from its own fit (treatment day_type = 'NMA').
+        for _flag, cls_label in CLASSIFICATIONS:
+            plotted |= _line(ax, by_cls_ep.get((cls_label, col)), NMA_LABEL, cls_label,
+                             DAY_TYPE_COLORS[cls_label])
+        # CE>0 comparator — one line, from the broadest classification's fit.
+        plotted |= _line(ax, by_cls_ep.get((HEADLINE_CLS, col)), COMPARATOR_LABEL,
+                         COMPARATOR_LABEL, DAY_TYPE_COLORS[COMPARATOR_LABEL])
+        # CE>=3/BE>=3 high meal-announcement arm — from the §12.2 fit.
+        plotted |= _line(ax, by_ep_hma.get(col), HIGH_MA_LABEL, HIGH_MA_LABEL,
+                         DAY_TYPE_COLORS[HIGH_MA_LABEL])
+        if plotted:
+            ax.legend(fontsize=LEGEND_FS)
+        else:
+            ax.text(0.5, 0.5, "model not fit\n(degenerate)", ha="center", va="center",
+                    transform=ax.transAxes, fontsize=11, color="gray")
+        ax.set_xticks(range(len(strat_names)))
+        ax.set_xticklabels(strat_short)
+        ax.set_title(label, fontsize=TITLE_FS, color=endpoint_color(col))
+
+    return render_4x2_grid(panel, fig_stem="figure_8_2c_interaction",
+                           subtitle="day-type × strategy interaction (marginal means)")
 
 
 def make_figure_8_2d(display_frames):
@@ -470,7 +468,7 @@ def make_figure_8_2d(display_frames):
     axes[0][0].set_ylabel("Mean time in range (%)")
     axes[0][-1].legend(title="Glucose (mg/dL)", bbox_to_anchor=(1.01, 1), loc="upper left",
                        fontsize=LEGEND_FS)
-    fig.suptitle("Figure 8.2d: Mean time in glycemic ranges by classification × cell",
+    fig.suptitle("Mean time in glycemic ranges by classification × cell",
                  fontsize=SUPTITLE_FS)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     return fig
