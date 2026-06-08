@@ -91,7 +91,7 @@ from utils.data_loader import (  # noqa: E402
     restrict_comparator,
 )
 from utils.plotting import (  # noqa: E402
-    DAY_TYPE_COLORS,
+    DAY_TYPE_ORDER,
     GRIDS,
     LEGEND_FS,
     RANGE_COLORS,
@@ -99,6 +99,8 @@ from utils.plotting import (  # noqa: E402
     SUPTITLE_FS,
     TICK_FS,
     TITLE_FS,
+    day_type_colors,
+    day_type_legend,
     endpoint_color,
     render_4x2_grid,
     violin_box_panel,
@@ -112,10 +114,11 @@ PRIMARY_ENDPOINT = "tir"
 
 BOOTSTRAP_SEED = 20260520
 
-# Colours: the violins (8.2a) + interaction lines (8.2c) use the shared fixed DAY_TYPE_COLORS palette
-# (supersedes D13's per-endpoint arm colouring) so day types read identically across §8.1–§8.3 — the
-# generic NMA label (8.2d/DISPLAY_CELLS) takes the broadest CE=0 arm's green, CE>0 grey, CE>=3/BE>=3
-# bronze; the stacked bars (8.2d) keep RANGE_COLORS (by glycemic range). All shared via utils.plotting.
+# Colours: the violins (8.2a) + interaction lines (8.2c) colour each day type by the PANEL ENDPOINT's
+# glycemic-range band (day_type_colors(col)) — the 3 nested NMA/CE=0 arms a dark→light ramp of that
+# band, CE>0 grey, CE>=3/BE>=3 bronze — so the hue reinforces which metric a panel shows (the arm hue
+# now varies per endpoint). The stacked bars (8.2d) keep RANGE_COLORS (by glycemic range). All shared
+# via utils.plotting.
 VIOLIN_ALPHA = 0.72   # day-type fill alpha (the distinct day-type colours separate the day types)
 # In 8.2a the AB/TB pair of a day type sits adjacent (same day-type colour), so the strategy is cued
 # by alpha — autobolus_on darker, temp_basal_only lighter.
@@ -143,16 +146,18 @@ def build_day_type_frame(pdf, treatment_flag, treatment_label=NMA_LABEL):
 # §8.1's 5th arm). DISPLAY_CELLS (3 day types) drives the per-classification 8.2d stacked bars
 # (NMA = the subplot's classification); 8.2a uses DISPLAY_CELLS_5WAY below — the 3 nested NMA/CE=0
 # arms each as their own cell + CE>0 + HMA — so it shows all 5 day types like §8.1's 8.1b.
+# These lists carry (label, alpha) only: the day-type colour now varies per endpoint, so it is
+# resolved inside the per-panel loop as day_type_colors(col)[label].
 DISPLAY_CELLS = [
-    (NMA_LABEL, DAY_TYPE_COLORS[CLASSIFICATIONS[-1][1]], VIOLIN_ALPHA),
-    (COMPARATOR_LABEL, DAY_TYPE_COLORS[COMPARATOR_LABEL], VIOLIN_ALPHA),
-    (HIGH_MA_LABEL, DAY_TYPE_COLORS[HIGH_MA_LABEL], VIOLIN_ALPHA),
+    (NMA_LABEL, VIOLIN_ALPHA),
+    (COMPARATOR_LABEL, VIOLIN_ALPHA),
+    (HIGH_MA_LABEL, VIOLIN_ALPHA),
 ]
-# 5-day-type cells for the 8.2a violins: (label, colour, alpha) per the shared DAY_TYPE_COLORS —
-# the 3 nested NMA/CE=0 classifications (green ramp) + CE>0 (grey) + HMA (bronze).
-DISPLAY_CELLS_5WAY = [(lab, DAY_TYPE_COLORS[lab], VIOLIN_ALPHA) for _f, lab in CLASSIFICATIONS] + [
-    (COMPARATOR_LABEL, DAY_TYPE_COLORS[COMPARATOR_LABEL], VIOLIN_ALPHA),
-    (HIGH_MA_LABEL, DAY_TYPE_COLORS[HIGH_MA_LABEL], VIOLIN_ALPHA),
+# 5-day-type cells for the 8.2a violins: (label, alpha) — the 3 nested NMA/CE=0 classifications, CE>0,
+# and HMA. Colour resolved per panel via day_type_colors(col) (band ramp / grey / bronze).
+DISPLAY_CELLS_5WAY = [(lab, VIOLIN_ALPHA) for _f, lab in CLASSIFICATIONS] + [
+    (COMPARATOR_LABEL, VIOLIN_ALPHA),
+    (HIGH_MA_LABEL, VIOLIN_ALPHA),
 ]
 
 
@@ -325,8 +330,8 @@ def build_table_8_2a(frames, records):
 
 # The per-endpoint figures show all 5 day types (8.2a violins → 10 cells/strategy-pair; 8.2c lines →
 # one line per nested NMA arm + CE>0 + HMA), each from its own fit/frame. HEADLINE_CLS (the headline
-# CE=0/BE≤1 arm, matching §8.1c/§8.4) supplies 8.2c's single CE>0 comparator line. Cells/lines use
-# DAY_TYPE_COLORS.
+# CE=0/BE≤1 arm, matching §8.1c/§8.4) supplies 8.2c's single CE>0 comparator line. Cells/lines colour
+# each day type by the panel endpoint's band (day_type_colors(col)).
 HEADLINE_CLS = CLASSIFICATIONS[1][1]   # "CE=0/BE<=1" — the headline NMA arm
 
 
@@ -334,10 +339,13 @@ def _cell_violin_groups(frame, endpoint):
     """Violin groups for the 10 (day_type × strategy) cells of one endpoint, in the shape
     utils.plotting.violin_box_panel expects: (label, values, colour, alpha). Grouped by day type with
     the TB/AB pair adjacent (so the strategy effect reads within each day type): d1-TB, d1-AB |
-    d2-TB, d2-AB | … Colour = the day type's fixed DAY_TYPE_COLORS (3 nested NMA/CE=0 greens, CE>0
-    grey, HMA bronze); within a pair AB is darker, TB lighter (STRATEGY_ALPHA)."""
+    d2-TB, d2-AB | … Colour = the day type's colour for THIS endpoint's band (day_type_colors(endpoint):
+    3 nested NMA/CE=0 ramp, CE>0 grey, HMA bronze); within a pair AB is darker, TB lighter
+    (STRATEGY_ALPHA)."""
+    dt_colors = day_type_colors(endpoint)
     groups = []
-    for d, color, _alpha in DISPLAY_CELLS_5WAY:
+    for d, _alpha in DISPLAY_CELLS_5WAY:
+        color = dt_colors[d]
         for s_name, s_short in STRATEGIES:  # STRATEGIES is TB-first (data_loader), so each pair is TB|AB
             cell = frame[(frame[STRATEGY_COL] == s_name) & (frame[DAY_TYPE_COL] == d)]
             vals = cell.groupby("_userId")[endpoint].mean().dropna().to_numpy()
@@ -349,9 +357,10 @@ def make_violin_grids(display_frame):
     """Figure 8.2a: per-user mean endpoints by day type × delivery strategy, showing all 5 day types
     (3 nested NMA/CE=0 + CE>0 + CE>=3/BE>=3) with each day type's AB/TB pair adjacent → 10 cells per
     endpoint. The 10-cell panels are wide, so the 4 endpoints of each grid stack 4×1 (full-width).
-    Returns {filename: figure}. Cells use the fixed DAY_TYPE_COLORS (AB darker / TB lighter); a light
-    separator divides each day-type TB|AB pair from the next, and a dark line + diamonds connects the
-    two across-user means within each pair (the TB→AB strategy shift for that day type)."""
+    Returns {filename: figure}. Cells colour each day type by the panel endpoint's band
+    (day_type_colors(col); AB darker / TB lighter); a light separator divides each day-type TB|AB pair
+    from the next, and a dark line + diamonds connects the two across-user means within each pair (the
+    TB→AB strategy shift for that day type)."""
     n_strat = len(STRATEGIES)  # separators between day-type groups (after each TB/AB pair)
     seps = tuple(n_strat * k + 0.5 for k in range(1, len(DISPLAY_CELLS_5WAY)))
     out = {}
@@ -377,40 +386,46 @@ def make_interaction_grids(records, hma_records):
     types as lines — the 3 nested NMA/CE=0 classifications, CE>0, and the high meal-announcement
     CE>=3/BE>=3 arm — across the two shared 2×2 metric grids (all 8 endpoints). Each NMA line comes
     from that classification's own NMA-vs-CE>0 fit; the single CE>0 line from the broadest fit
-    (CE=0/BE≤∞); the HMA line from the §12.2 HMA-vs-CE>0 fit. Lines use the shared DAY_TYPE_COLORS
-    (3 nested greens, CE>0 grey, HMA bronze); panel title = endpoint colour. Returns
-    {filename: figure} (a single 4×2 grid over all 8 endpoints); a panel with no fitted line shows a
-    degenerate note."""
+    (CE=0/BE≤∞); the HMA line from the §12.2 HMA-vs-CE>0 fit. Lines colour each day type by the panel
+    endpoint's band (day_type_colors(col): 3 nested ramp, CE>0 grey, HMA bronze); panel title = endpoint
+    colour. Because the hue varies per endpoint, each panel carries its own arm legend
+    (day_type_legend) rather than one figure-level legend. Returns {filename: figure} (a single 4×2
+    grid over all 8 endpoints); a panel with no fitted line shows a degenerate note."""
     strat_names = [s for s, _ in STRATEGIES]
     strat_short = [sh for _, sh in STRATEGIES]
     by_cls_ep = {(r["classification"], r["endpoint"]): r for r in records}
     by_ep_hma = {r["endpoint"]: r for r in hma_records}
 
     def _line(ax, rec, day_key, label, color):
-        """Plot one day type's marginal-mean line across strategies if the fit produced it."""
+        """Plot one day type's marginal-mean line across strategies if the fit produced it; returns
+        the arm label when a line was drawn (so the panel can build its legend), else None."""
         mc = rec["marginal_cells"] if rec else None
         if not mc:
-            return False
+            return None
         ys = [mc.get((day_key, s), {}).get("mean", np.nan) for s in strat_names]
         if np.all(np.isnan(ys)):
-            return False
+            return None
         ax.plot(range(len(strat_names)), ys, marker="o", label=label, color=color)
-        return True
+        return label
 
     def panel(ax, col, label):
-        plotted = False
+        dt_colors = day_type_colors(col)
+        plotted_arms = []
         # 3 nested NMA/CE=0 arms — each line from its own fit (treatment day_type = 'NMA').
         for _flag, cls_label in CLASSIFICATIONS:
-            plotted |= _line(ax, by_cls_ep.get((cls_label, col)), NMA_LABEL, cls_label,
-                             DAY_TYPE_COLORS[cls_label])
+            plotted_arms.append(_line(ax, by_cls_ep.get((cls_label, col)), NMA_LABEL, cls_label,
+                                      dt_colors[cls_label]))
         # CE>0 comparator — one line, from the broadest classification's fit.
-        plotted |= _line(ax, by_cls_ep.get((HEADLINE_CLS, col)), COMPARATOR_LABEL,
-                         COMPARATOR_LABEL, DAY_TYPE_COLORS[COMPARATOR_LABEL])
+        plotted_arms.append(_line(ax, by_cls_ep.get((HEADLINE_CLS, col)), COMPARATOR_LABEL,
+                                  COMPARATOR_LABEL, dt_colors[COMPARATOR_LABEL]))
         # CE>=3/BE>=3 high meal-announcement arm — from the §12.2 fit.
-        plotted |= _line(ax, by_ep_hma.get(col), HIGH_MA_LABEL, HIGH_MA_LABEL,
-                         DAY_TYPE_COLORS[HIGH_MA_LABEL])
-        if plotted:
-            ax.legend(fontsize=LEGEND_FS)
+        plotted_arms.append(_line(ax, by_ep_hma.get(col), HIGH_MA_LABEL, HIGH_MA_LABEL,
+                                  dt_colors[HIGH_MA_LABEL]))
+        drawn = {a for a in plotted_arms if a is not None}
+        if drawn:
+            # Per-panel arm legend (swatches match this endpoint's ramp), arms in DAY_TYPE_ORDER.
+            arms = [a for a in DAY_TYPE_ORDER if a in drawn]
+            day_type_legend(ax, col, arms)
         else:
             ax.text(0.5, 0.5, "model not fit\n(degenerate)", ha="center", va="center",
                     transform=ax.transAxes, fontsize=11, color="gray")
@@ -430,7 +445,7 @@ def make_figure_8_2d(display_frames):
     fig, axes = plt.subplots(1, len(CLASSIFICATIONS),
                              figsize=(7.5 * len(CLASSIFICATIONS), 7), squeeze=False, sharey=True)
     range_keys = [rc for rc, _ in RANGE_COLS]
-    day_type_labels = [d for d, _, _ in DISPLAY_CELLS]
+    day_type_labels = [d for d, _ in DISPLAY_CELLS]
 
     for ax, (nma_flag, cls_label) in zip(axes[0], CLASSIFICATIONS):
         frame = display_frames[cls_label].copy()

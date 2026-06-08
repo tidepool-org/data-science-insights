@@ -102,13 +102,14 @@ from utils.data_loader import (  # noqa: E402
     windowed_matched_means,
 )
 from utils.plotting import (  # noqa: E402
-    DAY_TYPE_COLORS,
+    DAY_TYPE_ORDER,
     GRAY,
     GRIDS,
     HIGH_MA_COLOR,
     RANGE_COLORS,
     RANGE_COLS,
     SUPTITLE_FS,
+    day_type_colors,
     endpoint_color,
     overlay_hist_panel,
     render_4x2_grid,
@@ -118,10 +119,10 @@ from utils.plotting import (  # noqa: E402
 BOOTSTRAP_N = 1000
 BOOTSTRAP_SEED = 20260520
 
-# Per-user violin grids show the 5 arms (3 nested NMA + CE>0 + CE>=3/BE>=3). Each arm carries its
-# fixed DAY_TYPE_COLORS colour (supersedes D13's per-endpoint arm colouring): the 3 nested NMA/CE=0
-# arms on the green ramp (dark BE=0 → TIR-green BE≤1 → light BE≤∞), CE>0 grey, HMA bronze — the same
-# day-type palette shared across §8.1–§8.3 via utils.plotting, so day types read identically.
+# Per-user violin grids show the 5 arms (3 nested NMA + CE>0 + CE>=3/BE>=3). Each arm's colour is the
+# panel endpoint's glycemic-range band colour (3 nested CE=0 arms dark→light ramp, CE>0 grey, HMA bronze)
+# via day_type_colors(<endpoint_col>) — so the arm hue tracks the metric shown and matches the
+# range-coloured bars / Δ-histograms / panel titles. Shared across §8.1–§8.3 via utils.plotting.
 VIOLIN_ALPHA = 0.72   # uniform fill alpha (the distinct day-type colours, not alpha, separate arms)
 
 # Behavioral metrics for Table 8.1c (CE>0 days). PLN-1008 §7.5 lists meal boluses,
@@ -535,27 +536,29 @@ def make_stacked_bar(pdf):
 
 def arm_violin_groups(pdf, endpoint, *, include_high_ma=False):
     """Per-user-mean violin groups for the arms of one column, in the shape
-    utils.plotting.violin_box_panel expects: (label, values, colour, alpha). Each arm carries its
-    fixed DAY_TYPE_COLORS colour (3 nested NMA/CE=0 arms on the green ramp, CE>0 grey, HMA bronze) at
-    a uniform VIOLIN_ALPHA. With `include_high_ma=True`, appends the CE>=3/BE>=3 high meal-announcement
-    category as a 5th group (used by §8.1 Figure 8.1b; off by default so other callers stay 4-arm)."""
+    utils.plotting.violin_box_panel expects: (label, values, colour, alpha). Each arm's colour is
+    this endpoint's glycemic-range band colour (3 nested CE=0 arms dark→light ramp, CE>0 grey, HMA
+    bronze) via day_type_colors, at a uniform VIOLIN_ALPHA. With `include_high_ma=True`, appends the
+    CE>=3/BE>=3 high meal-announcement category as a 5th group (used by §8.1 Figure 8.1b; off by
+    default so other callers stay 4-arm)."""
+    arm_cols = day_type_colors(endpoint)
     groups = [
-        (lab, per_user_arm_mean(pdf, endpoint, flag).dropna().to_numpy(), DAY_TYPE_COLORS[lab], VIOLIN_ALPHA)
+        (lab, per_user_arm_mean(pdf, endpoint, flag).dropna().to_numpy(), arm_cols[lab], VIOLIN_ALPHA)
         for flag, lab in CLASSIFICATIONS
     ]
     cmp_vals = per_user_arm_mean(pdf, endpoint, COMPARATOR_FLAG).dropna().to_numpy()
-    groups.append((COMPARATOR_LABEL, cmp_vals, DAY_TYPE_COLORS[COMPARATOR_LABEL], VIOLIN_ALPHA))
+    groups.append((COMPARATOR_LABEL, cmp_vals, arm_cols[COMPARATOR_LABEL], VIOLIN_ALPHA))
     if include_high_ma:
         hi_vals = per_user_arm_mean(pdf, endpoint, HIGH_MA_FLAG).dropna().to_numpy()
-        groups.append((HIGH_MA_LABEL, hi_vals, DAY_TYPE_COLORS[HIGH_MA_LABEL], VIOLIN_ALPHA))
+        groups.append((HIGH_MA_LABEL, hi_vals, arm_cols[HIGH_MA_LABEL], VIOLIN_ALPHA))
     return groups
 
 
 def make_violin_grids(pdf):
     """Figure 8.1b: per-user mean endpoints across the 5 arms (3 nested NMA + CE>0 + CE>=3/BE>=3), as
-    a single 4×2 metric grid (all 8 endpoints). Returns {filename: figure}. Each arm carries its fixed
-    DAY_TYPE_COLORS colour (3 nested NMA on the green ramp, CE>0 grey, HMA bronze); the panel title
-    carries the endpoint's glycemic-range colour; separators divide NMA | CE>0 | HMA."""
+    a single 4×2 metric grid (all 8 endpoints). Returns {filename: figure}. Each arm's colour is the
+    endpoint's glycemic-range band colour (3 nested CE=0 arms dark→light ramp, CE>0 grey, HMA bronze)
+    via day_type_colors; the panel title carries the same range colour; separators divide NMA | CE>0 | HMA."""
     def panel(ax, col, label):
         violin_box_panel(ax, arm_violin_groups(pdf, col, include_high_ma=True),
                          title=label, title_color=endpoint_color(col), separators=(3.5, 4.5))
@@ -657,20 +660,22 @@ def make_windowed_delta_grids(pdf):
 def make_windowed_violin_grids(pdf):
     """Figure 12.1b (single 4×2 grid): per-user windowed means by arm — the 3 nested NMA arms, the CE>0
     comparator, and the CE>=3/BE>=3 high-engagement arm, each on the per-NMA-day ±(WINDOW_DAYS/2)-day
-    match. The windowed companion to the full-record violin grid (8.1b). Each arm carries its fixed
-    DAY_TYPE_COLORS colour (3 nested NMA on the green ramp, CE>0 grey, HMA bronze)."""
+    match. The windowed companion to the full-record violin grid (8.1b). Each arm's colour is the
+    endpoint's glycemic-range band colour (3 nested CE=0 arms dark→light ramp, CE>0 grey, HMA bronze)
+    via day_type_colors."""
     win = {lab: windowed_matched_means(pdf, flag, COMPARATOR_FLAG, ENDPOINTS)[0]
            for flag, lab in CLASSIFICATIONS}
     broadest = CLASSIFICATIONS[-1][1]  # CE=0/BE<=inf — supplies the CE>0 windowed comparator group
     win_hi = windowed_matched_means(pdf, HIGH_MA_FLAG, COMPARATOR_FLAG, ENDPOINTS)[0]
 
     def panel(ax, col, label):
-        groups = [(lab, win[lab][f"{col}__nma"].dropna().to_numpy(), DAY_TYPE_COLORS[lab], VIOLIN_ALPHA)
+        arm_cols = day_type_colors(col)
+        groups = [(lab, win[lab][f"{col}__nma"].dropna().to_numpy(), arm_cols[lab], VIOLIN_ALPHA)
                   for _flag, lab in CLASSIFICATIONS]
         groups.append((COMPARATOR_LABEL, win[broadest][f"{col}__cmp"].dropna().to_numpy(),
-                       DAY_TYPE_COLORS[COMPARATOR_LABEL], VIOLIN_ALPHA))
+                       arm_cols[COMPARATOR_LABEL], VIOLIN_ALPHA))
         groups.append((HIGH_MA_LABEL, win_hi[f"{col}__nma"].dropna().to_numpy(),
-                       DAY_TYPE_COLORS[HIGH_MA_LABEL], VIOLIN_ALPHA))
+                       arm_cols[HIGH_MA_LABEL], VIOLIN_ALPHA))
         violin_box_panel(ax, groups, title=label, title_color=endpoint_color(col), separators=(3.5, 4.5))
 
     return render_4x2_grid(panel, fig_stem="figure_12_1b_windowed_violin",

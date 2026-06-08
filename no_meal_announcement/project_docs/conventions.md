@@ -64,9 +64,13 @@ Many are inherited from `FDA_real_world_data/` (NMA imports FDA components rathe
 - One shared vocabulary in `utils/plotting.py`. **Range-based colours** (TIR green, <70/<54
   coral/red, >180/>250 light/dark purple; mean glucose / CV / hypo = Tidepool brand blue) for the
   stacked-range bars + paired-difference Δ-histograms + panel titles. **Arm / day-type figures**
-  (violins, interaction lines) use the **fixed `DAY_TYPE_COLORS` palette** (D13 update 2026-06-06):
-  3 nested NMA/CE=0 arms on a green ramp (dark BE=0 → TIR-green BE≤1 → light BE≤∞), CE>0 grey,
-  CE>=3/BE>=3 bronze — same day-type colours in every panel and across §8.1–§8.3.
+  (violins, interaction lines, strategy/tercile bars) take the **per-endpoint band colour**
+  `plotting.day_type_colors(endpoint)` (D13 update 2026-06-08): in each panel the 3 nested NMA/CE=0
+  arms are a **dark→light lightness ramp of that endpoint's range colour** (BE=0 darkest → BE≤1 the
+  base → BE≤∞ lightest), CE>0 grey, CE>=3/BE>=3 bronze — so the colour follows the glycemic metric
+  (matching fig 8.3f and the range-coloured bars). Bar/line figures carry a **per-panel** arm legend
+  (`plotting.day_type_legend`) since the hue varies by endpoint. (Supersedes the old fixed
+  blue/green `DAY_TYPE_COLORS` ramp — see decisions.md D13.)
 - Per-user figures are **two 2×2 metric grids spanning all 8 endpoints** (Grid 1 target+safety:
   TIR/<70/<54/hypo; Grid 2 hyper+overall: >180/>250/mean/CV). Violins = dots-behind / box-on-top
   (orange median); paired-difference histograms = shared bin edges + mean lines.

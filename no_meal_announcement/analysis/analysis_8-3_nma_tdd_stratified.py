@@ -56,7 +56,7 @@ Outputs (analysis/outputs/analysis_8_3/<cohort>/) — primary (mean TDD referenc
     figure_8_3c_stacked_ranges.png         mean glycemic ranges — 10 stacked bars (5 day types × Low/High), labeled %s + dashed Low→High segment connectors
     figure_8_3d_R_distribution.png         within-user R = tdd/mean_tdd distribution on CE=0 days
     figure_8_3e_tir_vs_tdd_percentile.png  scatter: per-day TIR vs within-user TDD percentile, coloured by the
-                                           SAME 5 day types as fig 8.3g (DAY_TYPE_COLORS); per-day-type decile lines + overall
+                                           SAME 5 day types as fig 8.3g (TIR band ramp); per-day-type decile lines + overall
   Appendix §12.3 supplement:
     table_12_3a_median_per_user_by_stratum.csv   median ref — per-user-by-stratum (5 sections)
     figure_12_3a_median_grid{1,2}_*.png          median ref — per-user violin grids (6 groups)
@@ -102,7 +102,6 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.lines import Line2D  # noqa: E402
 
 try:
     _ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -132,7 +131,7 @@ from utils.data_loader import (  # noqa: E402
     restrict_comparator,
 )
 from utils.plotting import (  # noqa: E402
-    DAY_TYPE_COLORS,
+    DAY_TYPE_ORDER,
     GRAY,
     GRIDS,
     HIGH_MA_COLOR,
@@ -140,6 +139,8 @@ from utils.plotting import (  # noqa: E402
     RANGE_COLORS,
     SUPTITLE_FS,
     TITLE_FS,
+    day_type_colors,
+    day_type_legend,
     endpoint_color,
     overlay_hist_panel,
     render_4x2_grid,
@@ -278,15 +279,17 @@ def figure_8_3d_r_dist(ce0_strata):
     return fig
 
 
-# DAY_TYPE_COLORS (the shared per-day-type palette) now lives in utils.plotting (imported above) so
-# §8.1/§8.2/§8.3 share one definition.
+# The per-day-type palette now lives in utils.plotting (day_type_colors / DAY_TYPE_ORDER, imported
+# above) so §8.1/§8.2/§8.3 share one definition: the 3 nested CE=0 arms are a dark→light ramp of each
+# endpoint's glycemic-range band colour, CE>0 grey, CE>=3/BE>=3 bronze.
 
 
 def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False):
     """Scatter: per-day TIR vs the day's within-user TDD percentile, for TDD-reference-eligible users,
     coloured by the **same 5 day types as figure 8.3g** (3 nested CE=0 classifications + CE>0 +
-    CE>=3/BE>=3 HMA; DAY_TYPE_COLORS). Percentile = each day's rank of tdd_units within that user's
-    eligible days (0–100), comparable across users.
+    CE>=3/BE>=3 HMA). TIR-only figure → colours come from day_type_colors("tir"): the 3 nested CE=0
+    arms a dark→light ramp of the TIR band colour, CE>0 grey, HMA bronze. Percentile = each day's
+    rank of tdd_units within that user's eligible days (0–100), comparable across users.
 
     All 5 day types get a decile-mean TIR LINE (11 dots on the x-ticks) over that category's days,
     using the same (cumulative, flag-defined) membership as 8.3g — so the lines correspond exactly.
@@ -301,8 +304,8 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False):
     df = pdf[pdf["n_eligible_days_for_tdd"] >= MIN_REF_DAYS].dropna(subset=["tdd_units", "tir"]).copy()
     df["tdd_pct"] = df.groupby("_userId")["tdd_units"].rank(pct=True) * 100.0
     # Per-day colour = most-specific day type (the tightest nested CE=0 class, else HMA, else CE>0);
-    # first match wins, so dots get one crisp DAY_TYPE_COLORS colour. Days in none of the 5 (CE>0 of
-    # non-CE=0-contributing users, zeroed by restrict_comparator) fall through to "" and are dropped.
+    # first match wins, so dots get one crisp day_type_colors("tir") colour. Days in none of the 5 (CE>0
+    # of non-CE=0-contributing users, zeroed by restrict_comparator) fall through to "" and are dropped.
     f0, f1, finf = (c[0] for c in CLASSIFICATIONS)  # in_ce0_be0 / in_ce0_be_le1 / in_ce0_be_inf
     df["dotcat"] = np.select(
         [df[f0] == True, df[f1] == True, df[finf] == True,          # noqa: E712
@@ -320,19 +323,20 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False):
     marks = np.arange(0, 101, 10)
     edges = np.arange(-5, 106, 10)  # 10-pct-wide bins centred on the marks → dots land on ticks
 
-    # Scatter for day-level spread — ALL days plotted, same colours as the lines (DAY_TYPE_COLORS).
+    # Scatter for day-level spread — ALL days plotted, same colours as the lines (TIR band ramp).
     # The day types are very unequal in size (HMA + CE>0 are ~5-30× the CE=0 greens), so the two big
     # categories are pushed into a faint, small-dot BACKDROP while the CE=0 greens are drawn larger,
     # more opaque, and on top so they stay distinct against it (the LINES below use all days too).
-    counts = {c: int((df["dotcat"] == c).sum()) for c in DAY_TYPE_COLORS}
+    tir_colors = day_type_colors("tir")
+    counts = {c: int((df["dotcat"] == c).sum()) for c in DAY_TYPE_ORDER}
     big = {COMPARATOR_LABEL, HIGH_MA_LABEL}  # the two large categories → faint backdrop
-    for cat in sorted(DAY_TYPE_COLORS, key=lambda c: counts[c], reverse=True):
+    for cat in sorted(DAY_TYPE_ORDER, key=lambda c: counts[c], reverse=True):
         sub = df[df["dotcat"] == cat]
         if cat in big:
-            ax.scatter(sub["tdd_pct"], sub["tir"], s=4, color=DAY_TYPE_COLORS[cat], linewidths=0,
+            ax.scatter(sub["tdd_pct"], sub["tir"], s=4, color=tir_colors[cat], linewidths=0,
                        zorder=2, alpha=0.05)
         else:
-            ax.scatter(sub["tdd_pct"], sub["tir"], s=7, color=DAY_TYPE_COLORS[cat], linewidths=0,
+            ax.scatter(sub["tdd_pct"], sub["tir"], s=7, color=tir_colors[cat], linewidths=0,
                        zorder=3, alpha=0.18)
 
     # A decile-mean TIR line per day type — over that category's (cumulative, flag-defined) days, so
@@ -342,7 +346,7 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False):
         sub = df[df[flag] == True]  # noqa: E712
         binned = (sub.assign(_b=pd.cut(sub["tdd_pct"], edges, labels=marks))
                      .groupby("_b", observed=False)["tir"].mean().reindex(marks))
-        h, = ax.plot(marks, binned.to_numpy(dtype=float), "-o", color=DAY_TYPE_COLORS[label], lw=2,
+        h, = ax.plot(marks, binned.to_numpy(dtype=float), "-o", color=tir_colors[label], lw=2,
                      ms=5, zorder=5, label=f"{label} (n={len(sub):,})")
         handles.append(h)
 
@@ -443,10 +447,11 @@ def figure_8_3a_5way_violin(strata, cmp_strata, hma_strata, *, fname_stem="figur
     """Figure 8.3a (two 4×1 grids → all 8 endpoints): per-user mean endpoints by TDD stratum for ALL
     **5 day types** (the 3 nested CE=0 arms + CE>0 + CE>=3/BE>=3 HMA), each split Low/High → 10
     violins per panel. The 10-cell panels are wide, so the 4 endpoints of each grid stack 4×1
-    (full-width, à la §8.2a). Colour = day type (DAY_TYPE_COLORS — 3 nested CE=0 on a Tidepool-blue
-    ramp, CE>0 grey, HMA bronze), alpha = stratum (Low lighter / High darker); the panel title carries
-    the endpoint colour. Mean-reference (R = tdd/mean) binary strata. A separator divides each day
-    type's Low|High pair. Returns {filename: figure}."""
+    (full-width, à la §8.2a). Colour = day type per panel (day_type_colors(col) — the 3 nested CE=0 arms
+    a dark→light ramp of that endpoint's glycemic-range band colour, CE>0 grey, HMA bronze), alpha =
+    stratum (Low lighter / High darker); the panel title carries the endpoint colour. Mean-reference
+    (R = tdd/mean) binary strata. A separator divides each day type's Low|High pair. Returns
+    {filename: figure}."""
     sections = ([(lab, strata[lab]) for _flag, lab in CLASSIFICATIONS]
                 + [(COMPARATOR_LABEL, cmp_strata), (HIGH_MA_LABEL, hma_strata)])
     order = ("Low", "High")
@@ -458,7 +463,7 @@ def figure_8_3a_5way_violin(strata, cmp_strata, hma_strata, *, fname_stem="figur
             groups = [
                 (f"{lab}\n{st}",
                  df.loc[df["tdd_stratum"] == st].groupby("_userId")[col].mean().dropna().to_numpy(),
-                 DAY_TYPE_COLORS[lab], STRATUM_ALPHA[st])
+                 day_type_colors(col)[lab], STRATUM_ALPHA[st])
                 for lab, df in sections for st in order
             ]
             seps = tuple(len(order) * k + 0.5 for k in range(1, len(sections)))
@@ -474,20 +479,23 @@ def _tercile_bars_panel(ax, endpoint, label, sections, order):
     """One endpoint panel: x = the terciles in `order`; within each, the 5 day types as staggered
     vertical 95% CI bars (marker = across-user mean of the per-user tercile mean, whisker = ±1.96
     SEM), each day type's Low→Mid→High markers joined by a thin connecting line to show its
-    trajectory. y auto-scales to the estimates so the (narrow) CIs stay visible."""
+    trajectory. y auto-scales to the estimates so the (narrow) CIs stay visible. Colour = day type for
+    this endpoint's band ramp (day_type_colors(endpoint)); a per-panel arm legend matches the ramp."""
     x = np.arange(len(order))
-    labels = list(DAY_TYPE_COLORS)
+    labels = DAY_TYPE_ORDER
+    colors = day_type_colors(endpoint)
     offs = np.linspace(-0.30, 0.30, len(labels))
     for lbl, off in zip(labels, offs):
         mu, lo, hi = _tercile_trend_stats(sections[lbl], endpoint, order)
         # fmt="-o": connect each day type's Low→Mid→High points (thin line) + marker + CI whisker.
         ax.errorbar(x + off, mu, yerr=np.vstack([mu - lo, hi - mu]), fmt="-o", ms=5, lw=1.6,
-                    color=DAY_TYPE_COLORS[lbl], ecolor=DAY_TYPE_COLORS[lbl],
+                    color=colors[lbl], ecolor=colors[lbl],
                     elinewidth=2.2, capsize=3, zorder=3)
     ax.set_xticks(x); ax.set_xticklabels(order)
     ax.set_xlabel("within-user TDD tercile")
     ax.set_title(label, color=endpoint_color(endpoint), fontsize=TITLE_FS)
     ax.margins(x=0.12)
+    day_type_legend(ax, endpoint, DAY_TYPE_ORDER)  # per-panel: hue varies by endpoint
 
 
 def figure_8_3g_rank_tercile_bars(pdf, *, reference="overall",
@@ -501,22 +509,16 @@ def figure_8_3g_rank_tercile_bars(pdf, *, reference="overall",
     {filename: figure}."""
     order = ("Low", "Mid", "High")
     sections = _rank_sections(pdf, reference=reference, split="tercile")  # 5 SUPPLEMENT_ARMS, gated
-    handles = [Line2D([0], [0], marker="o", color=DAY_TYPE_COLORS[lbl], lw=0, ms=8,
-                      label=f"{lbl} (n={sections[lbl]['_userId'].nunique()})")
-               for lbl in DAY_TYPE_COLORS]
     ref = f" ({ref_note})" if ref_note else ""
 
     def panel(ax, col, label):
+        # Per-panel arm legend (the day-type ramp varies by endpoint) is added inside _tercile_bars_panel.
         _tercile_bars_panel(ax, col, label, sections, order)
-
-    def legend(fig):
-        fig.legend(handles=handles, loc="lower center", ncol=5, fontsize=LEGEND_FS,
-                   bbox_to_anchor=(0.5, 0.0))
 
     return render_4x2_grid(panel, fig_stem=fname_stem,
                            subtitle=f"day types by within-user TDD rank tercile{ref}; "
                                     f"whiskers = 95% CI, same-user-set gated",
-                           figsize=(13, 16), bottom=0.05, decorate=legend)
+                           figsize=(13, 16))
 
 
 def run(

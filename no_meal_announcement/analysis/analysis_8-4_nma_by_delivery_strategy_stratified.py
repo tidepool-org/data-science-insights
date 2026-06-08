@@ -43,7 +43,7 @@ alternative axes (tercile, CE=0-reference, within-user) on the headline CE=0/BE<
 
 Reuses utils/strata (the hoisted §8.3 rank machinery), utils/statistics
 (lmm_day_strategy_interaction, lmm_arm_contrast, paired_within_user) and utils/plotting
-(DAY_TYPE_COLORS + STRATEGY_ALPHA). Mirrors §8.1–§8.3 per-cohort run()/main() + output-clearing.
+(day_type_colors band ramp + STRATEGY_ALPHA). Mirrors §8.1–§8.3 per-cohort run()/main() + output-clearing.
 
 Outputs (analysis/outputs/analysis_8_4/<cohort>/) — main §8.4:
     table_8_4a_strategy_cross_binary.csv     per (day type / strategy) × endpoint × stratum: across-user
@@ -92,7 +92,6 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.lines import Line2D  # noqa: E402
 
 try:
     _ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -127,13 +126,15 @@ from utils.strata import (  # noqa: E402
     table_8_3a_per_user_by_stratum,
 )
 from utils.plotting import (  # noqa: E402
-    DAY_TYPE_COLORS,
+    DAY_TYPE_ORDER,
     GRIDS,
     LEGEND_FS,
     STRATEGY_ALPHA,
     SUPTITLE_FS,
     TIDEPOOL,
     TITLE_FS,
+    day_type_colors,
+    day_type_legend,
     endpoint_color,
     overlay_hist_panel,
     render_4x2_grid,
@@ -367,61 +368,55 @@ def table_carb_entry_by_strategy(per_frac, per_rate, df_g, nma_stats):
 # Figures
 # ---------------------------------------------------------------------------------------------------
 
-def _strategy_trend_panel(ax, endpoint, label, cells, order):
+def _strategy_trend_panel(ax, endpoint, label, cells, order, arms):
     """One endpoint panel: x = the TDD strata in `order`; one staggered errorbar line per (day type,
-    strategy) cell — colour = day type (DAY_TYPE_COLORS), alpha = strategy (STRATEGY_ALPHA, AB darker
-    / TB lighter). Marker = across-user mean of the per-user cell mean; whisker = ±1.96 SEM (95% CI).
-    Each cell's Low→High markers are joined so the AB-vs-TB gap and how it shifts across strata read
-    directly. No p-values (D13)."""
+    strategy) cell — colour = day type (this endpoint's band ramp via day_type_colors: 3 nested CE=0
+    arms dark→light, CE>0 grey, HMA bronze), alpha = strategy (STRATEGY_ALPHA, AB darker / TB lighter).
+    Marker = across-user mean of the per-user cell mean; whisker = ±1.96 SEM (95% CI). Each cell's
+    Low→High markers are joined so the AB-vs-TB gap and how it shifts across strata read directly. Hue
+    varies by endpoint, so the arm legend is per-panel (day_type_legend). No p-values (D13)."""
     x = np.arange(len(order))
+    arm_cols = day_type_colors(endpoint)
     combos = list(cells.keys())            # (arm_label, s_name)
     offs = np.linspace(-0.28, 0.28, len(combos))
     for (arm_label, s_name), off in zip(combos, offs):
         mu, lo, hi = _tercile_trend_stats(cells[(arm_label, s_name)], endpoint, order)
         ax.errorbar(x + off, mu, yerr=np.vstack([mu - lo, hi - mu]), fmt="-o", ms=5, lw=1.6,
-                    color=DAY_TYPE_COLORS[arm_label], alpha=STRATEGY_ALPHA[s_name],
-                    ecolor=DAY_TYPE_COLORS[arm_label], elinewidth=2.0, capsize=3, zorder=3)
+                    color=arm_cols[arm_label], alpha=STRATEGY_ALPHA[s_name],
+                    ecolor=arm_cols[arm_label], elinewidth=2.0, capsize=3, zorder=3)
     ax.set_xticks(x)
     ax.set_xticklabels(order)
     ax.set_xlabel("within-user TDD stratum")
     ax.set_title(label, color=endpoint_color(endpoint), fontsize=TITLE_FS)
     ax.margins(x=0.16)
+    day_type_legend(ax, endpoint, arms, fontsize=LEGEND_FS)
 
 
 def figure_8_4a_strategy_bars(pdf, arms, *, reference="overall", split="binary",
                               fname_stem="figure_8_4a", ref_note="overall TDD-rank ref"):
     """THE §8.4 summary figure family (single 4×2 grid → all 8 endpoints): AB vs TB across within-user
     TDD strata, one staggered 95% CI bar per (day type, strategy) cell, same-user-set gated. Colour =
-    day type (DAY_TYPE_COLORS), alpha = strategy (AB darker / TB lighter). Parametrized by `arms`
-    (MAIN_ARMS for the headline; APPENDIX_ARMS for the all-5 breakout), `reference` (overall|ce0) and
-    `split` (binary|tercile) so the main figure and the Appendix §12.4 companions come from one
-    builder. Returns {filename: figure}."""
+    day type (this endpoint's band ramp via day_type_colors: 3 nested CE=0 arms dark→light, CE>0 grey,
+    HMA bronze), alpha = strategy (AB darker / TB lighter). Parametrized by `arms` (MAIN_ARMS for the
+    headline; APPENDIX_ARMS for the all-5 breakout), `reference` (overall|ce0) and `split`
+    (binary|tercile) so the main figure and the Appendix §12.4 companions come from one builder. The
+    arm hue varies by endpoint, so the arm legend is per-panel (day_type_legend), not figure-level.
+    Returns {filename: figure}."""
     order = _order(split)
     cells = {}
-    n_by_cell = {}
     for arm_flag, arm_label in arms:
         gated = _arm_strategy_frame(pdf, arm_flag, reference=reference, split=split)
         for s_name, s_short in STRATEGIES:
-            sub = gated[gated[STRATEGY_COL] == s_name]
-            cells[(arm_label, s_name)] = sub
-            n_by_cell[(arm_label, s_short)] = int(sub["_userId"].nunique())
-    handles = [Line2D([0], [0], marker="o", color=DAY_TYPE_COLORS[arm_label],
-                      alpha=STRATEGY_ALPHA[s_name], lw=2, ms=7,
-                      label=f"{arm_label} · {s_short} (n={n_by_cell[(arm_label, s_short)]})")
-               for arm_flag, arm_label in arms for s_name, s_short in STRATEGIES]
+            cells[(arm_label, s_name)] = gated[gated[STRATEGY_COL] == s_name]
+    arm_labels = [a for a in DAY_TYPE_ORDER if any(a == al for _, al in arms)]
     ref = f" ({ref_note})" if ref_note else ""
 
     def panel(ax, col, label):
-        _strategy_trend_panel(ax, col, label, cells, order)
-
-    def legend(fig):
-        fig.legend(handles=handles, loc="lower center", ncol=min(len(handles), 5), fontsize=LEGEND_FS,
-                   bbox_to_anchor=(0.5, 0.0))
+        _strategy_trend_panel(ax, col, label, cells, order, arm_labels)
 
     return render_4x2_grid(panel, fig_stem=fname_stem,
                            subtitle=f"AB vs TB across within-user TDD strata{ref}; "
-                                    f"whiskers = 95% CI, same-user-set gated",
-                           figsize=(13, 16), bottom=0.06, decorate=legend)
+                                    f"whiskers = 95% CI, same-user-set gated")
 
 
 def figure_8_4b_carb(per_frac, per_rate):

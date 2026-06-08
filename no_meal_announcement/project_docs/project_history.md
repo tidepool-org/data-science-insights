@@ -296,6 +296,15 @@ Built the two test layers the suite was missing — *does the inference return n
 - **Honest limitations stated (not hidden).** (1) The Phase-1 traceability fixture catches future *drift*, not a current *spec-vs-reality* bug — expected == snapshot at freeze; the raw→derived hand-audit (the D7 class) is Phase 2, in-env. (2) The committed fixture's `_userId` hashes are reversible against a known-id dictionary while `USERID_SALT` is a repo constant (D16 open item) → internal-regression only until the salt moves to a secret scope. (3) NC-1 and NC-3 induce nearly the same null on the per-user-mean estimator; both are kept because they guard different pipeline-handling paths (label routing vs outcome routing) and divergence between them would itself flag a bug.
 - **Suite green.** Local `run_all_tests` layer 1: **128 passed** (the 6 new + the prior suite), new dirs collected, integration runners SKIP off-Spark. Gating verified: NC + traceability SKIP (not fail) when the snapshot or the fixture is absent.
 
+## 2026-06-08 — Day-type figure colour aligned to the glycemic-range bands (D13 update)
+
+Per MJC: recolour every day-type figure so the arm colour is **derived from each endpoint's glycemic-range band** (like fig 8.3f's violins) instead of the fixed Tidepool blue/green ramp. See decisions.md **D13 update (2026-06-08)**.
+
+- **Shared helper (`utils/plotting.py`).** Removed the fixed `DAY_TYPE_COLORS` dict; added `day_type_colors(endpoint)` — the 3 nested CE=0 arms as a dark→light lightness ramp of that endpoint's band colour (`band_ramp3`), CE>0 grey, CE>=3/BE>=3 bronze; non-range metrics (mean/CV/hypo) fall back to a Tidepool-brand ramp via `endpoint_color`. Added `DAY_TYPE_ORDER` and a per-panel `day_type_legend(ax, endpoint, arms)` (bar/line/scatter figures need a per-panel legend now that the hue varies by endpoint).
+- **Migrated all four analysis modules** (one agent each, in parallel): §8.1 (8.1b/12.1b violins), §8.2 (8.2a violins; 8.2c interaction lines + per-panel legend; the module-level `DISPLAY_CELLS`/`DISPLAY_CELLS_5WAY` lists dropped their precomputed colour — resolved per panel), §8.3 (8.3a 5-way violins; 8.3e TIR scatter; 8.3g tercile bars + per-panel legend), §8.4 (8.4a strategy bars + §12.4 variants + per-panel legend; AB/TB still alpha-cued via `STRATEGY_ALPHA`). `_violin_panel` (the binary-8.3a / 8.3f / 12.3g template) was already band-coloured via `endpoint_color` and left untouched — the rest of the document now matches it. Regenerated all figures for adult/pediatric/all and spot-checked the rendered PNGs (8.1b/8.2c/8.3a/8.3g/8.4a/8.3f).
+- **Side effect:** the bar/line per-panel legends (8.3g, 8.4a) show arm labels only — the **per-arm n-counts the old figure-level legend carried are dropped** (n lives in the corresponding tables 8.3d / 8.4a-b). Flag for the report editor when re-embedding.
+- **Report action:** re-embed the regenerated figures in RPT-1008 (same filenames; this is a colour-only change).
+
 ## Pending / To do (deferred — not yet done)
 
 - **FDA-pipeline `_userId` pseudonymization** — the FDA exports still write raw `_userId`; apply the D16 treatment there too.

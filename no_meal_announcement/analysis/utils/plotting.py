@@ -82,23 +82,52 @@ def endpoint_color(endpoint):
     return ENDPOINT_COLORS.get(endpoint, TIDEPOOL)
 
 
-# Fixed per-day-type palette — supersedes D13's per-endpoint arm colouring for the day-type figures
-# so the day types read identically across the document: the 3 nested NMA/CE=0 classifications on a
-# Tidepool-brand BLUE ramp (strictest BE=0 darkest → headline BE≤1 the brand blue → broadest BE≤∞
-# lightest), CE>0 grey, CE>=3/BE>=3 (HMA) bronze. (Was a green ramp; the green read as a TIR/in-range
-# cue the day-type figures don't need — per MJC 2026-06-07.) Shared by §8.1 (8.1b/12.1b violins), §8.2
-# (8.2a violins, 8.2c lines), §8.3 (8.3a/8.3e/8.3g, 12.3a/c/i) and §8.4 (strategy bars). Keys = the
-# data_loader arm labels (COMPARATOR_LABEL / HIGH_MA_LABEL / the CLASSIFICATIONS labels).
-DAY_TYPE_COLORS = {
-    "CE=0/BE=0": "#1f3a93",       # dark Tidepool blue (strictest CE=0)
-    "CE=0/BE<=1": TIDEPOOL,       # Tidepool brand blue (the headline arm)
-    "CE=0/BE<=inf": "#aab8ff",    # light Tidepool blue (broadest CE=0)
-    "CE>0": GRAY,                 # CE>0 comparator
-    "CE>=3/BE>=3": HIGH_MA_COLOR, # CE>=3/BE>=3 high meal-announcement (bronze)
-}
+# Per-day-type colour is DERIVED FROM EACH ENDPOINT'S GLYCEMIC-RANGE BAND (like fig 8.3f's violins),
+# not a fixed Tidepool palette: in every per-endpoint panel the 3 nested NMA/CE=0 classifications take
+# a dark→light LIGHTNESS RAMP of that endpoint's band colour (strictest BE=0 darkest → headline BE≤1
+# the base band colour → broadest BE≤∞ lightest), CE>0 grey, CE>=3/BE>=3 (HMA) bronze. So the colour
+# reinforces which glycemic metric a panel shows and matches the range-coloured bars / Δ-histograms /
+# panel titles (supersedes the fixed blue ramp / the D13 note — per MJC 2026-06-08). The 3 non-range
+# metrics (mean glucose / CV / hypo) fall back to a Tidepool-brand ramp via endpoint_color. Because
+# the hue now varies by endpoint, bar/line/scatter figures that identified the arm with one figure
+# legend carry a PER-PANEL legend (day_type_legend). Shared by §8.1 (8.1b/12.1b), §8.2 (8.2a/8.2c),
+# §8.3 (8.3a/8.3e/8.3g, 12.3a/c/i) and §8.4 (strategy bars). Labels = the data_loader arm labels.
+DAY_TYPE_ORDER = ["CE=0/BE=0", "CE=0/BE<=1", "CE=0/BE<=inf", "CE>0", "CE>=3/BE>=3"]
 
-# Delivery-strategy fill alpha for the §8.4 strategy figures: colour stays the day type's
-# DAY_TYPE_COLORS, alpha cues the strategy — autobolus_on darker, temp_basal_only lighter (TB-first
+
+def _mix(c1, c2, t):
+    """Blend c1 toward c2 by fraction t (0→c1, 1→c2) in RGB."""
+    a, b = mpl.colors.to_rgb(c1), mpl.colors.to_rgb(c2)
+    return tuple(a[i] * (1 - t) + b[i] * t for i in range(3))
+
+
+def band_ramp3(base, *, dark=0.42, light=0.55):
+    """(dark, base, light): a 3-step lightness ramp around `base` (toward black / toward white) — the
+    DAY_TYPE ramp in any hue, used for the 3 nested CE=0 arms in a band-coloured panel."""
+    return (mpl.colors.to_hex(_mix(base, "#000000", dark)), base,
+            mpl.colors.to_hex(_mix(base, "#ffffff", light)))
+
+
+def day_type_colors(endpoint):
+    """Per-endpoint day-type palette: the 3 nested CE=0 arms as a dark→light ramp of `endpoint`'s
+    glycemic-range band colour, CE>0 grey, CE>=3/BE>=3 bronze. Generalises fig 8.3f's _violin_panel
+    (its one CE=0 arm = the band colour) to the 3 nested arms. Keys = DAY_TYPE_ORDER."""
+    d, m, l = band_ramp3(endpoint_color(endpoint))
+    return {"CE=0/BE=0": d, "CE=0/BE<=1": m, "CE=0/BE<=inf": l,
+            "CE>0": GRAY, "CE>=3/BE>=3": HIGH_MA_COLOR}
+
+
+def day_type_legend(ax, endpoint, arms, *, loc="best", fontsize=LEGEND_FS, ncol=1, title=None):
+    """Per-panel arm legend whose swatches use `endpoint`'s band ramp, so they match the panel
+    (the hue varies by endpoint, so a single figure-level legend can no longer encode the arm).
+    `arms` = the arm labels present, in DAY_TYPE_ORDER."""
+    from matplotlib.lines import Line2D
+    cols = day_type_colors(endpoint)
+    handles = [Line2D([0], [0], color=cols[a], lw=2.5, marker="o", ms=6, label=a) for a in arms]
+    ax.legend(handles=handles, loc=loc, fontsize=fontsize, ncol=ncol, framealpha=0.85, title=title)
+
+# Delivery-strategy fill alpha for the §8.4 strategy figures: colour stays the day type's band
+# colour (day_type_colors), alpha cues the strategy — autobolus_on darker, temp_basal_only lighter (TB-first
 # display via data_loader.STRATEGIES). Keyed by the delivery_strategy column value. Matches §8.2's
 # local encoding so AB/TB read identically across the document. (§8.2 keeps its own local copy.)
 STRATEGY_ALPHA = {"autobolus_on": 0.78, "temp_basal_only": 0.40}
