@@ -1,7 +1,11 @@
-# Negative controls + traceability panel — to build
+# Negative controls + traceability panel
 
-**Status:** specified, **not yet implemented** (2026-06-08). Forward-looking; tracked in
-[todo.md](todo.md) → Tests.
+**Status:** **Phase 1 implemented (2026-06-08)** — the snapshot-driven parts (NC-1..4 + the
+traceability selection tool + a frozen de-identified drift-guard fixture + regen assertion) are
+built, green, and wired into `run_all_tests` layer 1. **Phase 2** (the in-env raw pulls: NC-5,
+the raw→derived hand-audit incl. TR-9, and moving `USERID_SALT` to a secret scope) is deferred —
+see [todo.md](todo.md) → Tests and `testing/traceability/README.md`. Code:
+`testing/negative_controls/`, `testing/traceability/`.
 
 **Why.** The existing suite is strong but covers two of the failure modes:
 *code-vs-spec* (the `testing/integration/` synthetic design-recovery runners +

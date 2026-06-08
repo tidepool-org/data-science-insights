@@ -115,6 +115,8 @@ no_meal_announcement/
     ├── analysis/                             — non-Spark unit tests: test_statistics (LMM + degenerate guard), test_data_loader, test_strata
     ├── data_staging/                         — Spark tests (Databricks): age, classification, analysis_ready, bolus_counts, bolus_classification, tdd
     ├── cross_checks/                         — independent recompute of each PRIMARY §8.x table cell vs the snapshot (test_crosscheck_8_{1,2,3,4}.py; one test per table)
+    ├── negative_controls/                    — NULL-on-real-data checks (snapshot-gated, no-Spark): NC-1 arm-perm / NC-2 A-vs-A / NC-3 outcome-perm / NC-4 unpaired-leakage; REUSES Method A/B; negative_controls.py main(B) → de-identified memo, test_negative_controls.py reruns reduced-B (Phase 1; NC-5 is in-env Phase 2)
+    ├── traceability/                         — frozen de-identified panel (TR-1..11) + regen drift guard: select_panel_candidates.py (+ add_day_index/derived_fields), build_panel_fixture.py → committed panel_fixture.csv, test_traceability_panel.py; README.md (de-id basis + D16 salt caveat). Raw→derived hand-audit is in-env Phase 2
     └── run_all_tests.py                      — two-layer runner (non-Spark pytest locally; + Spark tests + integration runners on Databricks), concise PASS/FAIL/SKIP output
 ```
 

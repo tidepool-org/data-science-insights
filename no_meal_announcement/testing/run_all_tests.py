@@ -56,6 +56,8 @@ def _run_pytest(testing_dir, include_spark):
         os.path.join(testing_dir, "analysis"),
         os.path.join(testing_dir, "integration", "test_build_synthetic_nma_bddp.py"),
         os.path.join(testing_dir, "cross_checks"),
+        os.path.join(testing_dir, "negative_controls"),   # snapshot-gated: null recovered on real data
+        os.path.join(testing_dir, "traceability"),         # snapshot-gated: frozen panel drift guard
     ]
     if include_spark:
         targets.append(os.path.join(testing_dir, "data_staging"))
