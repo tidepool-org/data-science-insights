@@ -75,6 +75,9 @@ DEMOGRAPHICS = {
     "nma_user_ce_pos_only":        {"dob": date(1988, 1, 1)},   # 36 — comparator-restriction probe
     "nma_user_known_hma":          {"dob": date(1985, 1, 1)},   # 39 — HMA (CE>=3/BE>=3) arm
     "nma_user_known_hma_2":        {"dob": date(1985, 1, 1)},   # 39 — HMA pair (2nd user → LMM converges)
+    "nma_user_known_low_high_tdd_2":     {"dob": date(1985, 1, 1)},   # 39 — §8.3 TDD pair (lmm_tdd_stratum converges)
+    "nma_user_known_strategy_stratum":   {"dob": date(1985, 1, 1)},   # 39 — §8.4 strategy × TDD-stratum cell
+    "nma_user_known_strategy_stratum_2": {"dob": date(1985, 1, 1)},   # 39 — §8.4 pair (interaction LMM converges)
 }
 
 # Per-archetype window length (days from START_DAY). Drives build_loop_recommendations
@@ -94,6 +97,9 @@ ARCHETYPE_DAYS = {
     "nma_user_ce_pos_only":        14,
     "nma_user_known_hma":          30,
     "nma_user_known_hma_2":        30,
+    "nma_user_known_low_high_tdd_2":     30,
+    "nma_user_known_strategy_stratum":   32,
+    "nma_user_known_strategy_stratum_2": 32,
 }
 
 # Per-user sex for the analysis-ready LEFT JOIN to user_gender (§8.1 Sample
@@ -113,6 +119,9 @@ USER_GENDER = {
     "nma_user_ce_pos_only":        "M",
     "nma_user_known_hma":          "M",
     "nma_user_known_hma_2":        "F",
+    "nma_user_known_low_high_tdd_2":     "M",
+    "nma_user_known_strategy_stratum":   "F",
+    "nma_user_known_strategy_stratum_2": "M",
 }
 
 
@@ -373,6 +382,41 @@ def _archetype_known_hma(uid="nma_user_known_hma"):
     return rows
 
 
+def _archetype_known_strategy_stratum(uid="nma_user_known_strategy_stratum"):
+    """6.13 — 32 days for §8.4's `tdd_stratum × delivery_strategy` interaction LMM. One day type
+    (CE=0/BE<=1: AB days are BE=0, TB days carry one manual non-meal bolus → BE=1), four 8-day cells
+    crossing {Low,High} within-user TDD × {AB,TB} strategy. TDD is basal-dominated so a cell's stratum
+    is set by its basal rate (Low ≈13 U/day @0.5 U/hr, High ≈39 U/day @1.6 U/hr) regardless of
+    strategy, and the overall-reference rank therefore splits the 32 days cleanly 16 Low / 16 High.
+    Interaction baked ≈0 (AB−TB ≈ +8 TIR in BOTH strata): Low-AB 78 / Low-TB 70 / High-AB 66 /
+    High-TB 58.
+
+    Registered as a PAIR (`nma_user_known_strategy_stratum` + `_2`, identical design) so every
+    (stratum × strategy) cell has >=2 distinct users and §8.4's interaction LMM CONVERGES. The
+    composite same-user-set gate keeps this user in the CE=0/BE<=1 day type (present in all 4 cells)
+    and correctly drops it from CE=0/BE=0 (no TB days there). 32 days ≥ MIN_REF_DAYS so it clears the
+    §7.5 TDD-reference gate."""
+    cells = [
+        # (strategy, TIR%, basal U/hr) — Low basal 0.5 (~12U/day), High basal 1.6 (~38U/day).
+        ("ab", 78.0, 0.5),
+        ("tb", 70.0, 0.5),
+        ("ab", 66.0, 1.6),
+        ("tb", 58.0, 1.6),
+    ]
+    rows = []
+    d = 0
+    for strategy, tir, rate in cells:
+        for _ in range(8):
+            day = START_DAY + timedelta(days=d); d += 1
+            rows.extend(make_cbg_rows_at_target_tir(uid, day, tir_pct=tir))
+            if strategy == "ab":   # BE=0, automatic_bolus_count=5 → autobolus_on
+                rows.extend(make_bolus_events(uid, day, n_meal=0, n_non_meal=0, n_autobolus=5))
+            else:                  # BE=1 (one manual non-meal), 0 autoboluses → temp_basal_only
+                rows.extend(make_bolus_events(uid, day, n_meal=0, n_non_meal=1, n_autobolus=0))
+            rows.append(make_basal_row(uid, day, rate_u_per_hr=rate))
+    return rows
+
+
 ARCHETYPES = {
     "nma_user_pure_be0":           _archetype_pure_be0,
     "nma_user_mixed":              _archetype_mixed,
@@ -388,6 +432,12 @@ ARCHETYPES = {
     # HMA pair (identical design) — gives the CE>=3/BE>=3 LMMs >=2 users/cell so they converge.
     "nma_user_known_hma":          _archetype_known_hma,
     "nma_user_known_hma_2":        lambda: _archetype_known_hma("nma_user_known_hma_2"),
+    # §8.3 TDD pair — 2nd user with the same Low/High design so lmm_tdd_stratum (Table 8.3c) converges.
+    "nma_user_known_low_high_tdd_2": lambda: _archetype_known_low_high_tdd("nma_user_known_low_high_tdd_2"),
+    # §8.4 strategy × TDD-stratum pair — fills the 4 (stratum × strategy) cells so the §8.4
+    # interaction LMM converges (no single archetype had both strategies × both strata in a day type).
+    "nma_user_known_strategy_stratum":   _archetype_known_strategy_stratum,
+    "nma_user_known_strategy_stratum_2": lambda: _archetype_known_strategy_stratum("nma_user_known_strategy_stratum_2"),
 }
 
 

@@ -118,6 +118,19 @@ def _assert_strategy_outputs(spark, tables, raw_pdf, tmp_dir):
     assert not_conv["interaction_coef"].isna().all(), "non-converged rows must have NaN interaction_coef (guard)"
     assert (b["n_users"] >= 0).all() and (b["n_days"] >= 0).all(), "n_users/n_days surfaced for every row"
 
+    # ── C2. the CE=0/BE≤1 interaction CONVERGES (strategy × TDD-stratum pair) ──
+    # nma_user_known_strategy_stratum + _2 fill all 4 (stratum × strategy) cells of CE=0/BE≤1 with
+    # ≥2 users each (composite gate retains both), so the interaction LMM converges (baked ≈0 — AB−TB
+    # designed equal across strata). This is the §8.4 main-arm convergence the fixture previously lacked.
+    headline = b[(b["arm"] == "CE=0/BE<=1") & (b["endpoint"] == "tir")]
+    assert len(headline) == 1, "missing 8.4b CE=0/BE<=1 TIR row"
+    headline = headline.iloc[0]
+    assert bool(headline["converged"]), (
+        "§8.4 CE=0/BE<=1 interaction (Table 8.4b TIR) should converge with the "
+        "nma_user_known_strategy_stratum pair (≥2 users per stratum × strategy cell)")
+    assert pd.notna(headline["interaction_coef"]), "converged 8.4b row must carry a finite interaction_coef"
+    assert int(headline["n_users"]) >= 2, f"expected ≥2 gated users, got {headline['n_users']}"
+
     # ── D. carb-entry-rate (8.4c): both metrics present, ≥1 within-user TB/AB pair ─
     c = pd.read_csv(os.path.join(out_all, "table_8_4c_carb_entry_by_strategy.csv"))
     assert set(c["metric"]) == CARB_METRICS, f"8.4c metrics {set(c['metric'])} != {CARB_METRICS}"

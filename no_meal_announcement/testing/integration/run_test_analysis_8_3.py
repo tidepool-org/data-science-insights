@@ -111,6 +111,21 @@ def _assert_recovers_low_high_design(spark, tables, raw_pdf, tmp_dir):
         assert means["Low"] > means["High"], (
             f"rank-tercile CE=0/BE=0 TIR should fall Low→High, got Low={means['Low']:.1f} High={means['High']:.1f}")
 
+    # ── C2. day-level LMM (Table 8.3c) CONVERGES with the low_high_tdd PAIR ────
+    # nma_user_known_low_high_tdd + _2 give lmm_tdd_stratum ≥2 distinct users in each stratum, so the
+    # CE=0/BE=0 TIR fit converges and recovers the baked-in Low−High ≈ +15 (was degenerate with 1 user).
+    t3c = pd.read_csv(os.path.join(out_all, "table_8_3c_lmm_sensitivity.csv"))
+    rc = t3c[(t3c["classification"] == "CE=0/BE=0") & (t3c["endpoint"] == "tir")]
+    assert len(rc) == 1, "missing 8.3c CE=0/BE=0 TIR row"
+    rc = rc.iloc[0]
+    assert bool(rc["converged"]), (
+        "§8.3 lmm_tdd_stratum (Table 8.3c CE=0/BE=0 TIR) should converge with the "
+        "nma_user_known_low_high_tdd pair (≥2 users/stratum)")
+    # The aggregate LMM blends every CE=0/BE=0 user (the per-user +15 design is proven in check A), so
+    # require only the correct DIRECTION (Low > High), not the single archetype's magnitude.
+    assert rc["coef_low_minus_high"] > 0, (
+        f"§8.3 Low−High TIR coef should be positive (Low > High), got {rc['coef_low_minus_high']:.2f}")
+
     # ── D. all §8.3 artifacts written (cohort='all') ──────────────────────────
     for csv in ("table_8_3a_per_user_by_stratum.csv", "table_8_3b_within_user_contrast.csv",
                 "table_8_3c_lmm_sensitivity.csv", "table_8_3d_rank_tercile_strata.csv"):

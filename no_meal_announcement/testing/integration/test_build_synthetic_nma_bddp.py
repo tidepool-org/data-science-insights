@@ -265,12 +265,45 @@ def test_known_hma_is_registered_as_a_pair():
 
 
 # ---------------------------------------------------------------------------
+# 6.13 nma_user_known_strategy_stratum (§8.4 strategy × TDD-stratum) + convergence pairs
+# ---------------------------------------------------------------------------
+
+def test_known_strategy_stratum_shape():
+    """32 days, one day type (CE=0/BE<=1), four 8-day cells: {Low,High} TDD × {AB,TB}.
+    AB days carry 5 autoboluses (BE=0); TB days carry 1 manual non-meal bolus (BE=1); no carbs."""
+    rows = nb._archetype_known_strategy_stratum()
+    assert len(_days_with_cbg(rows)) == 32
+    assert len(_by_type(rows, "food")) == 0           # CE=0 throughout
+    assert len(_autoboluses(rows)) == 16 * 5          # 16 AB days × 5 autoboluses
+    assert len(_manual_boluses(rows)) == 16 * 1       # 16 TB days × 1 manual non-meal bolus
+    assert len(_by_type(rows, "basal")) == 32
+
+
+def test_known_strategy_stratum_low_cells_have_lower_basal():
+    """Low cells (first 16 days) ride a 0.5 U/hr basal; High cells (last 16) ride 1.6 U/hr — so the
+    overall-reference TDD rank splits the 32 days cleanly 16 Low / 16 High."""
+    rows = nb._archetype_known_strategy_stratum()
+    basals = sorted(_by_type(rows, "basal"), key=lambda r: r["time_string"])
+    assert all(b["rate"] == 0.5 for b in basals[:16])
+    assert all(b["rate"] == 1.6 for b in basals[16:])
+
+
+def test_convergence_pairs_registered():
+    """The §8.3 (lmm_tdd_stratum) and §8.4 (interaction) main-arm LMMs each need a 2nd distinct user
+    per designed cell to converge — added as identical-design pairs."""
+    for raw in ("nma_user_known_low_high_tdd_2",
+                "nma_user_known_strategy_stratum", "nma_user_known_strategy_stratum_2"):
+        assert raw in nb.ARCHETYPES
+        assert {r["_userId"] for r in nb.ARCHETYPES[raw]()} == {raw}
+
+
+# ---------------------------------------------------------------------------
 # 6.11 build_synthetic_nma_bddp aggregate (no Spark — exercise _build_rows
 # and _to_bddp_row)
 # ---------------------------------------------------------------------------
 
 def test_archetypes_dict_user_count():
-    assert len(nb.ARCHETYPES) == 13
+    assert len(nb.ARCHETYPES) == 16
     assert set(nb.ARCHETYPES) == set(nb.DEMOGRAPHICS) == set(nb.ARCHETYPE_DAYS) == set(nb.USER_GENDER)
 
 

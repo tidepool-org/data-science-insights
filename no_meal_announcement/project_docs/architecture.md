@@ -36,7 +36,9 @@ Data-staging pipeline and **§8.1 complete**: Method A (per-user paired) + Metho
 
 **§8.3 single-CE=0-arm sweep + palette (2026-06-07).** Two more figure-layout passes this session. (a) **§8.1 violins merged to 4×2:** the 5-arm §8.1 per-user violins **8.1b/12.1b** now ride the `render_4x2_grid` path too (folded into the merged `figure_<id>_4x2.png` set above). (b) **§8.3 single-CE=0-arm sweep:** every §8.3 figure that featured *one* CE=0 arm previously used the broadest BE≤∞; now binary violin grids show **all 5 day types** while tercile grids / histograms / the R-distribution use the **explicit CE=0/BE≤1** arm — **8.3a → all 5 day types as two 4×1 grids** (new `figure_8_3a_5way_violin`), **12.3a (median-ref) + 12.3c (rolling-ref)** reuse that all-5 grid, and **8.3b** (Low−High Δ-hist), **8.3d** (within-user R-distribution), **8.3f** (rank-tercile violins), **12.3g** (CE=0-ref tercile violins) switch to the explicit BE≤1 arm (labelled "CE=0/BE<=1"). All §8.3 **tables** already break out all 3 nested arms — unchanged; §8-supp still uses the broadest arm (out of report — flagged, not changed). Housekeeping: dead `strata_inf` removed, the builder's `strata_inf` param renamed `ce0_strata`, and `ce0_label`/`ce0_flag` params added so only 8.3f/12.3g feature BE≤1. (c) **`DAY_TYPE_COLORS` palette (a D13 update, per MJC):** the 3 nested CE=0 arms switched from the old green ramp to a **Tidepool-blue ramp** (dark `#1f3a93` BE=0 → brand `#607cff` BE≤1 → light `#aab8ff` BE≤∞) — the old mid step was the TIR/70-180 green, an unneeded in-range cue on day-type figures; CE>0 grey + HMA bronze unchanged. Applies to every day-type figure (8.1b/12.1b, 8.2a/8.2c, 8.3a/8.3e/8.3g + 12.3a/12.3c/12.3i, §8.4 strategy bars); the range-coloured figures (stacked bars, Δ-histograms, the 3-arm strata violins, 8.3d) keep their endpoint/range colours. Figures regenerated for all three cohorts (adult/pediatric/all).
 
-**Next:** the analyses (§8.1–§8.4) are complete; the §8.2/§8.3/§8.4 integration runners are **implemented + passing on Databricks (2026-06-07)** and `run_all_tests.py` is wired. Remaining test work (see todo.md Tests): (1) main-arm LMM convergence for §8.3/§8.4 (add `*_interaction_2` / `*_low_high_tdd_2` 2nd-user pairs; §8.2 already converges); (2) direct LMM-helper unit tests in `test_statistics.py`; (3) TDD HealthKit-vs-Loop-direct + dedup coverage (the fixture only exercises the HealthKit stream); (4) the `testing/data_staging/` Spark stubs (rewire vs delete). Non-test remaining (Pipeline/structure): FDA-pipeline `_userId` pseudonymization (D16), reconcile `nma_pipeline.yml`, move NMA-day-frequency out of §8.1, relocate the supplement outputs. See the latest `project_history.md` entries.
+**Test suite finished (2026-06-07).** Every todo **Tests** item is closed: the four integration runners now hard-assert main-arm LMM convergence (§8.3/§8.4 got 2nd-user fixture pairs — `nma_user_known_low_high_tdd_2` + a purpose-built `nma_user_known_strategy_stratum` pair, 32 days × 4 stratum×strategy cells on CE=0/BE≤1; §8.2 already converged); the non-Spark unit layer is broadened (`test_statistics` degenerate-input + new `test_data_loader` + `test_strata`); the `testing/data_staging/` stubs are rewired (age / classification / focused analysis_ready) with a new **bolus-classifier** test (4 dead stubs deleted); TDD HealthKit-vs-Loop-direct + dedup is covered (`make_loop_direct_basal_row` + `test_export_user_day_tdd`); and a new **`testing/cross_checks/`** layer independently recomputes each PRIMARY §8.x table cell straight from the snapshot and cross-checks the pipeline output (one file per analysis, one test per table). `run_all_tests.py` output is concise (PASS/FAIL/SKIP per component); the local non-Spark suite is green and the Spark layer is verified on Databricks via `run_all_tests.main(spark)`.
+
+**Next** (non-test, Pipeline/structure): FDA-pipeline `_userId` pseudonymization (D16), reconcile `nma_pipeline.yml`, move NMA-day-frequency out of §8.1, relocate the supplement outputs. See the latest `project_history.md` entries.
 
 Plan doc: [PLN-1008 Data Analysis Plan_ No Meal Announcement with Tidepool Loop.txt](../PLN-1008%20Data%20Analysis%20Plan_%20No%20Meal%20Announcement%20with%20Tidepool%20Loop.txt) (Rev 01, effective 2026-05-20).
 
@@ -105,30 +107,28 @@ no_meal_announcement/
 │   └── weighting_sensitivity.md                        — §8.1 LMM vs Method A (pre-D7; superseded by D5 update 2026-06-07 — signs concur on all arms, divergence is below-range-only)
 └── testing/                                 — test suite
     ├── integration/                          — WORKING end-to-end harness (Databricks):
-    │   ├── run_pipeline.py                              — orchestrator: build synthetic fixture + seed FDA upstream tables + run the 9 staging modules → test_nma_* analysis-ready (+ CSV fixture); + load_analysis_module (strips notebook preamble)
-    │   ├── build_synthetic_nma_bddp.py                  — synthetic BDDP archetypes + build_loop_recommendations/_loop_cbg/_user_gender
-    │   ├── run_test_analysis_8_1.py                     — runnable §8.1 check (build pipeline → assert design recovery); 8_2/8_3 are stubs
+    │   ├── run_pipeline.py                              — orchestrator: build synthetic fixture + seed FDA upstream tables + run the 9 staging modules → test_nma_* analysis-ready (+ CSV fixture); + load_analysis_module (strips notebook preamble); pseudonymize_uid
+    │   ├── build_synthetic_nma_bddp.py                  — 16 synthetic BDDP archetypes (incl. the HMA, low_high_tdd, and strategy_stratum convergence pairs) + build_loop_recommendations/_loop_cbg/_user_gender
+    │   ├── run_test_analysis_8_{1,2,3,4}.py             — runnable per-analysis checks (build pipeline → assert design recovery + main-arm LMM convergence)
     │   └── inspect_nma.py                               — reusable db-display + plotting spot-check (synthetic OR real analysis-ready)
-    ├── nma_test_helpers.py                   — row builders (CBG/bolus/basal/food, make_loop_recs re-export)
-    └── data_staging/, analysis/             — prior-scaffold unit-test stubs (not updated for current pipeline)
+    ├── nma_test_helpers.py                   — row builders (CBG/bolus/basal/food, make_loop_direct_basal_row, make_loop_recs re-export)
+    ├── analysis/                             — non-Spark unit tests: test_statistics (LMM + degenerate guard), test_data_loader, test_strata
+    ├── data_staging/                         — Spark tests (Databricks): age, classification, analysis_ready, bolus_counts, bolus_classification, tdd
+    ├── cross_checks/                         — independent recompute of each PRIMARY §8.x table cell vs the snapshot (test_crosscheck_8_{1,2,3,4}.py; one test per table)
+    └── run_all_tests.py                      — two-layer runner (non-Spark pytest locally; + Spark tests + integration runners on Databricks), concise PASS/FAIL/SKIP output
 ```
 
-> **Heads up — prior-scaffold material:** several files moved over from the earlier project
-> (`testing/`, `analysis_8-3.py`, `data_overview.py`, the exploratory `.py`
-> files, and the three other `docs/*.md`) predate the current pipeline. They reference script
-> names that no longer exist (`export_nma_cbg.py`, `export_user_day_strategy.py`,
-> `export_user_day_carb_grams.py`, `compute_nma_glycemic_endpoints.py`). The output table
-> naming convention (`nma_*`) now matches between prior scaffold and current pipeline, but the
-> column shapes and the scripts that produce them differ — so the prior tests/stubs still need
-> rewiring to the current `data_staging/` modules before they will run. The data_staging tests and
-> `testing/analysis/test_{tdd,classification}.py` (which import other deleted `analysis/utils`
-> modules) have not been updated. `testing/analysis/test_statistics.py` is green again now that
-> `analysis/utils/statistics.py` has been restored. **Update (2026-06-04):** the
-> `testing/integration/` layer is no longer scaffold — it's an implemented end-to-end harness
-> (see the directory tree + the "Integration-test harness" note above); the per-analysis checks
-> moved there as runnable `run_test_analysis_8_*.py` files and the old `testing/analysis/`
-> per-analysis copies were removed. The `testing/data_staging/` + remaining `testing/analysis/`
-> unit-test stubs are still prior-scaffold and unrewired.
+> **Test suite state (2026-06-07 — prior-scaffold cleanup complete):** the test tree is now fully
+> rewired to the current pipeline. The `testing/integration/` end-to-end harness is implemented and
+> passing on Databricks. The `testing/analysis/` non-Spark layer is `test_statistics` (LMM helpers +
+> degenerate-input guard), `test_data_loader`, and `test_strata` (the obsolete `test_{tdd,classification}.py`
+> were deleted earlier). The `testing/data_staging/` Spark tests cover the live modules (age,
+> classification, analysis_ready, bolus_counts, bolus_classification, tdd); the 4 stubs that imported
+> deleted modules (`export_nma_cbg`, `export_user_day_strategy`, `export_user_day_carb_grams`,
+> `compute_nma_glycemic_endpoints`) were deleted. The new `testing/cross_checks/` layer independently
+> recomputes each PRIMARY §8.x table cell from the snapshot. Spark tests module-level-skip when no
+> SparkSession is present, so the non-Spark suite runs cleanly off a laptop; run on Databricks
+> (`run_all_tests.main(spark)`) for the full suite.
 
 ## Pipeline DAG
 

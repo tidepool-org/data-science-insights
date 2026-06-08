@@ -101,6 +101,30 @@ def test_make_bolus_events_carbs_per_meal_lands_in_nutrition_json():
 
 
 # ---------------------------------------------------------------------------
+# 5.2b make_loop_direct_basal_row (Loop-direct TDD stream)
+# ---------------------------------------------------------------------------
+
+def test_make_loop_direct_basal_row_shape():
+    import json
+
+    r = nma.make_loop_direct_basal_row(UID, DAY, delivered_units=10.0)
+    assert r["type"] == "basal"
+    assert json.loads(r["origin"])["name"] == "com.loopkit.Loop"   # the LOOP_DIRECT_PREDICATE key
+    assert json.loads(r["payload"])["deliveredUnits"] == 10.0      # the actual delivered amount
+    # rate is the COMMANDED temp rate ≈ 1.7× the delivered hourly rate — a decoy the TDD SQL ignores.
+    assert r["rate"] == pytest.approx(1.7 * (10.0 / 24))
+
+
+def test_make_loop_direct_basal_row_explicit_commanded_rate():
+    r = nma.make_loop_direct_basal_row(UID, DAY, delivered_units=8.0, commanded_rate=2.5)
+    assert r["rate"] == 2.5
+
+
+def test_make_loop_direct_basal_row_in_all():
+    assert "make_loop_direct_basal_row" in nma.__all__
+
+
+# ---------------------------------------------------------------------------
 # 5.3 make_user_day_rows
 # ---------------------------------------------------------------------------
 

@@ -227,3 +227,53 @@ def test_lmm_tdd_stratum_reference_is_high():
     df = _make_tdd_dataset(true_low_minus_high=10.0, seed=20260520)
     result = lmm_tdd_stratum(df, outcome="y")
     assert result["coef"] > 0
+
+
+# ---------------------------------------------------------------------------
+# 4.6 degenerate-input contract
+#
+# The helpers do NOT guard internally — they look up `*_terms[0]` for the
+# contrast of interest, so a frame with no contrast (single arm level / single
+# stratum / a collapsed interaction cell) makes that term vanish and the helper
+# raises. The analysis layer relies on exactly this: it pre-checks ≥2 users per
+# cell and wraps the call in try/except to emit a `converged=False` NaN row
+# (see strata.table_8_3c_lmm — unit-tested in test_strata.py — and the §8.2/§8.4
+# fit wrappers, exercised end-to-end by run_test_analysis_8_{2,3,4}). These tests
+# pin that raise-contract so the guard upstream stays justified.
+# ---------------------------------------------------------------------------
+
+def test_lmm_arm_contrast_raises_on_single_arm_level():
+    """A frame with only one arm value has no arm contrast term → raises."""
+    pytest.importorskip("statsmodels")
+    df = pd.DataFrame({
+        "_userId": ["u0", "u0", "u1", "u1", "u2", "u2"],
+        "arm": ["A"] * 6,
+        "y": [1.0, 2.0, 1.5, 2.5, 1.2, 2.2],
+    })
+    with pytest.raises(Exception):
+        lmm_arm_contrast(df, outcome="y", arm_col="arm")
+
+
+def test_lmm_day_strategy_interaction_raises_on_collapsed_cell():
+    """Only one (day_type, strategy) cell present → no interaction term → raises."""
+    pytest.importorskip("statsmodels")
+    df = pd.DataFrame({
+        "_userId": ["u0", "u0", "u1", "u1", "u2", "u2"],
+        "day_type": ["NMA"] * 6,
+        "delivery_strategy": ["AB"] * 6,
+        "y": [1.0, 2.0, 1.5, 2.5, 1.2, 2.2],
+    })
+    with pytest.raises(Exception):
+        lmm_day_strategy_interaction(df, outcome="y")
+
+
+def test_lmm_tdd_stratum_raises_on_single_stratum():
+    """Only one stratum present → no Low−High contrast term → raises."""
+    pytest.importorskip("statsmodels")
+    df = pd.DataFrame({
+        "_userId": ["u0", "u0", "u1", "u1", "u2", "u2"],
+        "tdd_stratum": ["Low"] * 6,
+        "y": [1.0, 2.0, 1.5, 2.5, 1.2, 2.2],
+    })
+    with pytest.raises(Exception):
+        lmm_tdd_stratum(df, outcome="y")

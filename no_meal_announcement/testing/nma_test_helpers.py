@@ -51,6 +51,7 @@ __all__ = [
     "make_cbg_rows",
     "make_cbg_rows_at_target_tir",
     "make_basal_row",
+    "make_loop_direct_basal_row",
     "assert_day_type_flags",
     "records_per_day",
     "DEFAULT_VERSION",
@@ -299,6 +300,37 @@ def make_basal_row(
         rate=rate_u_per_hr,
         duration=str(duration_hours * 3600 * 1000),
         origin=_origin(version, source_name="Loop"),
+    )
+
+
+def make_loop_direct_basal_row(
+    user_id: str,
+    day: date,
+    hour: int = 0,
+    duration_hours: int = 24,
+    delivered_units: float = 12.0,
+    commanded_rate: Optional[float] = None,
+    version: str = DEFAULT_VERSION,
+) -> dict:
+    """Single Loop-direct (`origin.name='com.loopkit.Loop'`) `type='basal'` record.
+
+    Counterpart to make_basal_row (HealthKit stream). export_user_day_tdd credits Loop-direct basal
+    as SUM(payload.deliveredUnits) — the actual delivered amount — and NEVER rate × duration: the
+    Loop-direct `rate` is the COMMANDED temp rate, which integrates to ~1.7× the delivered units. So
+    `delivered_units` lands in `payload.deliveredUnits`, and `commanded_rate` (default 1.7× the
+    delivered hourly rate) lands in `rate` as a decoy the TDD SQL must ignore. Used to test the
+    HealthKit-vs-Loop-direct preference + the commanded-vs-delivered subtlety."""
+    if commanded_rate is None:
+        commanded_rate = 1.7 * (delivered_units / duration_hours)
+    t = datetime(day.year, day.month, day.day, hour, 0, 0)
+    return _row(
+        _userId=user_id,
+        time_string=_iso(t),
+        type="basal",
+        rate=commanded_rate,
+        duration=str(duration_hours * 3600 * 1000),
+        origin=json.dumps({"version": version, "name": "com.loopkit.Loop"}),
+        payload=json.dumps({"deliveredUnits": delivered_units}),
     )
 
 
