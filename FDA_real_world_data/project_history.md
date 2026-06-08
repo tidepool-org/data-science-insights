@@ -4,6 +4,29 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-06-08: Analysis 8-1 — 95% CI on the paired difference in Tables 8.1a / 8.1b
+
+Both Table 8.1 outputs now carry a 95% CI on the TB→AB paired difference for every endpoint.
+
+### Parametric Table 8.1a
+- New `Paired Diff 95% CI` column = `[lo, hi]`, the t-based CI on the mean difference. Reuses the `diff_ci_low` / `diff_ci_hi` already computed by `compute_paired_statistics` in [analysis/utils/statistics.py](analysis/utils/statistics.py) — no new statistic for the parametric side.
+
+### Nonparametric Table 8.1b
+- New `HL Median Diff (95% CI)` column = `hl [lo, hi]`, the Hodges-Lehmann pseudomedian of the paired differences with its distribution-free Wilcoxon signed-rank CI. The HL estimate is reported alongside its interval so the point estimate matches the CI (the HL pseudomedian differs slightly from the sample median already shown in the `Paired Diff Median [IQR]` column).
+- Added `hodges_lehmann_ci(seg1, seg2, alpha=0.05)` to `analysis/utils/statistics.py`: median of the n(n+1)/2 Walsh averages, with CI from the Walsh-average order statistics trimmed symmetrically by the signed-rank critical count. The trim count uses the large-sample normal approximation (mean n(n+1)/4, variance n(n+1)(2n+1)/24, floored) — matches R's `wilcox.test(conf.int = TRUE)` at the 8-1 cohort size (n≈200), is robust to ties/zeros (e.g. hypo-event differences), and is very slightly conservative for small n. No exact small-n path was added since the 8-1 cohort is large. Additive change: no existing `compute_paired_statistics` keys touched, so analyses 8-3 / 8-4 / 8-8 and the figures are unaffected.
+
+### Convention note
+- Analyses 8-3 / 8-4 / 8-8 append a t-based CI to their parametric paired-diff column but put no CI on the nonparametric table. Table 8.1b is the first nonparametric paired-difference CI in the pipeline; the HL/Wilcoxon estimator was chosen as the natural companion to the WSRT p-value already in the table.
+- Output filenames unchanged (`table_8_1a_parametric.csv` / `table_8_1a_nonparametric.csv`); "8.1a / 8.1b" are the report-facing labels.
+
+### Tests
+- New [testing/analysis/test_statistics.py](testing/analysis/test_statistics.py) — 10 pure-pandas/numpy unit tests: HL ≡ median of Walsh averages, CI brackets HL, shift-equivariance, negation symmetry under segment swap, small-n widening to the full Walsh range, NaN-pair filtering, degenerate (n<2) NaN CI, a pinned regression example, plus a `create_table_8_1a` smoke test asserting both CI columns and that the parametric CI matches `compute_paired_statistics`. Runs without Spark.
+- The Databricks integration test [test_analysis_8_1.py](testing/integration/test_analysis_8_1.py) reads the tables by column name and is unaffected by the added columns; re-run on Databricks as the final gate.
+
+**Commit:** _not yet committed_
+
+---
+
 ## 2026-05-14: Integration tests — full Databricks suite for analyses 8-1 through 8-8
 
 The May-1 [testing/integration/](testing/integration/) scaffold had never run against Databricks; this pass brings it to life. 20 deterministic synthetic users in [build_synthetic_bddp.py](testing/integration/build_synthetic_bddp.py) feed end-to-end tests `test_analysis_8_1.py` through `test_analysis_8_8.py`, plus a [run_all_tests.py](testing/integration/run_all_tests.py) sequencer. First-run shakeout surfaced bugs in both the fixture builder (now fixed) and the production analyses (two real bugs fixed, one defensive guard added).

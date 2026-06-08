@@ -87,6 +87,50 @@ def compute_paired_statistics(seg1: pd.Series, seg2: pd.Series) -> Dict:
     }
 
 
+def hodges_lehmann_ci(seg1: pd.Series, seg2: pd.Series, alpha: float = 0.05) -> Dict:
+    """
+    Hodges-Lehmann estimator and distribution-free confidence interval for the
+    median of the paired differences (seg2 - seg1) — the nonparametric companion
+    to the Wilcoxon signed-rank test.
+
+    The HL estimate is the median of the n(n+1)/2 Walsh averages (d_i + d_j)/2,
+    i <= j, of the paired differences. The CI is the pair of Walsh-average order
+    statistics symmetrically trimmed from each tail, where the trim count is the
+    lower critical value of the signed-rank null distribution. The count uses the
+    large-sample normal approximation (mean n(n+1)/4, variance n(n+1)(2n+1)/24),
+    floored — matching R's wilcox.test(..., conf.int = TRUE) for large n, robust
+    to ties/zeros, and very slightly conservative (wider) for small n. A 95%
+    interval is not attainable below n ~ 6, where it widens to the full range of
+    Walsh averages.
+
+    Returns a dict with raw values (not pre-formatted strings):
+    - hl      : Hodges-Lehmann pseudomedian of the paired differences
+    - ci_low  : lower 100(1-alpha)% confidence bound
+    - ci_hi   : upper 100(1-alpha)% confidence bound
+    - n       : number of complete pairs
+    """
+    valid = seg1.notna() & seg2.notna()
+    diff = (seg2[valid] - seg1[valid]).to_numpy(dtype=float)
+    n = diff.size
+    if n < 2:
+        return {"hl": float(diff[0]) if n == 1 else np.nan,
+                "ci_low": np.nan, "ci_hi": np.nan, "n": n}
+
+    i, j = np.triu_indices(n)                       # i <= j -> n(n+1)/2 Walsh averages
+    walsh = np.sort((diff[i] + diff[j]) / 2.0)
+    m = walsh.size
+    hl = float(np.median(walsh))
+
+    z = stats.norm.ppf(1 - alpha / 2)
+    mu = n * (n + 1) / 4.0
+    sigma = np.sqrt(n * (n + 1) * (2 * n + 1) / 24.0)
+    trim = int(np.floor(mu - z * sigma))            # Walsh averages to drop per tail
+    trim = min(max(trim, 0), (m - 1) // 2)
+
+    return {"hl": hl, "ci_low": float(walsh[trim]),
+            "ci_hi": float(walsh[m - 1 - trim]), "n": n}
+
+
 def format_p(p: float) -> str:
     """Format p-value for display."""
     if np.isnan(p):

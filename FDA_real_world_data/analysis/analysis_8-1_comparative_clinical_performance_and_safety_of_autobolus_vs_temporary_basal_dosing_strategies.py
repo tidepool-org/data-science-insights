@@ -11,7 +11,10 @@ Inputs:
 - dev.fda_510k_rwd.valid_transition_guardrails     (_userId, violation_count)
 
 Outputs:
-- Table 8.1a: Glycemic Endpoints by Delivery Strategy
+- Table 8.1a (parametric): Glycemic Endpoints by Delivery Strategy — Mean ± SD,
+  paired diff with t-based 95% CI on the mean difference
+- Table 8.1b (nonparametric): Median [IQR], paired diff with Hodges-Lehmann
+  estimate + distribution-free (Wilcoxon signed-rank) 95% CI on the median difference
 - Figure 8.1a: Paired Differences (paired dot + violin)
 - Figure 8.1b: Distribution of Paired Differences (histograms)
 - Figure 8.1c: Time in Ranges Stacked Bar Comparison
@@ -30,7 +33,7 @@ NORMALITY_ALPHA = 0.05
 OUTPUT_DIR = "outputs/analysis_8_1"
 
 from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT, COLORS_STACKED_BAR
-from utils.statistics import test_normality, compute_paired_statistics, format_p
+from utils.statistics import test_normality, compute_paired_statistics, hodges_lehmann_ci, format_p
 from utils.data_loading import load_transition_endpoints
 
 
@@ -73,15 +76,28 @@ def create_table_8_1a(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             print(f"  Warning: {c1} or {c2} not found, skipping {name}")
             continue
         s = compute_paired_statistics(df[c1], df[c2])
-        
+        hl = hodges_lehmann_ci(df[c1], df[c2])
+
         p_t = format_p(s['p_ttest'])
         p_w = format_p(s['p_wsrt'])
-        
+
+        # Parametric: t-based 95% CI on the mean paired difference
+        ci_t = (
+            f"[{s['diff_ci_low']:.2f}, {s['diff_ci_hi']:.2f}]"
+            if not np.isnan(s['diff_ci_low']) else "N/A"
+        )
+        # Nonparametric: Hodges-Lehmann estimate + Wilcoxon-based 95% CI on the median diff
+        hl_ci = (
+            f"{hl['hl']:.2f} [{hl['ci_low']:.2f}, {hl['ci_hi']:.2f}]"
+            if not np.isnan(hl['ci_low']) else "N/A"
+        )
+
         parametric_rows.append({
             "Endpoint": name,
             "Temp Basal Mean ± SD":  f"{s['seg1_mean']:.2f} ± {s['seg1_sd']:.2f}",
             "Autobolus Mean ± SD":   f"{s['seg2_mean']:.2f} ± {s['seg2_sd']:.2f}",
             "Paired Diff Mean ± SD": f"{s['diff_mean']:.2f} ± {s['diff_sd']:.2f}",
+            "Paired Diff 95% CI": ci_t,
             "p (paired t-test)": p_t,
             "N": s["n_pairs"],
         })
@@ -91,6 +107,7 @@ def create_table_8_1a(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             "Temp Basal Median [IQR]":  f"{s['seg1_median']:.2f} [{s['seg1_q1']:.1f}, {s['seg1_q3']:.1f}]",
             "Autobolus Median [IQR]":   f"{s['seg2_median']:.2f} [{s['seg2_q1']:.1f}, {s['seg2_q3']:.1f}]",
             "Paired Diff Median [IQR]": f"{s['diff_median']:.2f} [{s['diff_q1']:.1f}, {s['diff_q3']:.1f}]",
+            "HL Median Diff (95% CI)": hl_ci,
             "p (Wilcoxon signed-rank)": p_w,
             "Normality (Shapiro p)": f"{s['normality_p']:.2e}" if not np.isnan(s['normality_p']) else "N/A",
             "N": s["n_pairs"],
