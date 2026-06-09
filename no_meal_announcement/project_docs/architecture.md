@@ -176,7 +176,7 @@ Phase 4: Analysis
     Method B (LMM outcome ~ arm + (1|user), via utils/statistics.lmm_arm_contrast; NMA-CE>0 sign,
       Wald CI/p, per-user-median non-parametric companion; degenerate fits flagged converged=False):
       table_8_1b_lmm_contrasts.csv.
-    Tables: table_8_1a_per_user_means.csv (per-arm mean±SD + counts),
+    Tables: table_8_1a_per_user_means.csv (per-arm mean±SD, incl. a per-arm Mean TDD (U/day) row, + counts),
       table_8_1c_behavioral_summary.csv (CE>0-day behavioral metrics; meal-bolus = carb_entry_count proxy),
       sample_information.csv (Table 1: per-cohort age + sex demographics, user/day counts; create_sample_information),
       sex_missingness_sensitivity.csv (recorded-vs-missing-sex baseline comparison, Welch t; FDA §8.5 analog),

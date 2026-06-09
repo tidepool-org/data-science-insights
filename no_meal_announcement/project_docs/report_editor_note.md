@@ -122,6 +122,11 @@ The plan-locked Tables **8.1a/8.1b/8.1c are unchanged** in number/meaning.
 `sample_information.csv` (Table 1), `sex_missingness_sensitivity.csv`, `nma_day_frequency.csv`;
 `main()` also writes the combined `table_8_1_sample_information.csv` (adult/pediatric/all columns).
 
+**New 2026-06-08 — Table 8.1a gained a per-arm `Mean TDD (U/day)` row** (in `table_8_1a_per_user_means`,
+below the 8 endpoint rows, above the count rows): per-arm equal-user-weight mean ± SD of delivered TDD.
+This is the per-arm view; it is **not** the same number as Table 8.1c's cohort-wide CE>0-day TDD — label
+each explicitly if both are shown. See the §5 caveat before writing any prose around it.
+
 ## 5. Caveats to preserve in any prose/captions
 
 - **CE≥3/BE≥3 ⊂ CE>0** (≥3 carbs ⟹ CE>0). So the §12.1 high-engagement contrasts and the NMA−CE≥3/BE≥3 overlays
@@ -136,6 +141,10 @@ The plan-locked Tables **8.1a/8.1b/8.1c are unchanged** in number/meaning.
   Method-A-vs-B **divergence caveat attaches to the below-range / hypoglycemia endpoints only**
   (time <54, time <70): report **mean *and* median** for those, across all arms (decisions.md D5).
 - **§8.3 TDD-stratum:** cite the **rank terciles** (Table 8.3d + §12.3g–j; D12 RESOLVED), not the magnitude-based strata (8.3a/b/c, 12.3a–f) — see §7 + decisions.md D12.
+- **Table 8.1a Mean TDD row is partly mechanical** (same family as §8.4's same-day entanglement): a CE=0
+  day has no carb entry ⟹ no meal bolus ⟹ lower TDD **by construction**, so the lower TDD on the NMA
+  arms (≈26–31 vs ≈47 U/day on CE>0) is largely tautological. Report it **descriptively** — do not frame
+  it as "not announcing meals lowers insulin requirement." It characterizes the days, not a treatment effect.
 
 ## 6. Headline findings (framing)
 
@@ -164,6 +173,24 @@ HMA renders in **bronze** (#9c6b30) everywhere, matching §8.1's 5th arm.
   - **Appendix §12.2** `table_12_2a_high_engagement_interaction.csv` — the day_type ∈ {CE≥3/BE≥3, CE>0}
     × delivery_strategy interaction (same columns as Table 8.2b; reference = CE>0, so the main
     day-type coefficient is **CE≥3/BE≥3 − CE>0**). Thin HMA×autobolus-on cells may be `converged=False`.
+  - **Table 8.2a restructured → marginal cell means, ALL endpoints (2026-06-09, report-side edit in the
+    .docx; no pipeline change).** 8.2a was TIR-only with two trailing interaction columns
+    (`Interaction coef. (95% CI)`, `p`) that **duplicated** Table 8.2b; those two columns were **removed**
+    and the single TIR metric column was **expanded to all 8 endpoints** (TIR, Time <70, Time <54,
+    Time >180, Time >250, mean glucose, CV, hypo events/day) as columns. 8.2a is now **purely descriptive**
+    marginal cell means (mean ± SD); the day × strategy **interaction test stays in Table 8.2b**. Rows
+    unchanged — 3 nested NMA classifications × {NMA, CE>0} × {AB, TB} = 12 cells, each with `User-days (n)`.
+    Built straight from `table_8_2a_marginal_cells.csv` (`observed_display`) — that CSV already carried all
+    endpoints, so nothing regenerated. Layout: portrait, 11 columns @ 7.5 pt, fixed widths summing to 6.5 in,
+    **value cells stacked mean over ±SD** (the readable fit for 8 endpoint columns in portrait — MJC's
+    choice). Edit-tracking: the **7 added endpoint columns are GREEN**; TIR + the label/n columns stay
+    black; caption + List-of-Tables entry reworded (BLUE) → "Marginal cell means by day classification and
+    delivery strategy, all glycemic endpoints …".
+  - ⚠️ **OPEN (pending MJC) — Table 8.2b is still TIR-only.** With the interaction columns gone from 8.2a,
+    the day × strategy interaction test is now tabulated **for TIR only**; the interaction coef/CI/p for the
+    other 7 endpoints exist in `table_8_2b_interaction.csv` (all 8 endpoints) but appear nowhere in the
+    report. Decision needed: expand Table 8.2b to all 8 endpoints (**report-side, no pipeline change**), or
+    leave 8.2b TIR-only by design. See todo.md → "Report (RPT-1008 .docx)".
 - **§8.3** (`analysis/outputs/analysis_8_3/{cohort}/`):
   - HMA days are stratified Low/High by within-user TDD like CE=0 days and shown as a 3rd group
     (bronze): `figure_8_3a_grid{1,2}_*` (6 violins: CE=0 / CE>0 / CE≥3-BE≥3, each Low&High),
@@ -227,13 +254,26 @@ this is all new. **§8.2 is unaffected.** AB = `autobolus_on`, TB = `temp_basal_
 - **Part 2 — carb-entry-rate by strategy** ("are users more likely to log carbs on TB vs AB days?"):
   `table_8_4c_carb_entry_by_strategy.csv` (within-user paired TB−AB: fraction of days with ≥1 carb
   entry + carb entries/day, Method A + supportive LMM) + `figure_8_4b_carb_entry_by_strategy.png`.
-- **Appendix §12.4** (alternative axes, on the headline CE=0/BE≤1 vs CE>0 pair):
+- **Appendix §12.4** (alternative axes). _**Tables expanded to all 5 day types — 2026-06-08**; see the
+  dated note below._
   `table_12_4a_strategy_cross_tercile.csv` (rank **terciles** Low/Mid/High — the "both" sketch),
   `table_12_4c_strategy_cross_ce0_binary.csv` (**CE=0-reference** companion),
   `table_12_4d_strategy_within_user.csv` (within-user AB−TB within each fixed stratum); figures
   `figure_12_4a_tercile_grid{1,2}` / `figure_12_4b_all5_grid{1,2}` (the all-5-day-type figure
   companion of Table 8.4a — too busy for the main section) / `figure_12_4c_ce0_grid{1,2}`.
   (The standalone all-5 binary cross-tab table was folded into Table 8.4a.)
+- **§12.4 tables now carry all 5 day types (2026-06-08, report-ask resolved).** `table_12_4a` (tercile),
+  `table_12_4c` (CE=0-ref binary), and `table_12_4d` (within-user) were previously headline-pair-only
+  (CE=0/BE≤1 + CE>0); they now cover all 5 day types like Tables 8.4a/8.4b (3 nested NMA + CE>0 + HMA).
+  **Same schema** (`reference,split,arm_strategy,endpoint,label,stratum,mean,sd,n_users,n_days`; 12.4d
+  is the within-user schema) — just more rows, so **rebuild Tables 12.4a / 12.4c / 12.4d to all 5**.
+  **All-5 terciles are statistically viable** — the composite same-user-set gate holds (n_users equal
+  across each day type's 6 tercile×strategy cells), no NaN / non-converged cells. ⚠️ **Footnote the thin
+  stringent-NMA tercile cells:** gated user sets are `all`-cohort CE=0/BE=0 = 18, CE=0/BE≤1 = 25,
+  CE=0/BE≤∞ = 65 (CE>0 379, HMA 312); in **pediatric** the stringent arms thin to CE=0/BE=0 = 4,
+  CE=0/BE≤1 = 6, CE=0/BE≤∞ = 14 (thinnest cell 4 users / 24 days). The §12.4 **figures stay the headline
+  CE=0/BE≤1 vs CE>0 pair** (a 5-day-type tercile figure is too busy — same call as the main binary fig
+  8.4a; the all-5 binary figure is fig 12.4b). Only the tables went all-5.
 - **Caveats to preserve in any prose/captions:**
   - **Same-day entanglement / endogeneity:** a day's delivery strategy is itself a behavioural outcome
     (`automatic_bolus_count ≥ 3`), not randomized — AB-vs-TB confounds strategy with whatever drove it.

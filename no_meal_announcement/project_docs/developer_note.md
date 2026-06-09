@@ -77,6 +77,40 @@ a decision and FYIs. Detail in §1.
 
 ## 1. Open asks (need a developer answer or action)
 
+**[NEW 2026-06-08, from MJC] Generate the all-5-day-type TERCILE §8.4 cross-tab (for Table 12.4a).**
+`table_12_4a_strategy_cross_tercile.csv` (tercile, overall ref, AB/TB) currently carries only the
+**headline pair** — `CE=0/BE<=1` and `CE>0` — so report **Table 12.4a** shows just those 2 day types,
+while its binary counterpart `table_8_4a_strategy_cross_binary.csv` (→ Table 12.4b) already has **all 5**
+(`CE=0/BE=0`, `CE=0/BE<=1`, `CE=0/BE<=inf`, `CE>0`, `CE>=3/BE>=3`). **Ask:** regenerate the tercile
+cross-tab for all 5 day types × {AB,TB} × {Low,Mid,High}, same schema
+(`reference,split,arm_strategy,endpoint,label,stratum,mean,sd,n_users,n_days`). The CE=0-ref binary
+`table_12_4c_strategy_cross_ce0_binary.csv` (→ 12.4c) and the within-user
+`table_12_4d_strategy_within_user.csv` (→ 12.4d) have the **same headline-pair-only** limitation —
+extend those too if §12.4 should be all-5 throughout. ⚠️ **Thin cells:** tercile × 5 day types × 2
+strategies = 30 cells/endpoint; the stringent NMA arms × TB × tercile will be sparse (likely why these
+were headline-pair-only) — apply the existing same-user-set gate + `converged`/NaN thin-cell guard so
+degenerate cells degrade gracefully, and confirm whether all-5 terciles are viable or should stay
+headline-pair (in which case the report editor just clarifies the captions instead). Once the CSV lands,
+the report editor rebuilds Tables 12.4a (and 12.4c/12.4d) with all 5 day types — **report-side can't
+fabricate the missing day types.**
+
+**✅ DONE 2026-06-08 (developer).** All three appendix §12.4 **tables** now cover all 5 day types
+(`MAIN_ARMS` → `APPENDIX_ARMS` on the table calls in `analysis_8-4…run()`): `table_12_4a_strategy_cross_tercile.csv`
+(tercile), `table_12_4c_strategy_cross_ce0_binary.csv` (CE=0-ref binary), and
+`table_12_4d_strategy_within_user.csv` (within-user). **Same schema, just more rows** — no column
+change. Regenerated adult/pediatric/all. **All-5 terciles ARE viable** (your "confirm whether viable or
+stay headline-pair"): the composite same-user-set gate holds in every cohort — `n_users` equal across
+all 6 cells (3 terciles × 2 strategies) per day type — and **no cell collapsed to NaN / `converged=False`**.
+The stringent-NMA × TB × tercile cells are sparse but populated, so **keep all 5** (no caption-only
+fallback needed). **Footnote the thin pediatric cells:** in the `all` cohort the gated user sets are
+CE=0/BE=0 = 18, CE=0/BE≤1 = 25, CE=0/BE≤∞ = 65 (CE>0 379, HMA 312); in **pediatric** the stringent NMA
+arms thin to CE=0/BE=0 = **4 users**, CE=0/BE≤1 = 6, CE=0/BE≤∞ = 14 — the thinnest cell is pediatric
+CE=0/BE=0 / TB / High at **4 users / 24 days** (real, monotonic, but small — worth a "n small in the
+pediatric stringent-NMA tercile cells" note). The §12.4 **figures** (12.4a tercile, 12.4c CE=0-ref)
+**stay the headline CE=0/BE≤1 vs CE>0 pair** — a 5-day-type tercile figure is too busy (same rationale as
+the binary fig 8.4a; the all-5 binary figure companion is fig 12.4b). Only the tables went all-5. Detail
+in `report_editor_note.md` §8 + `project_history.md` (2026-06-08).
+
 0. **[NEW 2026-06-07, from MJC] Headline NMA arm should be CE=0/BE≤1 everywhere a single arm is featured — and the figure title should state the category.** The featured/headline single-arm figures currently use **CE=0/BE≤∞** (§8.1c paired-delta `headline_flag=CLASSIFICATIONS[-1]`; §12.1c windowed; §8.2 `HEADLINE_CLS`), while **§8.4 already headlines CE=0/BE≤1** (`HEADLINE_ARM=CLASSIFICATIONS[1]`). Directive: make **CE=0/BE≤1** the featured arm in §8.1c/§12.1c (and §8.2's featured arm), and make the in-image title name the category. (8.1b/12.1b stay all-5-arms — no single headline.) ⚠️ **D5 status (updated 2026-06-07 — supersedes the earlier "stringent → descriptive-only" framing):** decisions.md D5 now records that on the post-D7-regen snapshot Method A and Method B **concur in sign on all three NMA arms** for **TIR / TAR / mean glucose / CV** — so those contrasts are **method-robust** on the BE≤1 headline, **directionally citable, not descriptive-only**. The Method-A-vs-B divergence caveat attaches to the **below-range / hypoglycemia endpoints only** (time <54, time <70), across all arms. So the BE≤1 headline figure carries a *narrow* below-range caveat (report mean *and* median there), **not** a blanket "no directional claim." **✅ DONE 2026-06-07** — scope confirmed (8.1c + 12.1c + §8.2); `headline_flag`/`HEADLINE_CLS` switched to CE=0/BE≤1, titles now name the arm, figures regenerated; **decisions.md D20** records it (TIR/TAR/mean/CV method-robust per the D5 update; <54/<70 caveat retained); editor-facing note in `report_editor_note.md §0` point 4.
 
 1. **Confirm the §8.3/§12.3 day-count drop is the intended same-user-set gate, not a stray filter.**

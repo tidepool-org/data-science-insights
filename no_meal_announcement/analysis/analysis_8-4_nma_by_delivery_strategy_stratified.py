@@ -58,12 +58,14 @@ Outputs (analysis/outputs/analysis_8_4/<cohort>/) — main §8.4:
     figure_8_4a_grid{1,2}_*.png              THE summary figure: AB vs TB across Low/High TDD strata,
                                              headline CE=0/BE≤1 + CE>0, all 8 endpoints (95% CI bars)
     figure_8_4b_carb_entry_by_strategy.png   Part 2: per-user TB−AB carb-logging deltas
-  Appendix §12.4 breakout:
-    table_12_4a_strategy_cross_tercile.csv   rank TERCILE Low/Mid/High × strategy, headline pair (the
-                                             "both" sketch)
-    table_12_4c_strategy_cross_ce0_binary.csv    CE=0-reference companion (binary), headline pair
+  Appendix §12.4 breakout — TABLES cover ALL 5 day types (matching 8.4a/8.4b so §12.4 is all-5
+  throughout, 2026-06-08); the §12.4 FIGURES stay the headline CE=0/BE≤1 vs CE>0 pair (a 5-day-type
+  tercile figure is too busy — same rationale as the binary fig 8.4a):
+    table_12_4a_strategy_cross_tercile.csv   rank TERCILE Low/Mid/High × strategy, all 5 day types
+                                             (the "both" sketch)
+    table_12_4c_strategy_cross_ce0_binary.csv    CE=0-reference companion (binary), all 5 day types
     table_12_4d_strategy_within_user.csv     within-user AB−TB contrast within each fixed TDD stratum,
-                                             headline pair
+                                             all 5 day types
     figure_12_4a_tercile_grid{1,2}_*.png     tercile companion of fig 8.4a (headline pair)
     figure_12_4b_all5_grid{1,2}_*.png        all-5-day-type version of fig 8.4a (figure companion to
                                              Table 8.4a; too busy for the main section)
@@ -496,15 +498,19 @@ def run(
         table_carb_entry_by_strategy(per_frac, per_rate, df_carb_g, nma_stats).to_csv(
             os.path.join(output_dir, "table_8_4c_carb_entry_by_strategy.csv"), index=False)
 
-        # Appendix §12.4 — alternative-axis sensitivities on the headline CE=0/BE≤1 vs CE>0 pair
-        # (matching their figures): the "both" tercile sketch, the CE=0-reference companion, and the
-        # within-user AB−TB contrast within each fixed stratum. (The all-5 binary cross-tab is now
-        # Table 8.4a; appendix fig 12.4b is its 5-day-type figure companion.)
-        table_strategy_cross(pdf, MAIN_ARMS, reference=PRIMARY_REFERENCE, split="tercile").to_csv(
+        # Appendix §12.4 — alternative-axis sensitivities: the "both" tercile sketch, the
+        # CE=0-reference companion, and the within-user AB−TB contrast within each fixed stratum.
+        # The TABLES now cover ALL 5 day types (APPENDIX_ARMS), matching Table 8.4a/8.4b so §12.4 is
+        # all-5 throughout (report-side ask 2026-06-08); the same-user-set gate + converged/NaN
+        # thin-cell guard let the sparse stringent-NMA × TB × tercile cells degrade gracefully. The
+        # §12.4 FIGURES (12.4a tercile, 12.4c CE=0-ref) stay the headline CE=0/BE≤1 vs CE>0 pair — a
+        # 5-day-type tercile figure is too busy (same rationale as the binary fig 8.4a; the all-5
+        # binary figure companion is fig 12.4b).
+        table_strategy_cross(pdf, APPENDIX_ARMS, reference=PRIMARY_REFERENCE, split="tercile").to_csv(
             os.path.join(output_dir, "table_12_4a_strategy_cross_tercile.csv"), index=False)
-        table_strategy_cross(pdf, MAIN_ARMS, reference="ce0", split="binary").to_csv(
+        table_strategy_cross(pdf, APPENDIX_ARMS, reference="ce0", split="binary").to_csv(
             os.path.join(output_dir, "table_12_4c_strategy_cross_ce0_binary.csv"), index=False)
-        table_strategy_within_user(pdf, MAIN_ARMS, nma_stats, reference=PRIMARY_REFERENCE,
+        table_strategy_within_user(pdf, APPENDIX_ARMS, nma_stats, reference=PRIMARY_REFERENCE,
                                    split="binary").to_csv(
             os.path.join(output_dir, "table_12_4d_strategy_within_user.csv"), index=False)
 

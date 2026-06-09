@@ -75,7 +75,8 @@ otherwise chronological. Dates trace to `project_history.md`.
 
 ### D11 — "Higher TIR on CE=0 days" is an intake confound, not a dosing effect (2026-06-01)
 - **Decision:** frame the headline §8.1 finding as an intake effect. CE=0 ⟺ 0 announced carbs = the zero endpoint of the announced-carb axis.
-- **Rationale:** §8-supp — CE=0 days use far less insulin (pediatric TDD 32 vs 48 U/day); within-user slope −0.3 TIR/10 g (p<0.001); ~70% of CE>0 days are 90+ g, dragging the CE>0 average down. CE=0 isn't uniquely good — it's the low-carb end. §8.3 corroborates: High-TDD (likely unannounced-meal) CE=0 days are **much worse** (TIR ~49 vs ~64 comparator).
+- **Rationale:** §8-supp — CE=0 days use far less insulin (pediatric TDD 32 vs 48 U/day; this is the CE=0-day vs CE>0-day gap within the pediatric cohort, not adult-vs-pediatric); within-user slope −0.3 TIR/10 g (p<0.001); ~70% of CE>0 days are 90+ g, dragging the CE>0 average down. CE=0 isn't uniquely good — it's the low-carb end. §8.3 corroborates: High-TDD (likely unannounced-meal) CE=0 days are **much worse** (TIR ~49 vs ~64 comparator).
+- **Corroboration (2026-06-08):** the new per-arm Mean TDD row in Table 8.1a (`table_8_1a_per_user_means`) reproduces the gap directly and across all five day types — pediatric CE=0/BE≤∞ 32.1 vs CE>0 48.2 (Δ−16.0, matching §8-supp's Δ−15.9), adult 31.3 vs 46.8 (Δ−15.5) — so the intake confound is now visible in the main §8.1 table. ⚠️ Because the CE=0↓TDD gap is largely mechanical (CE=0 ⟹ no meal bolus ⟹ lower TDD by construction), report that row descriptively.
 - **Status:** active explanation; the supporting **TDD-stratum numbers are not yet citable** (D12).
 
 ### D12 — §8.3 TDD stratification cut at R = tdd/mean = 1.0 — ⚠️ results NOT yet trustworthy (2026-06-04)

@@ -33,7 +33,7 @@ Outputs (analysis/outputs/analysis_8_1/<cohort>/):
     sample_information.csv              (Table 1: per-cohort age + sex demographics, user/day counts)
     sex_missingness_sensitivity.csv     (recorded-vs-missing-sex baseline comparison; FDA §8.5 analog)
     nma_day_frequency.csv               (§4 secondary obj. bullet 3: per-classification NMA-day-type frequency)
-    table_8_1a_per_user_means.csv       (Table 8.1a: per-user means ± SD by arm, with user/day counts)
+    table_8_1a_per_user_means.csv       (Table 8.1a: per-user means ± SD by arm, + per-arm mean TDD, with user/day counts)
     table_8_1a_expanded.csv             (Table 8.1a expanded: per classification x endpoint Method A paired stats)
     table_8_1b_lmm_contrasts.csv        (Table 8.1b: Method B LMM contrast NMA-CE>0 + np median sensitivity)
     table_8_1c_behavioral_summary.csv   (Table 8.1c: CE>0-day behavioral metrics: mean±SD, median[IQR])
@@ -192,12 +192,15 @@ def contrasts_table(pdf, stats_mod):
 
 def create_table_8_1a(pdf):
     """Table 8.1a: per-arm, across-user mean ± SD of each endpoint's per-user within-arm
-    mean, plus user-day and contributing-user counts. Rows = 8 endpoints + 2 count rows;
-    columns = the 5 arms (3 nested NMA + CE>0 + the high meal-announcement CE>=3/BE>=3 column;
-    note CE>=3/BE>=3 ⊂ CE>0 — a descriptive heavy-announcement column, not a disjoint arm)."""
+    mean, a per-arm mean delivered TDD row, plus user-day and contributing-user counts.
+    Rows = 8 endpoints + Mean TDD + 2 count rows; columns = the 5 arms (3 nested NMA + CE>0
+    + the high meal-announcement CE>=3/BE>=3 column; note CE>=3/BE>=3 ⊂ CE>0 — a descriptive
+    heavy-announcement column, not a disjoint arm). The Mean TDD row is the equal-user-weight
+    (Method A) across-user mean of each user's mean delivered tdd_units on that arm's days —
+    a per-arm view distinct from Table 8.1c's cohort-wide CE>0-day TDD summary."""
     arm_labels = [lab for _, lab in SUPPLEMENT_ARMS]
     table = {}  # row label -> {arm label: display cell}
-    for col, ep_label in ENDPOINTS:
+    for col, ep_label in ENDPOINTS + [("tdd_units", "Mean TDD (U/day)")]:
         table[ep_label] = {}
         for flag, arm_label in SUPPLEMENT_ARMS:
             m = per_user_arm_mean(pdf, col, flag).dropna()
