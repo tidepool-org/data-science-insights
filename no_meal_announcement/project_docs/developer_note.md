@@ -77,6 +77,50 @@ a decision and FYIs. Detail in §1.
 
 ## 1. Open asks (need a developer answer or action)
 
+**[NEW 2026-06-09, from report editor] §8.2 Table 8.2a needs the HMA (CE≥3/BE≥3) marginal cells — the pipeline emits only `day_type ∈ {NMA, CE>0}`.**
+Per MJC, Table 8.2a should present **all 5 day types × {AB, TB} × all 8 endpoints** as purely descriptive
+marginal cell means — the day×strategy *interaction* stays in **Table 8.2b only**. Two gaps in the current
+`table_8_2a_marginal_cells.csv` block that:
+1. **CE>0 is triplicated.** The CSV is keyed `(classification, day_type∈{NMA,CE>0}, strategy, endpoint)`, so
+   the CE>0 comparator appears once per classification — and the three copies are **byte-identical**
+   (CE>0×AB = 73.0±13.3, n_days 382,044, n_users 1,179 in all three; CE>0×TB = 69.7±17.2, n_days 115,105).
+   The report will collapse these to **one** CE>0 day type (confirms a single canonical CE>0 set — no
+   per-classification gating on the comparator). No action needed from you on this; flagged for awareness.
+2. **HMA (CE≥3/BE≥3) marginal cells are not emitted.** There is no `day_type` for the high-engagement arm,
+   so the report can't render the 5th day type descriptively. `table_12_2a_high_engagement_interaction.csv`
+   carries only interaction *coefficients*, not observed cell means in the 8.2a schema.
+
+**Ask:** emit the HMA arm's **observed marginal cells** — `CE>=3/BE>=3 × {autobolus_on, temp_basal_only} ×`
+8 endpoints, with the existing columns (`observed_mean, observed_sd, n_users, n_days, observed_display`) —
+into `table_8_2a_marginal_cells.csv` (same schema; e.g. a `classification="CE>=3/BE>=3"` section), or a
+parallel CSV keyed directly by the 5 day types if you'd rather restructure. The §8.2 script already builds
+the HMA frame (`build_day_type_frame(..., HIGH_MA…)`) for figure 8.2a and fits the HMA contrast for
+`table_12_2a`, so the per-user means **already exist in-run** — this is an *emit*, not a new computation:
+mirror the `create_table_8_2a` loop over the HMA fit's `marginal_cells` the way it already loops the 3 NMA
+fits. ⚠️ **Confirm the user set:** compute the HMA cells over the set figure 8.2a's HMA violins use (so the
+table and figure agree) and tell me if its implied CE>0 differs from the full-set copy above. Once the CSV
+carries HMA, the report rebuilds 8.2a as the 10-row (5 day types × {AB,TB}) descriptive table —
+**report-side can't fabricate the missing arm.** Regenerate adult/pediatric/all. (Provenance: D18.)
+
+**✅ DONE 2026-06-09 (developer).** `table_8_2a_marginal_cells.csv` now carries the HMA arm as a
+**`classification="CE>=3/BE>=3"` / `day_type="CE>=3/BE>=3"` section** — CE≥3/BE≥3 × {temp_basal_only,
+autobolus_on} × all 8 endpoints, **same 11 columns** (`observed_mean, observed_sd, n_users, n_days,
+model_mean, observed_display`), **no column change**. 96 → **112 rows/cohort** (the 16 HMA rows
+appended; the existing 96 NMA/CE>0 rows are byte-identical — verified by diff). Emitted by
+generalizing `build_table_8_2a` to loop the §12.2 HMA frame/fit alongside the 3 NMA fits (the
+per-user HMA means already existed in-run). Regenerated **adult/pediatric/all**. New cross-check
+(`test_table_8_2a_hma_tir`) + an HMA assertion in `run_test_analysis_8_2` both pass.
+- **⚠️ User-set confirmed:** the HMA cells use the **identical set figure 8.2a's HMA violins use** —
+  both take `pdf[in_ce_ge3_be_ge3]==True` after `restrict_comparator` (so HMA is gated to
+  CE=0-contributing users), filtered to the two strategies. Table and figure agree by construction;
+  the cross-check recomputes the cells from that exact set and matches.
+- **Implied CE>0 = the full-set copy (no difference).** The HMA frame's CE>0 is the same canonical
+  `pdf[in_ce_gt0]==True` set as every NMA frame — the triplicated copy you quoted is unchanged
+  (CE>0×AB 73.0±13.3, n_days 382,044, n_users 1,179; CE>0×TB 69.7±17.2, n_days 115,105, n_users 849).
+  So **HMA's CE>0 is omitted** from the new section (it would be a 4th identical copy); collapse the
+  three CE>0 copies to one as planned. Observed HMA TIR (all cohort): AB 72.1±14.1 (n_users 1,148 /
+  274,518 days), TB 69.6±17.1 (n_users 756 / 83,327 days).
+
 **[NEW 2026-06-08, from MJC] Generate the all-5-day-type TERCILE §8.4 cross-tab (for Table 12.4a).**
 `table_12_4a_strategy_cross_tercile.csv` (tercile, overall ref, AB/TB) currently carries only the
 **headline pair** — `CE=0/BE<=1` and `CE>0` — so report **Table 12.4a** shows just those 2 day types,

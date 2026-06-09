@@ -31,7 +31,10 @@ interaction contrast (day_type ∈ {CE>=3/BE>=3, CE>0} × strategy) is emitted a
 
 Outputs (analysis/outputs/analysis_8_2/<cohort>/):
     table_8_2a_marginal_cells.csv   (per classification × endpoint × day_type × strategy:
-                                     observed per-user-mean summary + model-estimated mean)
+                                     observed per-user-mean summary + model-estimated mean; the 3
+                                     nested NMA classifications (NMA + CE>0 cells) plus a 5th
+                                     descriptive CE>=3/BE>=3 (HMA) section — HMA cells only, from
+                                     the §12.2 frame/fit, its CE>0 omitted as already present)
     table_8_2b_interaction.csv      (per classification × endpoint: main day-type, main
                                      strategy, and interaction coef/CI/p + n_users/n_days/converged)
     table_12_2a_high_engagement_interaction.csv  (Appendix §12.2: CE>=3/BE>=3 vs CE>0 × strategy
@@ -292,23 +295,36 @@ def build_table_8_2b(records):
     return df
 
 
-def build_table_8_2a(frames, records):
+def build_table_8_2a(frames, records, hma_frames, hma_fits):
     """Table 8.2a: marginal cell means per (classification, endpoint, day_type, strategy).
     Observed = across-user mean ± SD of per-user means (robust, model-independent); model_mean
-    = the LMM-estimated marginal mean (NaN where the fit was degenerate)."""
+    = the LMM-estimated marginal mean (NaN where the fit was degenerate).
+
+    Emits the 3 nested NMA classifications (each as its NMA + CE>0 cells) plus the high
+    meal-announcement arm (CE>=3/BE>=3) as a 5th descriptive day type, from the §12.2 HMA
+    frame/fit — so the report can render all 5 day types × {AB, TB} descriptively (the day ×
+    strategy interaction stays in Table 8.2b). The HMA section emits only its CE>=3/BE>=3 cells:
+    its CE>0 comparator is the same canonical set already present under each NMA classification
+    (CE>0 = pdf[COMPARATOR_FLAG]==True in every frame), so it is omitted rather than re-copied.
+    (D18 emit, developer_note 2026-06-09.)"""
     model_means = {}
-    for r in records:
+    for r in list(records) + list(hma_fits):
         mc = r["marginal_cells"]
         if mc:
             for (d, s), info in mc.items():
                 model_means[(r["classification"], r["endpoint"], d, s)] = info["mean"]
 
     strat_names = [s for s, _ in STRATEGIES]
+    # (frame, day_types to emit, classification key). The 3 NMA frames emit NMA + CE>0; the HMA
+    # frame emits only its CE>=3/BE>=3 cells (CE>0 already present, byte-identical).
+    sections = [(frames[cls_label], [NMA_LABEL, COMPARATOR_LABEL], cls_label)
+                for _flag, cls_label in CLASSIFICATIONS]
+    sections.append((hma_frames[HIGH_MA_LABEL], [HIGH_MA_LABEL], HIGH_MA_LABEL))
+
     rows = []
-    for nma_flag, cls_label in CLASSIFICATIONS:
-        frame = frames[cls_label]
+    for frame, day_types, cls_label in sections:
         for col, ep_label in ENDPOINTS:
-            for d in [NMA_LABEL, COMPARATOR_LABEL]:
+            for d in day_types:
                 for s in strat_names:
                     cell = frame[(frame[DAY_TYPE_COL] == d) & (frame[STRATEGY_COL] == s)]
                     per_user = cell.groupby("_userId")[col].mean().dropna()
@@ -552,7 +568,7 @@ def run(
     # The LMM interaction fits are the slow step; figure 8.2c needs them, the tables need them, but
     # figures 8.2a/8.2d don't — so fit only when tables run OR 8.2c is among the rendered figures.
     renders_8_2c = (not figs_filter) or (figs_filter in "8_2c")
-    fits = hma_fits = None
+    fits = hma_fits = hma_frames = None
     if not figures_only or renders_8_2c:
         fits = fit_interaction_models(frames, nma_stats)
         # Appendix §12.2: high meal-announcement (CE>=3/BE>=3) vs CE>0 × strategy interaction — same
@@ -569,7 +585,7 @@ def run(
         table_b = build_table_8_2b(fits)
         print(table_b.to_string(index=False))
         table_b.to_csv(os.path.join(output_dir, "table_8_2b_interaction.csv"), index=False)
-        build_table_8_2a(frames, fits).to_csv(
+        build_table_8_2a(frames, fits, hma_frames, hma_fits).to_csv(
             os.path.join(output_dir, "table_8_2a_marginal_cells.csv"), index=False)
         build_table_8_2b(hma_fits).to_csv(
             os.path.join(output_dir, "table_12_2a_high_engagement_interaction.csv"), index=False)

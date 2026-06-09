@@ -42,6 +42,40 @@ def test_table_8_2a_nma_autobolus_tir():
     assert abs(recompute - published) < 0.05
 
 
+def test_table_8_2a_hma_tir():
+    """Table 8.2a HMA section (CE>=3/BE>=3 × strategy, TIR), Method-A observed mean — the 5th
+    day type emitted per D18 / developer_note 2026-06-09. Restricts HMA to CE0-contributing users
+    (= restrict_comparator zeroing HIGH_MA_FLAG for non-CE0 users) so the recompute matches."""
+    output_csv = os.path.join(OUT, "analysis_8_2/all/table_8_2a_marginal_cells.csv")
+    if not os.path.exists(SNAPSHOT):
+        pytest.skip(f"snapshot not on disk: {SNAPSHOT}")  # the recompute input (git-ignored) — prerequisite, not a failure
+    if not os.path.exists(output_csv):
+        pytest.fail(f"output table missing: {output_csv} — regenerate the analysis outputs from the snapshot")
+
+    df = pd.read_csv(SNAPSHOT, usecols=["_userId", "day_eligible", "user_eligible", "age_years", "in_ce0_be_inf", "in_ce_ge3_be_ge3", "delivery_strategy", "tir"])
+
+    # Eligible days of eligible users (= prepare_day_level), then cohort=all with the §6 age floor:
+    # keep age >= 6 OR unknown age (= filter_cohort). Recomputed inline, not imported from the pipeline.
+    e = df[(df["day_eligible"] == True) & (df["user_eligible"] == True)]   # noqa: E712
+    e = e[e["age_years"].isna() | (e["age_years"] >= 6)]
+
+    # HMA (CE>=3/BE>=3) ⊂ CE>0; restrict_comparator keeps only CE0-contributing users.
+    ce0 = set(e.loc[e["in_ce0_be_inf"] == True, "_userId"])  # noqa: E712
+    t = pd.read_csv(output_csv)
+    for strat in ("autobolus_on", "temp_basal_only"):
+        cell = e[(e["in_ce_ge3_be_ge3"] == True) & (e["_userId"].isin(ce0)) & (e["delivery_strategy"] == strat)]  # noqa: E712
+        recompute = cell.groupby("_userId")["tir"].mean().mean()
+        published = float(
+            t[
+                (t["classification"] == "CE>=3/BE>=3")
+                & (t["day_type"] == "CE>=3/BE>=3")
+                & (t["delivery_strategy"] == strat)
+                & (t["endpoint"] == "tir")
+            ]["observed_mean"].iloc[0]
+        )
+        assert abs(recompute - published) < 0.05
+
+
 def test_table_8_2b_interaction_tir():
     """Table 8.2b interaction LMM (broadest arm), refit independently."""
     pytest.importorskip("statsmodels")

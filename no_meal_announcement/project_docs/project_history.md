@@ -329,6 +329,15 @@ Report-editor edit in RPT-1008 (.docx); **no analysis/pipeline change**. Table 8
 - **Source:** `table_8_2a_marginal_cells.csv` (`observed_display`) — already carried all endpoints, so the table was rebuilt in the docx with no new outputs. 12 rows (3 nested NMA classifications × {NMA,CE>0}×{AB,TB}), 11 columns (Day Classification, Day × Strategy, User-days (n), + 8 endpoints); portrait 7.5 pt, value cells stacked mean / ±SD. Edit-tracking: 7 added endpoint columns GREEN; caption + List-of-Tables reworded BLUE. Not a methodology change → no decisions.md entry.
 - **OPEN (MJC):** Table 8.2b is still **TIR-only** → the interaction test is no longer tabulated for the other 7 endpoints (data exist in `table_8_2b_interaction.csv`). Pending decision to expand 8.2b to all endpoints (report-side, no pipeline change) or leave TIR-only by design. Editor-facing detail in `report_editor_note.md` §7 (§8.2); todo.md → Report (RPT-1008).
 
+## 2026-06-09 — §8.2 Table 8.2a emits the HMA (CE≥3/BE≥3) marginal cells (pipeline; unblocks the all-5-day-type table)
+
+Follow-on to the report-side 8.2a restructure above (report-editor ask in `developer_note.md` §1). `table_8_2a_marginal_cells.csv` previously emitted only `day_type ∈ {NMA, CE>0}`, so the report's descriptive Table 8.2a could not render the 5th day type (HMA). Now it does. **Provenance: D18 update (2026-06-09).**
+
+- **Change:** generalized `build_table_8_2a` to loop the §12.2 HMA frame/fit alongside the 3 NMA fits and append a **`classification="CE>=3/BE>=3"` / `day_type="CE>=3/BE>=3"` section** — CE≥3/BE≥3 × {temp_basal_only, autobolus_on} × 8 endpoints, same 11 columns. 96 → **112 rows/cohort** (16 HMA rows appended; the 96 NMA/CE>0 rows byte-identical — no value drift). An **emit, not a new computation**: the per-user HMA means already existed in-run (figure 8.2a violins + the §12.2 fit). The HMA section omits its CE>0 cells (the same canonical `in_ce_gt0` set already present, triplicated, under each NMA classification).
+- **User-set confirmed (the note's ⚠️):** HMA cells use the **same set figure 8.2a's HMA violins use** (`pdf[in_ce_ge3_be_ge3]==True`, comparator-restricted to CE=0-contributing users) — table ↔ figure agree by construction; the HMA frame's implied CE>0 is identical to the full-set copy (CE>0×AB 73.0±13.3 / n_days 382,044 / n_users 1,179; CE>0×TB 69.7±17.2 / n_days 115,105 / n_users 849). Observed HMA TIR (all cohort): AB 72.1±14.1 (n_users 1,148 / 274,518 days), TB 69.6±17.1 (n_users 756 / 83,327 days).
+- **Tests:** new `testing/cross_checks/test_crosscheck_8_2.py::test_table_8_2a_hma_tir` (independent snapshot recompute) + an HMA cell assertion in `testing/integration/run_test_analysis_8_2.py`. Non-Spark suite green (129 passed); integration runners Spark-only (run on Databricks).
+- **Regenerated** adult/pediatric/all. Report can now rebuild 8.2a as the 10-row (5 day types × {AB,TB}) descriptive table.
+
 ## Pending / To do (deferred — not yet done)
 
 - **FDA-pipeline `_userId` pseudonymization** — the FDA exports still write raw `_userId`; apply the D16 treatment there too.

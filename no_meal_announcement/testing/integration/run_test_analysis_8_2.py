@@ -40,6 +40,8 @@ for _p in (_here, _repo_root, _analysis_dir):
         sys.path.insert(0, _p)
 
 from utils.data_loader import (  # noqa: E402
+    HIGH_MA_FLAG,
+    HIGH_MA_LABEL,
     STRATEGY_COL,
     filter_cohort,
     prepare_day_level,
@@ -132,6 +134,17 @@ def _assert_recovers_interaction_design(spark, tables, raw_pdf, tmp_dir):
             exp = rederive(arm_flag, strat)
             got = float(row.iloc[0]["observed_mean"])
             assert abs(got - exp) < 0.5, f"8.2a {day_type}/{strat} observed_mean {got:.2f} vs re-derived {exp:.2f}"
+
+    # The 5th day type — HMA (CE>=3/BE>=3) — is emitted as its own section (D18 emit,
+    # developer_note 2026-06-09). `elig` is comparator-restricted, which zeros HIGH_MA_FLAG for
+    # non-CE0 users, so the same rederive() recovers the HMA cells (same set fig 8.2a's HMA violins use).
+    sub_hma = t2a[(t2a["classification"] == HIGH_MA_LABEL) & (t2a["endpoint"] == "tir")]
+    for strat in STRATS:
+        row = sub_hma[(sub_hma["day_type"] == HIGH_MA_LABEL) & (sub_hma["delivery_strategy"] == strat)]
+        assert len(row) == 1, f"missing 8.2a HMA cell {strat}"
+        exp = rederive(HIGH_MA_FLAG, strat)
+        got = float(row.iloc[0]["observed_mean"])
+        assert abs(got - exp) < 0.5, f"8.2a HMA/{strat} observed_mean {got:.2f} vs re-derived {exp:.2f}"
 
     # ── C. interaction LMM CONVERGES on the broadest arm + recovers the negative design ──
     # The baked-in interaction is PROVEN in A (per-user, design-recovery). The aggregate LMM also

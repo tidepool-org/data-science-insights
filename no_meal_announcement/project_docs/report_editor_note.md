@@ -186,6 +186,16 @@ HMA renders in **bronze** (#9c6b30) everywhere, matching §8.1's 5th arm.
     choice). Edit-tracking: the **7 added endpoint columns are GREEN**; TIR + the label/n columns stay
     black; caption + List-of-Tables entry reworded (BLUE) → "Marginal cell means by day classification and
     delivery strategy, all glycemic endpoints …".
+  - **HMA (CE≥3/BE≥3) marginal cells now emitted — 8.2a can become the 10-row all-5-day-type table
+    (2026-06-09, pipeline change; answers `developer_note.md` §1).** `table_8_2a_marginal_cells.csv`
+    gained a **`classification="CE>=3/BE>=3"` / `day_type="CE>=3/BE>=3"` section** (CE≥3/BE≥3 × {TB, AB}
+    × all 8 endpoints) — **same 11 columns**, 96 → **112 rows/cohort**, regenerated adult/pediatric/all.
+    The 96 NMA/CE>0 rows are byte-identical to the prior run (no value drift). So 8.2a can now render
+    **all 5 day types** (3 nested NMA + CE>0 *once* + CE≥3/BE≥3) × {AB, TB} = 10 descriptive cells:
+    pull the HMA rows from the new section and **collapse the triplicated CE>0** to one canonical row
+    (CE>0 is byte-identical across the 3 classifications — single canonical comparator, confirmed). The
+    HMA section deliberately omits its CE>0 cells (they are that same canonical set). Interaction test
+    stays in 8.2b. Day-type key → label: `CE>=3/BE>=3` → "CE≥3 / BE≥3" (§2 contract).
   - ⚠️ **OPEN (pending MJC) — Table 8.2b is still TIR-only.** With the interaction columns gone from 8.2a,
     the day × strategy interaction test is now tabulated **for TIR only**; the interaction coef/CI/p for the
     other 7 endpoints exist in `table_8_2b_interaction.csv` (all 8 endpoints) but appear nowhere in the
