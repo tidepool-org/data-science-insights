@@ -19,6 +19,7 @@ import traceback
 
 
 TESTS = [
+    "test_analysis_6_3a.py",
     "test_analysis_8_1.py",
     "test_analysis_8_2.py",
     "test_analysis_8_3.py",

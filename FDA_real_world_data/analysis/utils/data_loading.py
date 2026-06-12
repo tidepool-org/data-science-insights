@@ -37,8 +37,31 @@ COHORT_WHERE = (
     f"AND (tb_to_ab_age_years >= {MIN_AGE} OR tb_to_ab_age_years IS NULL)"
 )
 
+# Human-readable Loop version for funnel-stage descriptions (e.g. "3.4.0").
+_MAX_LOOP_VERSION_STR = (
+    f"{MAX_LOOP_VERSION_INT // 1_000_000}"
+    f".{MAX_LOOP_VERSION_INT // 1_000 % 1_000}"
+    f".{MAX_LOOP_VERSION_INT % 1_000}"
+)
 
-def load_transition_endpoints(spark, suffix: str = "") -> pd.DataFrame:
+
+def _record_funnel(funnel, stage, description, df):
+    """Append a cohort-flow snapshot (Table 6.3a) to `funnel`; no-op if None.
+
+    Counts distinct users and distinct (user, seg1_start) segments present
+    in `df` at this point in the filter chain.
+    """
+    if funnel is None:
+        return
+    funnel.append({
+        "stage": stage,
+        "description": description,
+        "n_users": int(df["_userId"].nunique()),
+        "n_segments": int(df[SEGMENT_KEY].drop_duplicates().shape[0]),
+    })
+
+
+def load_transition_endpoints(spark, suffix: str = "", funnel=None) -> pd.DataFrame:
     """
     Load glycemic endpoints for the TB→AB transition analysis, apply
     per-segment filters, and pivot to a wide DataFrame with one row per user.
@@ -47,6 +70,11 @@ def load_transition_endpoints(spark, suffix: str = "") -> pd.DataFrame:
     valid_transition_segments / glycemic_endpoints_transition /
     valid_transition_guardrails; "_box080" reads the parallel 0.80-box build
     (see exploratory/run_transition_variant.py).
+
+    `funnel`, if a list, accumulates a user/segment-count snapshot after each
+    filter step — the analysis-side stages of the Table 6.3a cohort flow
+    (analysis_6-3a_cohort_flow.py). Counting here keeps the funnel on the
+    exact code path the §8 analyses use.
 
     Steps:
     1. Load glycemic_endpoints_transition
@@ -74,6 +102,13 @@ def load_transition_endpoints(spark, suffix: str = "") -> pd.DataFrame:
         if col not in non_numeric_cols:
             endpoints[col] = pd.to_numeric(endpoints[col], errors="coerce")
 
+    _record_funnel(
+        funnel, "Glycemic endpoints computed",
+        "Segments with glycemic endpoints computed for ≥1 of the two 14-day "
+        "halves (≥1 CGM reading in the half)",
+        endpoints,
+    )
+
     # Cohort filter: Loop-version predicate + age ≥6 (per indication). Version
     # takes precedence — if known, keep iff < MAX_LOOP_VERSION_INT; if unknown,
     # fall back to seg2_end < MAX_SEG2_END_DATE. Users with unknown DOB
@@ -89,9 +124,25 @@ def load_transition_endpoints(spark, suffix: str = "") -> pd.DataFrame:
     endpoints = endpoints[seg_keys.isin(allowed_keys)].copy()
     print(f"  Cohort filter kept {len(allowed_keys)} segments")
 
+    _record_funnel(
+        funnel, "Analysis cohort gate",
+        f"Known Loop version < {_MAX_LOOP_VERSION_STR}, or unknown version and "
+        f"segment ending before {MAX_SEG2_END_DATE}; age ≥ {MIN_AGE} y at "
+        f"segment start or unknown",
+        endpoints,
+    )
+
     # Per-segment-half CBG coverage filter. Both halves must pass; the inner join
     # below enforces that by dropping any (user, seg1_start) with only one half.
     endpoints = endpoints.loc[endpoints["cbg_count"] >= MIN_CBG_COUNT].copy()
+
+    _record_funnel(
+        funnel, "CGM coverage filter",
+        f"≥ {MIN_COVERAGE:.0%} of expected 5-minute CGM samples in the 14-day "
+        f"half (≥ {MIN_CBG_COUNT} readings); segments keep counting here while "
+        f"≥1 half survives",
+        endpoints,
+    )
 
     # Per-segment guardrail exclusion.
     guardrails = (
@@ -110,6 +161,12 @@ def load_transition_endpoints(spark, suffix: str = "") -> pd.DataFrame:
     endpoints = endpoints[~seg_keys.isin(bad_segments)].copy()
     print(f"  Excluded {len(bad_segments)} segments with guardrail violations")
 
+    _record_funnel(
+        funnel, "Guardrail exclusion",
+        "No pump-settings guardrail violation during the segment",
+        endpoints,
+    )
+
     # Pivot per-segment; inner join ensures both halves survived.
     seg1 = endpoints[endpoints["segment"] == SEG1].set_index(SEGMENT_KEY).add_suffix("_seg1")
     seg2 = endpoints[endpoints["segment"] == SEG2].set_index(SEGMENT_KEY).add_suffix("_seg2")
@@ -118,7 +175,21 @@ def load_transition_endpoints(spark, suffix: str = "") -> pd.DataFrame:
 
     # Best surviving segment per user: lowest segment_rank.
     wide = wide.sort_values("segment_rank_seg1").reset_index()
+
+    _record_funnel(
+        funnel, "Paired TB/AB halves",
+        "Both the temp-basal and autobolus 14-day halves pass all per-half "
+        "filters",
+        wide,
+    )
+
     wide = wide.drop_duplicates(subset="_userId", keep="first")
+
+    _record_funnel(
+        funnel, "Final transition cohort",
+        "One segment per user — lowest segment_rank among survivors",
+        wide,
+    )
 
     return wide
 

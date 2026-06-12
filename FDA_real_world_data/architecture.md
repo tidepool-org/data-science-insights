@@ -6,7 +6,9 @@ Analyses **§8-1 through §8-8 implemented** across the transition (TB→AB), st
 
 The **TB→AB validity box is now configurable end-to-end**: `export_valid_transition_segments.py` takes `autobolus_low` / `autobolus_high` `run()` params (defaults 0.30 / 0.70 → each side > 0.70), the analysis loaders + transition analyses (8-1/2/3/4/5/8) take a `suffix`, and `exploratory/run_transition_variant.py` rebuilds the box-affected subtree into parallel `{suffix}` tables + `outputs/analysis_8_X{suffix}/` folders to evaluate a different box without touching production (default 0.80 box / `_box080`). 8-6/8-7 (stable-AB / durability) are box-independent and untouched.
 
-**Next** (full list in "Pending / In Progress" at the bottom of `project_history.md`): guardrail values are placeholders — need FDA-confirmed limits; wire day-level classification (`loop_recommendation_day`) into the pipeline YAML + downstream; evaluate combined `loop_recommendations` vs per-method tables and compare dosingDecision-vs-HealthKit coverage; finish the argparse/param refactor on `compute_glycemic_endpoints.py` (the validity-box half of `export_valid_transition_segments.py` is done); expand the minimal `analysis_8-6`.
+**Report §6.3 sample-information tables**: `analysis/analysis_6-3a_cohort_flow.py` emits Table 6.3a (cohort-flow funnel, BDDP sample → final transition cohort) for any build via `--suffix`, writing `outputs/cohort_6_3{suffix}/table_6_3a_cohort_flow.csv`. Box-independent upstream stages are re-derived in SQL (same window logic as the staging script); the validity-box stage is read from `valid_transition_segments{suffix}`; analysis-side stages come from `load_transition_endpoints(funnel=...)` — the same code path the §8 analyses use, so the final row matches their cohort N exactly. Requested in `developer_note.md` (2026-06-12); Table 6.3b (demographic breakdown) still pending.
+
+**Next** (full list in "Pending / In Progress" at the bottom of `project_history.md`): Table 6.3b (demographic breakdown of the transition cohort) for the box080-primary report copy, plus 0.90-build §6.3 parity tables (developer_note.md 2026-06-12); guardrail values are placeholders — need FDA-confirmed limits; wire day-level classification (`loop_recommendation_day`) into the pipeline YAML + downstream; evaluate combined `loop_recommendations` vs per-method tables and compare dosingDecision-vs-HealthKit coverage; finish the argparse/param refactor on `compute_glycemic_endpoints.py` (the validity-box half of `export_valid_transition_segments.py` is done); expand the minimal `analysis_8-6`.
 
 ## Directory Structure
 
@@ -29,6 +31,7 @@ FDA_real_world_data/
 │   └── compute_glycemic_endpoints.py            — Compute TIR/TBR/TAR/CV/hypo events
 │
 ├── analysis/
+│   ├── analysis_6-3a_cohort_flow.py — Table 6.3a (RPT-1001 §6.3): stage-by-stage cohort-flow funnel, BDDP sample → final transition cohort; box-independent upstream stages re-derived in SQL, validity-box stage read from valid_transition_segments{suffix}, analysis-side stages via load_transition_endpoints(funnel=...); writes outputs/cohort_6_3{suffix}/
 │   ├── analysis_8-1_*.py  — Comparative TB vs AB performance (paired t-test on TIR/TBR/TAR)
 │   ├── analysis_8-2_*.py  — Glycemic outcomes during preset overrides; Tables 8.2a (sample chars), 8.2b (TB vs initial AB), 8.2c (TB vs second AB, days 14–28); each endpoint table is emitted at primary (preset-name) and sensitivity (preset+exact-params) grain. Figures 8.2a (paired diffs, primary 8.2b dataset), 8.2b (anonymized example glucose traces). Hypo events reported as rate/hour of preset exposure
 │   ├── analysis_8-3_*.py  — Preset parameter changes (scale factors)
@@ -40,7 +43,7 @@ FDA_real_world_data/
 │   ├── plot_stable_ab_sample_size.py — CONSORT chart, sample size heatmap, AB% distribution
 │   └── utils/
 │       ├── constants.py    — Font sizes, color schemes, STARTING_GLUCOSE_LOW/HIGH (70/180) shared across 8-2 and 8-3
-│       ├── data_loading.py — load_transition_endpoints() with per-segment coverage + guardrail filtering, cohort filter (`COHORT_WHERE` = MAX_LOOP_VERSION_INT / MAX_SEG2_END_DATE + age ≥ MIN_AGE), and best-surviving-segment selection per user. `COHORT_WHERE` is the single source of truth for the transition-cohort predicate; analysis_8-3 / 8-4 import it. load_override_endpoints() returns per-activation rows from glycemic_endpoints_override after cohort + guardrail + starting-glucose filters; aggregate_override_endpoints(activations, ab_segment, grain) collapses to (user, preset_name) primary or (user, preset, params) sensitivity grain, computes hypo rate as total events / total exposure hours, and pivots to wide TB-vs-AB form. Both loaders take `suffix=""` to read parallel `{suffix}` source tables (used by the run_transition_variant driver)
+│       ├── data_loading.py — load_transition_endpoints() with per-segment coverage + guardrail filtering, cohort filter (`COHORT_WHERE` = MAX_LOOP_VERSION_INT / MAX_SEG2_END_DATE + age ≥ MIN_AGE), and best-surviving-segment selection per user. `COHORT_WHERE` is the single source of truth for the transition-cohort predicate; analysis_8-3 / 8-4 import it. load_override_endpoints() returns per-activation rows from glycemic_endpoints_override after cohort + guardrail + starting-glucose filters; aggregate_override_endpoints(activations, ab_segment, grain) collapses to (user, preset_name) primary or (user, preset, params) sensitivity grain, computes hypo rate as total events / total exposure hours, and pivots to wide TB-vs-AB form. Both loaders take `suffix=""` to read parallel `{suffix}` source tables (used by the run_transition_variant driver). load_transition_endpoints also takes `funnel=None` — a list that, when supplied, accumulates a user/segment-count snapshot after each filter step (the analysis-side stages of Table 6.3a)
 │       └── statistics.py   — Paired t-test, Wilcoxon, ANOVA, Tukey, Dunn's, p-value formatting; shapiro + wilcoxon short-circuit to NaN when input has <2 distinct values (avoids scipy zero-range warnings)
 │
 ├── testing/
@@ -48,7 +51,7 @@ FDA_real_world_data/
 │   ├── staging_test_helpers.py    — setup_test_table(), read_test_output(), assert_row_count(), make_loop_recs()
 │   ├── create_test_loop_data.py   — Synthetic loop data generator
 │   ├── data_staging/              — Paired tests for every data_staging/ script (13 files)
-│   ├── integration/               — End-to-end tests: synthetic BDDP → all staging scripts → analysis. build_synthetic_bddp.py emits a deterministic BDDP fixture with explicit DDL schema (defeats Databricks Connect's all-None-column drop) covering 20 archetypes (transition / multi-preset / carb-change / demographic / stable-AB / durability / outlier-filter cohorts); run_pipeline.py chains every staging script against the fixture, exposes RedirectingSpark to swap prod table names → `test_*` equivalents at analysis time, `get_spark()` to bridge notebook/Databricks-Connect contexts, and `session()` to call `run()` before a with-block (no automatic teardown — tables persist across runs via the idempotency guard); archetypes.md catalogs the planned synthetic users; test_analysis_8_1.py through test_analysis_8_8.py exercise each analysis; run_all_tests.py sequences them all. Run on Databricks.
+│   ├── integration/               — End-to-end tests: synthetic BDDP → all staging scripts → analysis. build_synthetic_bddp.py emits a deterministic BDDP fixture with explicit DDL schema (defeats Databricks Connect's all-None-column drop) covering 21 archetypes (transition / multi-preset / carb-change / demographic / stable-AB / durability / outlier-filter / day-undercoverage cohorts); run_pipeline.py chains every staging script against the fixture, exposes RedirectingSpark to swap prod table names → `test_*` equivalents at analysis time, `get_spark()` to bridge notebook/Databricks-Connect contexts, and `session()` to call `run()` before a with-block (no automatic teardown — tables persist across runs via the idempotency guard); archetypes.md catalogs the planned synthetic users; test_analysis_6_3a.py plus test_analysis_8_1.py through test_analysis_8_8.py exercise each analysis; run_all_tests.py sequences them all. Run on Databricks.
 │   └── simulation/                — Tests for simulation/export/ (2 files; build_scenario_json pure-Python + export_single_user_day unit + Spark TZ-shift)
 │
 ├── simulation/
@@ -71,7 +74,7 @@ FDA_real_world_data/
     ├── autobolus_healthkit.sql            — Exploratory: parse HealthKit metadata for AB/TB classification
     ├── isf_for_valid_transition.py        — Histogram of ISF (mg/dL/U) across all pump-settings schedule entries during valid TB→AB transitions
     ├── transition_segment_score_separation.sql — Segment-score separation of the rank-1 "used" segments vs the candidate pool; cohort impact of tightening the validity box (carries the §8-1 coverage/guardrail/both-halves gates)
-    └── run_transition_variant.py          — Driver: switch the validity box (`--suffix`/`--autobolus-low`/`--autobolus-high`/`--skip-analysis`), rebuild the box-affected transition subtree into parallel `{suffix}` tables (branch-from-box: reuses production loop_cbg/bddp), and run analyses 8-1/2/3/4/5/8 into `outputs/analysis_8_X{suffix}/` (default 0.80 box / `_box080`)
+    └── run_transition_variant.py          — Driver: switch the validity box (`--suffix`/`--autobolus-low`/`--autobolus-high`/`--skip-analysis`), rebuild the box-affected transition subtree into parallel `{suffix}` tables (branch-from-box: reuses production loop_cbg/bddp), and run the 6-3a cohort flow + analyses 8-1/2/3/4/5/8 into `outputs/*{suffix}/` (default 0.80 box / `_box080`)
 ```
 
 ## Pipeline DAG
@@ -192,6 +195,7 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 | Carb extraction | `export_carbohydrates_from_transitions.py` |
 | Statistical tests | `analysis/utils/statistics.py` |
 | Data loading + filtering | `analysis/utils/data_loading.py` |
+| Table 6.3a cohort-flow funnel (any build) | `analysis/analysis_6-3a_cohort_flow.py` |
 | Pipeline orchestration | `fda_analysis_pipeline.yml` |
 | Test runner | `testing/run_all_tests.py` |
 | Test helpers | `testing/staging_test_helpers.py` |

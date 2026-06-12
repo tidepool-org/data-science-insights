@@ -4,6 +4,25 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-06-12: Table 6.3a cohort-flow funnel (report §6.3, any validity-box build)
+
+The RPT-1001 report editor's box080-primary report copy needs the §6.3 sample-information tables regenerated per build (developer_note.md, 2026-06-12); these tables had never been produced by tracked code. This adds the Table 6.3a (Cohort Flow) generator; Table 6.3b (demographic breakdown) is still pending.
+
+### New script
+- [analysis/analysis_6-3a_cohort_flow.py](analysis/analysis_6-3a_cohort_flow.py): stage-by-stage funnel from the BDDP sample to the final TB→AB transition cohort, `--suffix`-parameterized like the §8 analyses; writes `outputs/cohort_6_3{suffix}/table_6_3a_cohort_flow.csv` (columns: stage, description, n_users, n_segments). Stage sourcing keeps duplication minimal:
+  - Box-independent upstream stages (BDDP sample → users with Loop automated dosing → candidate 28-day windows → ≥70% day-coverage gate) are re-derived in SQL with the same sliding-window logic as `export_valid_transition_segments.py`; identical for every build.
+  - The validity-box stage is read straight from `valid_transition_segments{suffix}`, so the script never needs the box thresholds a build was staged with.
+  - Analysis-side stages come from `load_transition_endpoints(funnel=...)`, so the final row is the same cohort N the §8 analyses use by construction.
+  - A monotonicity assert (n_users can only shrink down the funnel) catches drift between the re-derived upstream SQL and the staged tables.
+
+### Loader instrumentation
+- [analysis/utils/data_loading.py](analysis/utils/data_loading.py): `load_transition_endpoints` gains `funnel=None` — a list that, when supplied, accumulates a `{stage, description, n_users, n_segments}` snapshot after each filter step (endpoints loaded → cohort gate → CGM coverage → guardrails → paired halves → best segment per user). Default `None` is a no-op, so the §8 analyses are untouched.
+
+### Variant driver + test
+- [exploratory/run_transition_variant.py](exploratory/run_transition_variant.py): `analysis_6-3a_cohort_flow.py` added to `ANALYSES` (first, so the funnel characterizes the variant cohort before the analyses run on it).
+- [testing/integration/test_analysis_6_3a.py](testing/integration/test_analysis_6_3a.py): runs 6-3a against the synthetic BDDP fixture and pins every stage exactly — upstream stages against counts derived from the fixture tables, the segments stage against the fixture segments table, and the final stage against an independently loaded `load_transition_endpoints` cohort (plus the 8-1 containment archetypes). Registered in `testing/integration/run_all_tests.py`'s `TESTS` list.
+- [testing/integration/build_synthetic_bddp.py](testing/integration/build_synthetic_bddp.py): new `int_user_25` (`_archetype_day_undercoverage`) — Loop dosing on alternating days only, so it reaches "Candidate 28-day window" but fails the 70% day-coverage gate; the one archetype that separates those two funnel stages (an over-admitting drift in the re-derived window SQL now fails the test rather than passing silently). TB-only and CBG-free, so no other analysis cohort sees it. **Note:** the fixture changed — run `run_pipeline.teardown(spark)` once before the next integration run so the idempotency short-circuit doesn't reuse the stale 20-user tables.
+
 ## 2026-06-12: TB→AB validity box made configurable end-to-end + parallel-variant driver
 
 The segment-validity box threshold is now a parameter through the whole transition family, so the cohort can be re-run under a different box in parallel tables and output folders without disturbing production. Motivated by a sensitivity check (tighten the symmetric box from 0.70 to 0.80, i.e. raise the implied minimum separation `pct_seg1 + pct_seg2 − 1` from 0.40 to 0.60).
@@ -809,6 +828,7 @@ Items #2 (spark=spark house style) left alone; #5 (`DISTINCT` carbs dedup) decla
 
 _Update this section as work continues._
 
+- Table 6.3b (Demographic Breakdown of the TB→AB transition cohort) for the box080-primary report copy — Table 6.3a (cohort flow) landed 2026-06-12 (`analysis/analysis_6-3a_cohort_flow.py`); 6.3b still needed, plus 0.90-build §6.3 parity tables as a nice-to-have (developer_note.md 2026-06-12)
 - Guardrails validation: guardrail values are placeholder ("arbitrary values for now") — need FDA-confirmed limits
 - `compute_glycemic_endpoints.py` may benefit from the same argparse/param refactor pattern applied to newer scripts (`export_valid_transition_segments.py` got its validity-box thresholds parameterized 2026-06-12, but its `__main__` still calls `run(spark)` rather than argparse)
 - `analysis_8-6` is minimal (106 lines) — may need expansion

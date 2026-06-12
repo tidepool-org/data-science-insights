@@ -26,3 +26,12 @@ Until these land, the report copy keeps the 0.70-build §6.3 tables with a highl
 they pend regeneration. Any prose Ns in §6 (e.g., N = 401) are likewise flagged, not updated.
 
 Drop the CSVs anywhere under `outputs_supplement/` (e.g., `cohort_6_3_box080/`) and I'll sync them in.
+
+> **Developer response (2026-06-12):** Table 6.3a tooling landed — `analysis/analysis_6-3a_cohort_flow.py`
+> generates the cohort-flow funnel for any build (`--suffix _box080` / `_box090`; no suffix = the 0.70
+> build, which doubles as the N = 401 validation run). CSVs come out as
+> `outputs/cohort_6_3{suffix}/table_6_3a_cohort_flow.csv` pending a Databricks run; they'll be copied to
+> `outputs_supplement/cohort_6_3_box080/` (and `_box090`) for sync. One note on terminology: the 0.80
+> build's configurable threshold is the segment-validity **box** (`autobolus_low`/`autobolus_high`), not
+> the `min_coverage` day-coverage gate — that stays 0.70 in every build; the funnel table reflects the
+> box framing. Table 6.3b (demographic breakdown) is queued next.

@@ -753,6 +753,23 @@ def _archetype_insufficient_followup(user_id="int_user_23"):
     return rows
 
 
+def _archetype_day_undercoverage(user_id="int_user_25"):
+    """Loop dosing on alternating days only (21 of 42 days, Jan 1 – Feb 11):
+    every 14-day window holds exactly 7 dosing days (7/14 = 50%, below the 70%
+    day-coverage gate in export_valid_transition_segments.py), while anchors
+    from Jan 28 onward still satisfy the 28-day observation bound. The user
+    therefore reaches the 6-3a funnel's "Candidate 28-day window" stage but
+    drops at "Day-coverage gate" — the only archetype separating those two
+    stages. Temp-basal-only and CBG-free, so the user enters no segment table
+    and no other analysis cohort (never adopts AB → invisible to 8-7's
+    eligible count)."""
+    rows = []
+    for d_idx in range(0, 42, 2):
+        day = SEG1_START + timedelta(days=d_idx)
+        rows.extend(_temp_basal_day_rows(user_id, day, n_events=10))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Top-level fixture composition
 # ---------------------------------------------------------------------------
@@ -781,6 +798,7 @@ ARCHETYPES = {
     "int_user_22": _archetype_adopt_discontinue,
     "int_user_23": _archetype_insufficient_followup,
     "int_user_24": _archetype_carb_outlier,
+    "int_user_25": _archetype_day_undercoverage,
     # TODO: int_user_07, 10, 11, 17, 18 — see archetypes.md for the full catalog.
 }
 
@@ -832,6 +850,7 @@ _DEMOGRAPHICS = {
     "int_user_22": {"gender": "M", "age_years": 30, "yld_years": 8},
     "int_user_23": {"gender": "F", "age_years": 30, "yld_years": 5},
     "int_user_24": {"gender": "M", "age_years": 30, "yld_years": 5},
+    "int_user_25": {"gender": "F", "age_years": 33, "yld_years": 7},
 }
 
 

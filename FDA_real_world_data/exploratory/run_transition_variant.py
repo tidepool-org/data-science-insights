@@ -2,10 +2,10 @@
 
 Exploratory sensitivity driver — NOT part of fda_analysis_pipeline.yml. Switches
 the TB→AB segment-validity box to a different threshold, rebuilds the entire
-box-affected subtree into parallel `{suffix}` tables, and runs every transition
-analysis (8-1, 8-2, 8-3, 8-4, 8-5, 8-8) into parallel `outputs/analysis_8_X{suffix}/`
-folders. Production tables/outputs and the box-independent branches (8-6 stable,
-8-7 durability) are never touched.
+box-affected subtree into parallel `{suffix}` tables, and runs the §6.3 cohort
+flow plus every transition analysis (8-1, 8-2, 8-3, 8-4, 8-5, 8-8) into parallel
+`outputs/*{suffix}/` folders. Production tables/outputs and the box-independent
+branches (8-6 stable, 8-7 durability) are never touched.
 
 "Branch from the box": everything upstream of valid_transition_segments
 (loop_recommendations, loop_cbg, bddp) is box-independent, so it is REUSED from
@@ -59,7 +59,10 @@ DEFAULT_AUTOBOLUS_LOW = 0.20    # seg1 temp-basal floor = 1 - 0.20 = 0.80
 DEFAULT_AUTOBOLUS_HIGH = 0.80   # seg2 autobolus floor = 0.80
 
 # Transition analyses to re-run on the variant cohort (8-6/8-7 are box-independent).
+# 6-3a first: the cohort-flow funnel characterizes the variant cohort the
+# analyses then run on.
 ANALYSES = [
+    "analysis_6-3a_cohort_flow.py",
     "analysis_8-1_comparative_clinical_performance_and_safety_of_autobolus_vs_temporary_basal_dosing_strategies.py",
     "analysis_8-2_glycemic_outcomes_during_preset_activation.py",
     "analysis_8-3_preset_parameter_changes.py",
@@ -144,7 +147,7 @@ def run(spark, suffix=DEFAULT_SUFFIX,
         return
 
     for filename in ANALYSES:
-        print(f"[variant{suffix}] running {filename}  (outputs/analysis_8_X{suffix}/)")
+        print(f"[variant{suffix}] running {filename}  (outputs/*{suffix}/)")
         _run_analysis(spark, filename, suffix)
 
     print(f"[variant{suffix}] done.")
