@@ -17,6 +17,8 @@ MIN_CBG_COUNT = int(SEGMENT_DAYS * SAMPLES_PER_DAY * MIN_COVERAGE)
 
 SEGMENT_KEY = ["_userId", "tb_to_ab_seg1_start"]
 
+CATALOG = "dev.fda_510k_rwd"
+
 # Cohort eligibility:
 #   - If Loop version is known, keep segments below this version_int.
 #   - If Loop version is unknown, fall back to segments ending before this date.
@@ -36,10 +38,15 @@ COHORT_WHERE = (
 )
 
 
-def load_transition_endpoints(spark) -> pd.DataFrame:
+def load_transition_endpoints(spark, suffix: str = "") -> pd.DataFrame:
     """
     Load glycemic endpoints for the TB→AB transition analysis, apply
     per-segment filters, and pivot to a wide DataFrame with one row per user.
+
+    `suffix` selects the source tables: "" (default) reads the production
+    valid_transition_segments / glycemic_endpoints_transition /
+    valid_transition_guardrails; "_box080" reads the parallel 0.80-box build
+    (see exploratory/run_transition_variant.py).
 
     Steps:
     1. Load glycemic_endpoints_transition
@@ -55,7 +62,11 @@ def load_transition_endpoints(spark) -> pd.DataFrame:
     pd.DataFrame
         Wide DataFrame with one row per _userId, paired seg1/seg2 columns.
     """
-    endpoints = spark.table("dev.fda_510k_rwd.glycemic_endpoints_transition").toPandas()
+    segments_table = f"{CATALOG}.valid_transition_segments{suffix}"
+    endpoints_table = f"{CATALOG}.glycemic_endpoints_transition{suffix}"
+    guardrails_table = f"{CATALOG}.valid_transition_guardrails{suffix}"
+
+    endpoints = spark.table(endpoints_table).toPandas()
 
     # Coerce object columns to numeric
     non_numeric_cols = {"_userId", "segment", "tb_to_ab_seg1_start"}
@@ -68,7 +79,7 @@ def load_transition_endpoints(spark) -> pd.DataFrame:
     # fall back to seg2_end < MAX_SEG2_END_DATE. Users with unknown DOB
     # (tb_to_ab_age_years IS NULL) are kept.
     allowed = (
-        spark.table("dev.fda_510k_rwd.valid_transition_segments")
+        spark.table(segments_table)
         .where(COHORT_WHERE)
         .select("_userId", "tb_to_ab_seg1_start")
         .toPandas()
@@ -84,7 +95,7 @@ def load_transition_endpoints(spark) -> pd.DataFrame:
 
     # Per-segment guardrail exclusion.
     guardrails = (
-        spark.table("dev.fda_510k_rwd.valid_transition_guardrails")
+        spark.table(guardrails_table)
         .select("_userId", "segment_start", "violation_count")
         .toPandas()
     )
@@ -112,10 +123,15 @@ def load_transition_endpoints(spark) -> pd.DataFrame:
     return wide
 
 
-def load_override_endpoints(spark) -> pd.DataFrame:
+def load_override_endpoints(spark, suffix: str = "") -> pd.DataFrame:
     """
     Load per-activation glycemic endpoints for Analysis 8-2 with cohort,
     guardrail, and starting-glucose filters applied.
+
+    `suffix` selects the source tables: "" (default) reads the production
+    glycemic_endpoints_override / valid_transition_segments /
+    valid_transition_guardrails; "_box080" reads the parallel 0.80-box build
+    (see exploratory/run_transition_variant.py).
 
     Returns one row per surviving preset activation. The validity flags
     `is_valid_name_only_seg2` and `is_valid_name_only_seg3` are kept on the
@@ -132,7 +148,11 @@ def load_override_endpoints(spark) -> pd.DataFrame:
     The name-only validity is applied later by `aggregate_override_endpoints`
     because seg2 and seg3 have separate validity flags.
     """
-    endpoints = spark.table("dev.fda_510k_rwd.glycemic_endpoints_override").toPandas()
+    endpoints_table = f"{CATALOG}.glycemic_endpoints_override{suffix}"
+    segments_table = f"{CATALOG}.valid_transition_segments{suffix}"
+    guardrails_table = f"{CATALOG}.valid_transition_guardrails{suffix}"
+
+    endpoints = spark.table(endpoints_table).toPandas()
 
     # Coerce object columns to numeric (skip the keys + boolean flags).
     non_numeric_cols = {
@@ -146,7 +166,7 @@ def load_override_endpoints(spark) -> pd.DataFrame:
 
     # Cohort filter: same predicate as load_transition_endpoints.
     allowed = (
-        spark.table("dev.fda_510k_rwd.valid_transition_segments")
+        spark.table(segments_table)
         .where("segment_rank = 1")
         .where(COHORT_WHERE)
         .select("_userId", "tb_to_ab_seg1_start")
@@ -158,7 +178,7 @@ def load_override_endpoints(spark) -> pd.DataFrame:
 
     # Guardrail-violation exclusion.
     guardrails = (
-        spark.table("dev.fda_510k_rwd.valid_transition_guardrails")
+        spark.table(guardrails_table)
         .select("_userId", "segment_start", "violation_count")
         .toPandas()
     )

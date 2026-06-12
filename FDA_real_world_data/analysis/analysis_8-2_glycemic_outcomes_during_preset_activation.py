@@ -122,23 +122,25 @@ def build_datasets(
     return result
 
 
-def load_activations(spark) -> pd.DataFrame:
+def load_activations(spark, suffix: str = "") -> pd.DataFrame:
     """
     Per-activation rows from `overrides_by_segment` with cohort + guardrail +
     starting-glucose filters applied. Used by Table 8.2a (counts and hours)
     and Figure 8.2b (glucose traces). The two `is_valid_name_only_seg{2,3}`
     flags are kept on each row so downstream code can filter for the
     appropriate segment-pair.
+
+    suffix='_box080' reads the parallel 0.80-box cohort tables.
     """
     cohort = (
-        spark.table("dev.fda_510k_rwd.valid_transition_segments")
+        spark.table(f"dev.fda_510k_rwd.valid_transition_segments{suffix}")
         .where("segment_rank = 1")
         .where(_COHORT_WHERE)
         .select("_userId", "tb_to_ab_seg1_start")
     )
 
     bad_segments = (
-        spark.table("dev.fda_510k_rwd.valid_transition_guardrails")
+        spark.table(f"dev.fda_510k_rwd.valid_transition_guardrails{suffix}")
         .withColumn(
             "violation_count_d",
             F.coalesce(F.col("violation_count").cast("double"), F.lit(0.0)),
@@ -152,7 +154,7 @@ def load_activations(spark) -> pd.DataFrame:
     cohort = cohort.join(bad_segments, on=["_userId", "tb_to_ab_seg1_start"], how="left_anti")
 
     activations = (
-        spark.table("dev.fda_510k_rwd.overrides_by_segment")
+        spark.table(f"dev.fda_510k_rwd.overrides_by_segment{suffix}")
         .join(cohort, on=["_userId", "tb_to_ab_seg1_start"], how="inner")
         .filter(F.col("is_starting_glucose_in_range") == True)  # noqa: E712
     )
@@ -362,14 +364,14 @@ def _select_demo_users(activations: pd.DataFrame, max_users: int = 5) -> Tuple[s
     return demo_preset, top_users
 
 
-def create_figure_8_2b(spark, activations: pd.DataFrame, output_dir: str):
+def create_figure_8_2b(spark, activations: pd.DataFrame, output_dir: str, suffix: str = ""):
     demo_preset, demo_users = _select_demo_users(activations, max_users=5)
     if not demo_users:
         print("  Figure 8.2b: no users with paired activations of any preset; skipping.")
         return
 
     cbg = (
-        spark.table("dev.fda_510k_rwd.valid_override_cbg")
+        spark.table(f"dev.fda_510k_rwd.valid_override_cbg{suffix}")
         .filter(F.col("_userId").isin(demo_users))
         .filter(F.col("overridePreset") == demo_preset)
         .filter(F.col("is_valid_name_only_seg2") == True)  # noqa: E712
@@ -448,7 +450,11 @@ def _save_table_pair(
     nonparametric.to_csv(f"{output_dir}/{stem}_nonparametric.csv", index=False)
 
 
-def run_analysis(spark, output_dir: str = OUTPUT_DIR):
+def run_analysis(spark, output_dir=None, suffix: str = ""):
+    # suffix='_box080' runs on the parallel 0.80-box cohort and writes to a
+    # parallel output dir so the production outputs aren't clobbered.
+    if output_dir is None:
+        output_dir = OUTPUT_DIR + suffix
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)
@@ -456,10 +462,10 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     print("=" * 60)
 
     print("\n1. Loading per-activation endpoints...")
-    activations_endpoints = load_override_endpoints(spark)
+    activations_endpoints = load_override_endpoints(spark, suffix=suffix)
 
     print("\n2. Loading per-activation rows for Table 8.2a + Figure 8.2b...")
-    activations = load_activations(spark)
+    activations = load_activations(spark, suffix=suffix)
     print(f"   {len(activations)} eligible activations across "
           f"{activations['_userId'].nunique()} users")
 
@@ -505,7 +511,7 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
         print("  Skipping — no eligible groups for the primary 8.2b dataset.")
 
     print("\n8. Creating Figure 8.2b (example glucose traces)...")
-    create_figure_8_2b(spark, activations, output_dir)
+    create_figure_8_2b(spark, activations, output_dir, suffix=suffix)
 
     print("\n" + "=" * 60)
     print("Analysis 8.2 Complete!")
@@ -521,9 +527,15 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     }
 
 
-def run_in_databricks(spark):
-    return run_analysis(spark)
+def run_in_databricks(spark, suffix: str = ""):
+    return run_analysis(spark, suffix=suffix)
 
 
 if __name__ == "__main__":
-    run_in_databricks(spark)  # type: ignore[name-defined]  # noqa: F821
+    import argparse
+
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--suffix", default="",
+                         help="source-table suffix, e.g. _box080 for the 0.80-box cohort")
+    _args, _ = _parser.parse_known_args()
+    run_in_databricks(spark, suffix=_args.suffix)  # type: ignore[name-defined]  # noqa: F821

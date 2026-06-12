@@ -57,9 +57,12 @@ ENDPOINTS = [
 # Data Loading
 # =============================================================================
 
-def load_data(spark) -> pd.DataFrame:
-    """Load glycemic endpoints, apply standard filters, pivot to wide."""
-    return load_transition_endpoints(spark)
+def load_data(spark, suffix: str = "") -> pd.DataFrame:
+    """Load glycemic endpoints, apply standard filters, pivot to wide.
+
+    suffix='_box080' reads the parallel 0.80-box cohort tables.
+    """
+    return load_transition_endpoints(spark, suffix=suffix)
 
 
 
@@ -451,7 +454,11 @@ def compute_non_inferiority(df: pd.DataFrame, margin: float = 5.0) -> Dict:
 # Main
 # =============================================================================
 
-def run_analysis(spark, output_dir: str = OUTPUT_DIR):
+def run_analysis(spark, output_dir=None, suffix: str = ""):
+    # suffix='_box080' runs on the parallel 0.80-box cohort and writes to a
+    # parallel output dir so the production outputs aren't clobbered.
+    if output_dir is None:
+        output_dir = OUTPUT_DIR + suffix
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)
@@ -459,7 +466,7 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     print("=" * 60)
 
     print("\n1. Loading data...")
-    df = load_data(spark)
+    df = load_data(spark, suffix=suffix)
     print(f"   {len(df)} users with paired TB→AB segments")
 
     print("\n2. Creating Table 8.1a...")
@@ -490,8 +497,14 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     return {"table_parametric": table_parametric, "table_nonparametric": table_nonparametric, "non_inferiority": ni_result, "df": df}
 
 
-def run_in_databricks(spark):
-    return run_analysis(spark)
+def run_in_databricks(spark, suffix: str = ""):
+    return run_analysis(spark, suffix=suffix)
 
 if __name__ == "__main__":
-    run_in_databricks(spark)  # type: ignore[name-defined]
+    import argparse
+
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--suffix", default="",
+                         help="source-table suffix, e.g. _box080 for the 0.80-box cohort")
+    _args, _ = _parser.parse_known_args()
+    run_in_databricks(spark, suffix=_args.suffix)  # type: ignore[name-defined]

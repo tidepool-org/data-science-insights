@@ -4,6 +4,21 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-06-12: TB→AB validity box made configurable end-to-end + parallel-variant driver
+
+The segment-validity box threshold is now a parameter through the whole transition family, so the cohort can be re-run under a different box in parallel tables and output folders without disturbing production. Motivated by a sensitivity check (tighten the symmetric box from 0.70 to 0.80, i.e. raise the implied minimum separation `pct_seg1 + pct_seg2 − 1` from 0.40 to 0.60).
+
+### Staging
+- [data_staging/export_valid_transition_segments.py](data_staging/export_valid_transition_segments.py): `autobolus_low` / `autobolus_high` (and `min_autobolus_count`) hoisted to module constants and added as `run()` params; the `params` CTE interpolates them. A `CATALOG` constant replaces the inlined catalog string. Defaults unchanged (0.30 / 0.70 → each side > 0.70), so the pipeline job is byte-for-byte the same.
+
+### Analysis loader + analyses
+- [analysis/utils/data_loading.py](analysis/utils/data_loading.py): `load_transition_endpoints` and `load_override_endpoints` gain a `suffix=""` arg selecting the source tables (`<table>{suffix}`); `CATALOG` constant added. `suffix=""` reproduces production exactly.
+- Analyses 8-1 / 8-2 / 8-3 / 8-4 / 8-5 / 8-8: `suffix` threaded through `run_in_databricks` → `run_analysis` → `load_data` and into every transition-family table read (both `spark.table(...)` and in-line `spark.sql` f-strings); `output_dir` → `OUTPUT_DIR + suffix`; a `--suffix` flag added to each entry point. 8-6/8-7 (stable-AB / durability) are box-independent — not touched.
+
+### Variant driver (exploratory)
+- [exploratory/run_transition_variant.py](exploratory/run_transition_variant.py): single driver — `--suffix` / `--autobolus-low` / `--autobolus-high` / `--skip-analysis` — that rebuilds the box-affected staging subtree into parallel `{suffix}` tables ("branch from the box": reuses production `loop_cbg` / `bddp`, leaves the stable/durability branches) by reusing each staging script's existing table-parametrized `run()`, then runs the six transition analyses into parallel `outputs/analysis_8_X{suffix}/`. Analyses are loaded by path (hyphenated filenames) via importlib; repo root resolves from `__file__` with an `FDA_RWD_ROOT` env-var fallback for notebook use. Default 0.80 box / `_box080`.
+- [exploratory/transition_segment_score_separation.sql](exploratory/transition_segment_score_separation.sql): ad-hoc query showing how the rank-1 "used" segments separate in `segment_score` from the candidate pool, and the §8-1 cohort impact of tightening the box (carries the coverage / guardrail / both-halves gates through, re-ranking inside the tighter box).
+
 ## 2026-06-08: Analysis 8-1 — 95% CI on the paired difference in Tables 8.1a / 8.1b
 
 Both Table 8.1 outputs now carry a 95% CI on the TB→AB paired difference for every endpoint.
@@ -795,7 +810,7 @@ Items #2 (spark=spark house style) left alone; #5 (`DISTINCT` carbs dedup) decla
 _Update this section as work continues._
 
 - Guardrails validation: guardrail values are placeholder ("arbitrary values for now") — need FDA-confirmed limits
-- `compute_glycemic_endpoints.py` and `export_valid_transition_segments.py` may benefit from the same argparse/param refactor pattern applied to newer scripts
+- `compute_glycemic_endpoints.py` may benefit from the same argparse/param refactor pattern applied to newer scripts (`export_valid_transition_segments.py` got its validity-box thresholds parameterized 2026-06-12, but its `__main__` still calls `run(spark)` rather than argparse)
 - `analysis_8-6` is minimal (106 lines) — may need expansion
 - Day-level classification (`loop_recommendation_day`) not yet wired into pipeline YAML or consumed by downstream scripts
 - Evaluate whether combined `loop_recommendations` (with both methods) should replace individual method tables for downstream aggregation

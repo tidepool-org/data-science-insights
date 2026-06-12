@@ -16,13 +16,27 @@ and the min/median/max daily autobolus count among AB-classified days in seg2.
 """
 
 
+CATALOG = "dev.fda_510k_rwd"
+
+# TB→AB segment-validity box, hoisted out of the inline SQL. seg1 must be
+# temp-basal-dominated and seg2 autobolus-dominated; the production box is each
+# side > 0.70 (the seg1 floor is 1 - autobolus_low). Override via run() args to
+# materialise a different box into parallel tables — see
+# exploratory/run_transition_variant.py.
+DEFAULT_AUTOBOLUS_LOW = 0.30    # max AB-fraction in seg1 → seg1 TB floor = 1 - low
+DEFAULT_AUTOBOLUS_HIGH = 0.70   # min AB-fraction required in seg2
+DEFAULT_MIN_AUTOBOLUS_COUNT = 3
+
+
 def run(
     spark,
-    output_table="dev.fda_510k_rwd.valid_transition_segments",
-    loop_recommendations_table="dev.fda_510k_rwd.loop_recommendations",
+    output_table=f"{CATALOG}.valid_transition_segments",
+    loop_recommendations_table=f"{CATALOG}.loop_recommendations",
     user_dates_table="dev.default.bddp_user_dates",
     user_gender_table="dev.default.user_gender",
-    min_autobolus_count=3,
+    min_autobolus_count=DEFAULT_MIN_AUTOBOLUS_COUNT,
+    autobolus_low=DEFAULT_AUTOBOLUS_LOW,
+    autobolus_high=DEFAULT_AUTOBOLUS_HIGH,
 ):
     spark.sql(f"""
 --begin-sql
@@ -32,8 +46,8 @@ params AS (
   SELECT
     14 AS segment_days,
     0.70 AS min_coverage,
-    0.30 AS autobolus_low,
-    0.70 AS autobolus_high
+    {autobolus_low} AS autobolus_low,
+    {autobolus_high} AS autobolus_high
 ),
 
 daily_flags AS (

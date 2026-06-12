@@ -1,10 +1,12 @@
 # FDA Real World Data — Architecture
 
-## Current state (as of 2026-05-31)
+## Current state (as of 2026-06-12)
 
 Analyses **§8-1 through §8-8 implemented** across the transition (TB→AB), stable-AB, preset-override, and adoption-durability pipelines; 8-6/8-7 use a partner-CSV handoff (`--mode export` on Databricks → partner summary CSV → `--mode figures` locally). Per-script + integration tests live under `testing/`.
 
-**Next** (full list in "Pending / In Progress" at the bottom of `project_history.md`): guardrail values are placeholders — need FDA-confirmed limits; wire day-level classification (`loop_recommendation_day`) into the pipeline YAML + downstream; evaluate combined `loop_recommendations` vs per-method tables and compare dosingDecision-vs-HealthKit coverage; apply the argparse/param refactor to `compute_glycemic_endpoints.py` / `export_valid_transition_segments.py`; expand the minimal `analysis_8-6`.
+The **TB→AB validity box is now configurable end-to-end**: `export_valid_transition_segments.py` takes `autobolus_low` / `autobolus_high` `run()` params (defaults 0.30 / 0.70 → each side > 0.70), the analysis loaders + transition analyses (8-1/2/3/4/5/8) take a `suffix`, and `exploratory/run_transition_variant.py` rebuilds the box-affected subtree into parallel `{suffix}` tables + `outputs/analysis_8_X{suffix}/` folders to evaluate a different box without touching production (default 0.80 box / `_box080`). 8-6/8-7 (stable-AB / durability) are box-independent and untouched.
+
+**Next** (full list in "Pending / In Progress" at the bottom of `project_history.md`): guardrail values are placeholders — need FDA-confirmed limits; wire day-level classification (`loop_recommendation_day`) into the pipeline YAML + downstream; evaluate combined `loop_recommendations` vs per-method tables and compare dosingDecision-vs-HealthKit coverage; finish the argparse/param refactor on `compute_glycemic_endpoints.py` (the validity-box half of `export_valid_transition_segments.py` is done); expand the minimal `analysis_8-6`.
 
 ## Directory Structure
 
@@ -14,7 +16,7 @@ FDA_real_world_data/
 ├── data_staging/                      — SQL-based data transformation scripts
 │   ├── export_loop_recommendations.py          — Count automated bolus/basal events per user-day (dosingDecision match + HealthKit metadata, both methods combined); downstream applies classification thresholds
 │   ├── export_cbg_from_loop.py                 — Extract + deduplicate CBG readings. Cohort (`loop_users`) derives from `loop_recommendations` — single source of truth for Loop-user eligibility
-│   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window, day-level counts; emits ALL valid segments per user with segment_rank; tunable min_autobolus_count threshold, default 3; tracks max Loop version and min/median/max daily AB count per seg2)
+│   ├── export_valid_transition_segments.py      — Identify TB→AB transitions (27-day sliding window, day-level counts; emits ALL valid segments per user with segment_rank; tunable min_autobolus_count threshold, default 3; validity box tunable via `autobolus_low`/`autobolus_high` run() params, default 0.30/0.70; tracks max Loop version and min/median/max daily AB count per seg2)
 │   ├── export_stable_autobolus_segments.py      — Identify 14-day stable AB periods using day-level counts from `loop_recommendations`. Emits ONE segment per user (earliest fully-AB 14-day window starting ≥28 days post-first-AB); min_autobolus_count threshold, default 3
 │   ├── export_segments_within_guardrails.py     — Validate pump settings against FDA guardrails (transition mode carries segment_rank)
 │   ├── export_autobolus_durability.py           — Track adoption + discontinuation using day-level counts from `loop_recommendations` (3-day rolling window for adoption; final 28-day window for discontinuation; terminal-dropoff path classifies users whose rolling 28-day data coverage permanently fell below 70% — but only as discontinued when `pre_dropoff_ab_pct ≤ 0.20` in the 28 days ending at `effective_last_day`; otherwise censored as still on AB); min_autobolus_count threshold, default 3
@@ -38,7 +40,7 @@ FDA_real_world_data/
 │   ├── plot_stable_ab_sample_size.py — CONSORT chart, sample size heatmap, AB% distribution
 │   └── utils/
 │       ├── constants.py    — Font sizes, color schemes, STARTING_GLUCOSE_LOW/HIGH (70/180) shared across 8-2 and 8-3
-│       ├── data_loading.py — load_transition_endpoints() with per-segment coverage + guardrail filtering, cohort filter (`COHORT_WHERE` = MAX_LOOP_VERSION_INT / MAX_SEG2_END_DATE + age ≥ MIN_AGE), and best-surviving-segment selection per user. `COHORT_WHERE` is the single source of truth for the transition-cohort predicate; analysis_8-3 / 8-4 import it. load_override_endpoints() returns per-activation rows from glycemic_endpoints_override after cohort + guardrail + starting-glucose filters; aggregate_override_endpoints(activations, ab_segment, grain) collapses to (user, preset_name) primary or (user, preset, params) sensitivity grain, computes hypo rate as total events / total exposure hours, and pivots to wide TB-vs-AB form
+│       ├── data_loading.py — load_transition_endpoints() with per-segment coverage + guardrail filtering, cohort filter (`COHORT_WHERE` = MAX_LOOP_VERSION_INT / MAX_SEG2_END_DATE + age ≥ MIN_AGE), and best-surviving-segment selection per user. `COHORT_WHERE` is the single source of truth for the transition-cohort predicate; analysis_8-3 / 8-4 import it. load_override_endpoints() returns per-activation rows from glycemic_endpoints_override after cohort + guardrail + starting-glucose filters; aggregate_override_endpoints(activations, ab_segment, grain) collapses to (user, preset_name) primary or (user, preset, params) sensitivity grain, computes hypo rate as total events / total exposure hours, and pivots to wide TB-vs-AB form. Both loaders take `suffix=""` to read parallel `{suffix}` source tables (used by the run_transition_variant driver)
 │       └── statistics.py   — Paired t-test, Wilcoxon, ANOVA, Tukey, Dunn's, p-value formatting; shapiro + wilcoxon short-circuit to NaN when input has <2 distinct values (avoids scipy zero-range warnings)
 │
 ├── testing/
@@ -67,7 +69,9 @@ FDA_real_world_data/
     ├── autobolus_false_positives.sql       — Boluses with multiple DDs within 5 seconds
     ├── autobolus_labeling_comparison.py   — Compare 3 autobolus labeling methods (subType, recommendedBolus, dosingDecision match)
     ├── autobolus_healthkit.sql            — Exploratory: parse HealthKit metadata for AB/TB classification
-    └── isf_for_valid_transition.py        — Histogram of ISF (mg/dL/U) across all pump-settings schedule entries during valid TB→AB transitions
+    ├── isf_for_valid_transition.py        — Histogram of ISF (mg/dL/U) across all pump-settings schedule entries during valid TB→AB transitions
+    ├── transition_segment_score_separation.sql — Segment-score separation of the rank-1 "used" segments vs the candidate pool; cohort impact of tightening the validity box (carries the §8-1 coverage/guardrail/both-halves gates)
+    └── run_transition_variant.py          — Driver: switch the validity box (`--suffix`/`--autobolus-low`/`--autobolus-high`/`--skip-analysis`), rebuild the box-affected transition subtree into parallel `{suffix}` tables (branch-from-box: reuses production loop_cbg/bddp), and run analyses 8-1/2/3/4/5/8 into `outputs/analysis_8_X{suffix}/` (default 0.80 box / `_box080`)
 ```
 
 ## Pipeline DAG
@@ -154,8 +158,8 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 | min_coverage | 0.70 | Min data coverage |
 | samples_per_day | 288 | 5-min intervals |
 | min_cbg_count | 2,822 | 70% of 14 × 288 |
-| autobolus_low | 0.30 | Max AB% in seg1 |
-| autobolus_high | 0.70 | Min AB% in seg2 |
+| autobolus_low | 0.30 | Max AB% in seg1 (`run()` param) |
+| autobolus_high | 0.70 | Min AB% in seg2 (`run()` param) |
 | adoption_threshold | 0.80 | Min AB% for adoption |
 | discontinuation_threshold | 0.20 | Max AB% for discontinuation |
 | min_followup_days | 56 | Min follow-up post-adoption |
@@ -168,7 +172,7 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 
 **Multi-mode scripts** (`export_segments_within_guardrails`, `compute_glycemic_endpoints`) use `MODE_CONFIG` dict keyed by `--mode` (transition/stable/override).
 
-**Analysis scripts** all follow: load tables via `spark.sql()` → filter by coverage + guardrails → compute stats → output tables/figures to `outputs/analysis_8_X/`.
+**Analysis scripts** all follow: load tables via `spark.sql()` → filter by coverage + guardrails → compute stats → output tables/figures to `outputs/analysis_8_X/`. The transition analyses (8-1/2/3/4/5/8) take a `suffix` (threaded `run_in_databricks` → `run_analysis` → `load_data`, exposed as `--suffix`) that selects parallel `{suffix}` source tables and redirects output to `outputs/analysis_8_X{suffix}/`; `suffix=""` is production.
 
 **Tests** use `staging_test_helpers.py`: create temp Spark tables with synthetic data, run the staging function, assert on the output DataFrame, teardown.
 

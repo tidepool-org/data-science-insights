@@ -127,19 +127,21 @@ def _bin_gender(gender):
         return "Other/Unknown"
 
 
-def load_data(spark) -> pd.DataFrame:
+def load_data(spark, suffix: str = "") -> pd.DataFrame:
     """
     Load glycemic endpoints, apply guardrail exclusions and CBG coverage
     filter, join demographics, compute ΔTIR, and bin into subgroups.
+
+    suffix='_box080' reads the parallel 0.80-box cohort tables.
     """
-    wide = load_transition_endpoints(spark)
+    wide = load_transition_endpoints(spark, suffix=suffix)
 
     # --- ΔTIR ---
     wide["delta_tir"] = wide["tir_seg2"] - wide["tir_seg1"]
 
     # --- Demographics ---
     demographics = (
-        spark.table("dev.fda_510k_rwd.valid_transition_segments")
+        spark.table(f"dev.fda_510k_rwd.valid_transition_segments{suffix}")
         .select("_userId", "gender", "tb_to_ab_age_years", "tb_to_ab_years_lwd")
         .toPandas()
     )
@@ -597,7 +599,11 @@ def run_sensitivity_gender_missing(df: pd.DataFrame):
 # Main
 # =============================================================================
 
-def run_analysis(spark, output_dir: str = OUTPUT_DIR):
+def run_analysis(spark, output_dir=None, suffix: str = ""):
+    # suffix='_box080' runs on the parallel 0.80-box cohort and writes to a
+    # parallel output dir so the production outputs aren't clobbered.
+    if output_dir is None:
+        output_dir = OUTPUT_DIR + suffix
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)
@@ -605,7 +611,7 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     print("=" * 60)
 
     print("\n1. Loading data...")
-    df = load_data(spark)
+    df = load_data(spark, suffix=suffix)
     print(f"   {len(df)} eligible users")
 
     print("\n2. Creating Table 8.5a — Data Availability...")
@@ -652,9 +658,15 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     }
 
 
-def run_in_databricks(spark):
-    return run_analysis(spark)
+def run_in_databricks(spark, suffix: str = ""):
+    return run_analysis(spark, suffix=suffix)
 
 
 if __name__ == "__main__":
-    run_in_databricks(spark)  # type: ignore[name-defined]
+    import argparse
+
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--suffix", default="",
+                         help="source-table suffix, e.g. _box080 for the 0.80-box cohort")
+    _args, _ = _parser.parse_known_args()
+    run_in_databricks(spark, suffix=_args.suffix)  # type: ignore[name-defined]

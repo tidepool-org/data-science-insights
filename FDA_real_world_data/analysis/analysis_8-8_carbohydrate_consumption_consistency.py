@@ -91,16 +91,18 @@ COLOR_WORSENED   = "#D55E00"  # Wong colorblind-safe vermilion
 # Data Loading
 # =============================================================================
 
-def load_data(spark) -> pd.DataFrame:
+def load_data(spark, suffix: str = "") -> pd.DataFrame:
     """
     Load glycemic endpoints and carbohydrate data, apply filters, compute
     carbohydrate summary metrics per user per segment, classify users as
     consistent or inconsistent, and return a wide DataFrame.
+
+    suffix='_box080' reads the parallel 0.80-box cohort tables.
     """
-    wide = load_transition_endpoints(spark)
+    wide = load_transition_endpoints(spark, suffix=suffix)
 
     # --- Carbohydrate data ---
-    carbs = spark.table("dev.fda_510k_rwd.valid_transition_carbs").toPandas()
+    carbs = spark.table(f"dev.fda_510k_rwd.valid_transition_carbs{suffix}").toPandas()
     carbs["carb_grams"] = pd.to_numeric(carbs["carb_grams"], errors="coerce")
     carbs = carbs.loc[
         carbs["carb_grams"].notna()
@@ -746,7 +748,11 @@ def create_figure_8_8c(df: pd.DataFrame, output_path: str):
 # Main
 # =============================================================================
 
-def run_analysis(spark, output_dir: str = OUTPUT_DIR):
+def run_analysis(spark, output_dir=None, suffix: str = ""):
+    # suffix='_box080' runs on the parallel 0.80-box cohort and writes to a
+    # parallel output dir so the production outputs aren't clobbered.
+    if output_dir is None:
+        output_dir = OUTPUT_DIR + suffix
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)
@@ -756,7 +762,7 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
 
     # --- 1. Load data ---
     print("\n1. Loading data...")
-    df = load_data(spark)
+    df = load_data(spark, suffix=suffix)
     print(f"   {len(df)} users in final analysis")
 
     # --- 2. Table 8.8a ---
@@ -809,9 +815,15 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     }
 
 
-def run_in_databricks(spark):
-    return run_analysis(spark)
+def run_in_databricks(spark, suffix: str = ""):
+    return run_analysis(spark, suffix=suffix)
 
 
 if __name__ == "__main__":
-    run_in_databricks(spark)  # type: ignore[name-defined]
+    import argparse
+
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--suffix", default="",
+                         help="source-table suffix, e.g. _box080 for the 0.80-box cohort")
+    _args, _ = _parser.parse_known_args()
+    run_in_databricks(spark, suffix=_args.suffix)  # type: ignore[name-defined]

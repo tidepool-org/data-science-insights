@@ -67,7 +67,7 @@ PARAMETERS = [
 # Data Loading
 # =============================================================================
 
-def load_data(spark) -> pd.DataFrame:
+def load_data(spark, suffix: str = "") -> pd.DataFrame:
     """
     Load eligible override events, join to the nearest pre-activation CBG
     for starting-glucose filtering, then compute time-weighted parameter
@@ -75,16 +75,18 @@ def load_data(spark) -> pd.DataFrame:
 
     Returns a wide DataFrame with one row per (_userId, overridePreset) pair
     that has paired values in both temp_basal and autobolus phases.
+
+    suffix='_box080' reads the parallel 0.80-box cohort tables.
     """
     # ── Step 1: eligible override events ─────────────────────────────────────
     # Cohort: Loop-version filter + guardrail-violation exclusion. Mirrors the
     # filter in load_transition_endpoints (utils/data_loading.py).
     allowed_segments = spark.sql(f"""
         SELECT s._userId, s.tb_to_ab_seg1_start
-        FROM dev.fda_510k_rwd.valid_transition_segments s
+        FROM dev.fda_510k_rwd.valid_transition_segments{suffix} s
         LEFT ANTI JOIN (
             SELECT _userId, CAST(segment_start AS DATE) AS tb_to_ab_seg1_start
-            FROM dev.fda_510k_rwd.valid_transition_guardrails
+            FROM dev.fda_510k_rwd.valid_transition_guardrails{suffix}
             GROUP BY _userId, CAST(segment_start AS DATE)
             HAVING SUM(COALESCE(TRY_CAST(violation_count AS DOUBLE), 0)) > 0
         ) g
@@ -98,7 +100,7 @@ def load_data(spark) -> pd.DataFrame:
     # comparison here. is_valid_name_only_seg2 enforces ≥2 same-name activations
     # in each of seg1 and seg2.
     overrides_sdf = (
-        spark.table("dev.fda_510k_rwd.overrides_by_segment")
+        spark.table(f"dev.fda_510k_rwd.overrides_by_segment{suffix}")
         .join(allowed_segments, on=["_userId", "tb_to_ab_seg1_start"], how="inner")
         .filter(F.col("segment").isin("tb_to_ab_seg1", "tb_to_ab_seg2"))
         .filter(F.col("is_valid_name_only_seg2") == True)
@@ -111,7 +113,7 @@ def load_data(spark) -> pd.DataFrame:
     )
 
     # ── Step 2: join to nearest CBG within lookback window ────────────────────
-    cbg_sdf = spark.table("dev.fda_510k_rwd.valid_transition_cbg").select(
+    cbg_sdf = spark.table(f"dev.fda_510k_rwd.valid_transition_cbg{suffix}").select(
         F.col("_userId").alias("_cbg_userId"),
         "cbg_timestamp",
         "cbg_mg_dl",
@@ -438,7 +440,11 @@ def create_figure_8_3c(df: pd.DataFrame, output_path: str):
 # Main
 # =============================================================================
 
-def run_analysis(spark, output_dir: str = OUTPUT_DIR):
+def run_analysis(spark, output_dir=None, suffix: str = ""):
+    # suffix='_box080' runs on the parallel 0.80-box cohort and writes to a
+    # parallel output dir so the production outputs aren't clobbered.
+    if output_dir is None:
+        output_dir = OUTPUT_DIR + suffix
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)
@@ -446,7 +452,7 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     print("=" * 60)
 
     print("\n1. Loading data...")
-    df = load_data(spark)
+    df = load_data(spark, suffix=suffix)
     print(f"   {len(df)} paired (user × preset) combinations")
 
     print("\n2. Creating Table 8.3a...")
@@ -475,8 +481,14 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     }
 
 
-def run_in_databricks(spark):
-    return run_analysis(spark)
+def run_in_databricks(spark, suffix: str = ""):
+    return run_analysis(spark, suffix=suffix)
 
 if __name__ == "__main__":
-    run_in_databricks(spark)  # type: ignore[name-defined]
+    import argparse
+
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--suffix", default="",
+                         help="source-table suffix, e.g. _box080 for the 0.80-box cohort")
+    _args, _ = _parser.parse_known_args()
+    run_in_databricks(spark, suffix=_args.suffix)  # type: ignore[name-defined]
