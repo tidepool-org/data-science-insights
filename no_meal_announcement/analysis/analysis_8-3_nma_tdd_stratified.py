@@ -121,6 +121,8 @@ from utils.data_loader import (  # noqa: E402
     HIGH_MA_FLAG,
     HIGH_MA_LABEL,
     MIN_AGE,
+    STRATEGIES,
+    STRATEGY_COL,
     SUPPLEMENT_ARMS,
     analysis_dir,
     default_analysis_ready_csv,
@@ -284,7 +286,8 @@ def figure_8_3d_r_dist(ce0_strata):
 # endpoint's glycemic-range band colour, CE>0 grey, CE>=3/BE>=3 bronze.
 
 
-def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False):
+def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False, day_types=None, delivery_strategy=None,
+                               show_age_breakdown=False):
     """Scatter: per-day TIR vs the day's within-user TDD percentile, for TDD-reference-eligible users,
     coloured by the **same 5 day types as figure 8.3g** (3 nested CE=0 classifications + CE>0 +
     CE>=3/BE>=3 HMA). TIR-only figure → colours come from day_type_colors("tir"): the 3 nested CE=0
@@ -300,9 +303,23 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False):
     contributing cohort, matching 8.3g).
 
     `tercile_bands` shades the overall-reference tercile regions (cuts at RANK_TERCILES) — the Appendix
-    §12.3h overall-ref-with-bands variant; the unshaded primary is Figure 8.3e."""
+    §12.3h overall-ref-with-bands variant; the unshaded primary is Figure 8.3e.
+
+    `day_types` (default None = all 5) restricts the dots + decile lines to a subset of DAY_TYPE_ORDER
+    labels — e.g. ("CE=0/BE=0", "CE>=3/BE>=3") for the clean no-announcement vs high-announcement
+    contrast. `delivery_strategy` (default None = all days) restricts to AB/TB days (a STRATEGY_COL
+    value, e.g. "autobolus_on"); it is applied AFTER the within-user rank, so the x-axis stays the
+    OVERALL within-user TDD percentile over ALL eligible days — only which days are *shown* changes,
+    keeping the axis comparable to the unrestricted Figure 8.3e.
+
+    `show_age_breakdown` (default False) appends, per arm, the adult vs pediatric split of the
+    contributing users + user-days to each legend entry (e.g. "879 adults / 24,264 days · 190 peds /
+    3,779 days"), widening the figure and moving the legend outside the axes so it fits. Only
+    meaningful for cohort=all (where both age groups are present); off leaves the figure unchanged."""
     df = pdf[pdf["n_eligible_days_for_tdd"] >= MIN_REF_DAYS].dropna(subset=["tdd_units", "tir"]).copy()
     df["tdd_pct"] = df.groupby("_userId")["tdd_units"].rank(pct=True) * 100.0
+    if delivery_strategy is not None:  # AFTER the rank — x-axis stays the all-eligible-days percentile
+        df = df[df[STRATEGY_COL] == delivery_strategy].copy()
     # Per-day colour = most-specific day type (the tightest nested CE=0 class, else HMA, else CE>0);
     # first match wins, so dots get one crisp day_type_colors("tir") colour. Days in none of the 5 (CE>0
     # of non-CE=0-contributing users, zeroed by restrict_comparator) fall through to "" and are dropped.
@@ -312,8 +329,19 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False):
          df[HIGH_MA_FLAG] == True, df[COMPARATOR_FLAG] == True],     # noqa: E712
         ["CE=0/BE=0", "CE=0/BE<=1", "CE=0/BE<=inf", HIGH_MA_LABEL, COMPARATOR_LABEL], default="")
     df = df[df["dotcat"] != ""]
+    order = list(DAY_TYPE_ORDER) if day_types is None else list(day_types)
+    if day_types is not None:
+        df = df[df["dotcat"].isin(order)].copy()
 
-    fig, ax = plt.subplots(figsize=(9.5, 6))
+    def _age_note(sub):  # per-arm adult vs pediatric users + user-days (cohort=all has both)
+        if not show_age_breakdown:
+            return ""
+        ad = sub[sub["is_pediatric"] == False]  # noqa: E712
+        pe = sub[sub["is_pediatric"] == True]   # noqa: E712
+        return (f"\n  {ad['_userId'].nunique():,} adults / {len(ad):,} days"
+                f"\n  {pe['_userId'].nunique():,} peds / {len(pe):,} days")
+
+    fig, ax = plt.subplots(figsize=(14 if show_age_breakdown else 9.5, 6))
     if tercile_bands:  # overall-ref tercile regions, drawn behind the scatter
         b_lo, b_hi = (q * 100.0 for q in RANK_TERCILES)
         ax.axvspan(0, b_lo, color="#000000", alpha=0.04, zorder=0)
@@ -328,9 +356,9 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False):
     # categories are pushed into a faint, small-dot BACKDROP while the CE=0 greens are drawn larger,
     # more opaque, and on top so they stay distinct against it (the LINES below use all days too).
     tir_colors = day_type_colors("tir")
-    counts = {c: int((df["dotcat"] == c).sum()) for c in DAY_TYPE_ORDER}
+    counts = {c: int((df["dotcat"] == c).sum()) for c in order}
     big = {COMPARATOR_LABEL, HIGH_MA_LABEL}  # the two large categories → faint backdrop
-    for cat in sorted(DAY_TYPE_ORDER, key=lambda c: counts[c], reverse=True):
+    for cat in sorted(order, key=lambda c: counts[c], reverse=True):
         sub = df[df["dotcat"] == cat]
         if cat in big:
             ax.scatter(sub["tdd_pct"], sub["tir"], s=4, color=tir_colors[cat], linewidths=0,
@@ -343,18 +371,20 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False):
     # the lines match figure 8.3g's 5 categories exactly.
     handles = []
     for flag, label in SUPPLEMENT_ARMS:
+        if label not in order:  # honour the day_types subset (e.g. the 2-type contrast)
+            continue
         sub = df[df[flag] == True]  # noqa: E712
         binned = (sub.assign(_b=pd.cut(sub["tdd_pct"], edges, labels=marks))
                      .groupby("_b", observed=False)["tir"].mean().reindex(marks))
         h, = ax.plot(marks, binned.to_numpy(dtype=float), "-o", color=tir_colors[label], lw=2,
-                     ms=5, zorder=5, label=f"{label} (n={len(sub):,})")
+                     ms=5, zorder=5, label=f"{label} (n={len(sub):,}){_age_note(sub)}")
         handles.append(h)
 
     # Overall mean TIR per decile across all categories (dashed black, on top).
     overall = (df.assign(_b=pd.cut(df["tdd_pct"], edges, labels=marks))
                  .groupby("_b", observed=False)["tir"].mean().reindex(marks))
     h_all, = ax.plot(marks, overall.to_numpy(dtype=float), "--o", color="#111111", lw=2.5, ms=5,
-                     zorder=6, label=f"overall (n={len(df):,})")
+                     zorder=6, label=f"overall (n={len(df):,}){_age_note(df)}")
     handles.append(h_all)
 
     ax.set_xlim(0, 100)
@@ -362,11 +392,26 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False):
     ax.set_xticks(marks)
     ax.set_xlabel("within-user TDD percentile (all eligible days, %)")
     ax.set_ylabel("Time 70-180 mg/dL (%)")
-    ax.legend(handles=handles, fontsize=LEGEND_FS)
-    band_note = " — overall-ref tercile bands" if tercile_bands else ""
-    ax.set_title(f"TIR vs within-user TDD percentile by day type"
-                 f"{band_note} (n={len(df):,})", fontsize=TITLE_FS)
-    fig.tight_layout()
+    if show_age_breakdown:  # longer entries → legend outside the axes (right) so it doesn't cover dots
+        ax.legend(handles=handles, fontsize=LEGEND_FS, loc="center left", bbox_to_anchor=(1.01, 0.5))
+    else:
+        ax.legend(handles=handles, fontsize=LEGEND_FS)
+    head = ("TIR vs within-user TDD percentile by day type" if day_types is None
+            else "TIR vs within-user TDD percentile: " + " vs ".join(order))
+    notes = []
+    if delivery_strategy is not None:
+        notes.append(f"{dict(STRATEGIES).get(delivery_strategy, delivery_strategy)} days only")
+    if tercile_bands:
+        notes.append("overall-ref tercile bands")
+    # 2-line title: metric/contrast on line 1, qualifiers + n on line 2 — keeps the longer AB / 2-type
+    # variants from overflowing the axes width. With no qualifiers (the plain fig 8.3e) it stays 1 line.
+    n_note = f"(n={len(df):,})"
+    title = f"{head}\n{'; '.join(notes)} — {n_note}" if notes else f"{head} {n_note}"
+    ax.set_title(title, fontsize=TITLE_FS)
+    if show_age_breakdown:
+        fig.subplots_adjust(left=0.06, right=0.68, top=0.88, bottom=0.1)  # reserve right for the legend
+    else:
+        fig.tight_layout()
     return fig
 
 
