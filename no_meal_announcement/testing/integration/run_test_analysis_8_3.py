@@ -133,6 +133,8 @@ def _assert_recovers_low_high_design(spark, tables, raw_pdf, tmp_dir):
         assert os.path.exists(p) and os.path.getsize(p) > 0, f"missing/empty {csv}"
     assert len(glob.glob(os.path.join(out_all, "figure_8_3f_grid*.png"))) == 2, "missing fig 8.3f grids (violins stay split)"
     assert os.path.exists(os.path.join(out_all, "figure_8_3g_4x2.png")), "missing fig 8.3g 4×2 (merged)"
+    assert os.path.exists(os.path.join(out_all, "figure_8_3i_tir_vs_tdd_absolute.png")), "missing fig 8.3i (absolute-TDD x-axis)"
+    assert os.path.exists(os.path.join(out_all, "figure_8_3j_tir_vs_tdd_percentile_density.png")), "missing fig 8.3j (percentile + density panel)"
 
 
 def main(spark=None):

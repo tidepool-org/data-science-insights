@@ -1,13 +1,22 @@
 """Exploratory variants of the §8.3 "TIR vs within-user TDD percentile" scatter (fig 8.3e / 12.3h).
 
-Renders three views requested 2026-06-15, reusing the production figure builder
-`figure_8_3e_tir_vs_tdd_pct` (parameterized with `day_types` / `delivery_strategy`) so there is one
-definition of the scatter — no fork:
+Renders three contrasts (requested 2026-06-15), each on BOTH x-axes (the within-user percentile = fig
+8.3e axis, and the absolute-TDD equivalent = fig 8.3i axis, requested 2026-06-22), reusing the
+production figure builder `figure_8_3e_tir_vs_tdd_pct` (parameterized with `day_types` /
+`delivery_strategy` / `x_axis` / `show_density_panel`) so there is one definition of the scatter — no fork:
 
-  1. ab_5type     — the full 5-day-type scatter restricted to AB (autobolus_on) days.
-  2. 2type        — all eligible days, only the CE=0/BE=0 vs CE>=3/BE>=3 contrast (no-announcement
-                    vs high-announcement extremes).
-  3. 2type_ab     — (2) restricted to AB days.
+  1. ab        — the full 5-day-type scatter restricted to AB (autobolus_on) days.
+  2. 2type     — all eligible days, only the CE=0/BE=0 vs CE>=3/BE>=3 contrast (no-announcement
+                 vs high-announcement extremes).
+  3. 2type_ab  — (2) restricted to AB days.
+
+Each is written twice: `figure_8_3e_{stem}_tir_vs_tdd_percentile.png` (percentile axis) and
+`figure_8_3i_{stem}_tir_vs_tdd_absolute.png` (absolute-TDD axis, U/day). BOTH carry the per-bin
+user-day density panel (stacked by day type): the all-days total is flat only on the percentile axis,
+but over these day-type SUBSETS the panel is informative on either axis — e.g. CE=0/BE=0 days skew to
+low within-user TDD percentiles and CE>=3/BE>=3 to high. ⚠️ The absolute axis conflates between-user
+insulin need (body size) with within-user variation — descriptive only; the within-user contrast is
+the percentile axis + Table 8.3d.
 
 Like the production figure, NONE of these is same-user-set gated: the scatter plots EVERY eligible
 day at its within-user TDD percentile (the continuous relationship), so a user need not have a day in
@@ -73,15 +82,22 @@ def main(cohort="all"):
     pdf = filter_cohort(pdf, cohort=cohort, min_age=MIN_AGE)
     pdf = restrict_comparator(pdf)
 
-    common = dict(tercile_bands=False, show_age_breakdown=True)
-    specs = [
-        ("figure_8_3e_ab_tir_vs_tdd_percentile.png",
-         dict(delivery_strategy=AB, **common)),
-        ("figure_8_3e_2type_tir_vs_tdd_percentile.png",
-         dict(day_types=TWO_TYPE, **common)),
-        ("figure_8_3e_2type_ab_tir_vs_tdd_percentile.png",
-         dict(day_types=TWO_TYPE, delivery_strategy=AB, **common)),
+    common = dict(tercile_bands=False, show_age_breakdown=True, show_density_panel=True)
+    # The three contrasts, each rendered on BOTH x-axes: the within-user percentile (fig 8.3e axis) and
+    # the absolute-TDD equivalent (fig 8.3i axis). Both carry the density panel: the per-bin user-days
+    # are flat ONLY for all-days-pooled on the percentile axis — stacked by day type over these SUBSETS
+    # the panel is informative on either axis (e.g. CE=0/BE=0 days skew to low within-user TDD
+    # percentiles, CE>=3/BE>=3 to high; AB-day share varies across the axis).
+    contrasts = [
+        ("ab", dict(delivery_strategy=AB)),                          # 5 day types, AB days only
+        ("2type", dict(day_types=TWO_TYPE)),                         # CE=0/BE=0 vs CE>=3/BE>=3, all days
+        ("2type_ab", dict(day_types=TWO_TYPE, delivery_strategy=AB)),  # that pair, AB days only
     ]
+    specs = []
+    for stem, ckw in contrasts:
+        specs.append((f"figure_8_3e_{stem}_tir_vs_tdd_percentile.png", dict(**ckw, **common)))
+        specs.append((f"figure_8_3i_{stem}_tir_vs_tdd_absolute.png",
+                      dict(**ckw, x_axis="absolute_tdd", **common)))
     for fname, kw in specs:
         fig = figure(pdf, **kw)
         out = os.path.join(OUT_DIR, f"{cohort}__{fname}")

@@ -56,7 +56,13 @@ Outputs (analysis/outputs/analysis_8_3/<cohort>/) — primary (mean TDD referenc
     figure_8_3c_stacked_ranges.png         mean glycemic ranges — 10 stacked bars (5 day types × Low/High), labeled %s + dashed Low→High segment connectors
     figure_8_3d_R_distribution.png         within-user R = tdd/mean_tdd distribution on CE=0 days
     figure_8_3e_tir_vs_tdd_percentile.png  scatter: per-day TIR vs within-user TDD percentile, coloured by the
-                                           SAME 5 day types as fig 8.3g (TIR band ramp); per-day-type decile lines + overall
+                                           SAME 5 day types as fig 8.3g (TIR band ramp); per-day-type decile lines + overall.
+                                           Horizontal TIR gridlines every 5% (P1).
+    figure_8_3i_tir_vs_tdd_absolute.png    NEW (P2): the same chart on an ABSOLUTE-TDD x-axis (U/day, 10-U bins, x≤120 U/day),
+                                           with a stacked per-bin user-day DENSITY PANEL (P3) below. Body-size caveat stamped;
+                                           read per-cohort. Descriptive (NOT the within-user contrast).
+    figure_8_3j_tir_vs_tdd_percentile_density.png  the percentile chart (8.3e axis) + the density panel (P3) —
+                                           the percentile companion of 8.3i (the panel is ~flat: the rank axis is uniform)
   Appendix §12.3 supplement:
     table_12_3a_median_per_user_by_stratum.csv   median ref — per-user-by-stratum (5 sections)
     figure_12_3a_median_grid{1,2}_*.png          median ref — per-user violin grids (6 groups)
@@ -83,7 +89,7 @@ the mean/median/rolling references inherit the staged values — so a cap was im
 Usage: python analysis_8-3_nma_tdd_stratified.py [--cohort {adult,pediatric,all}]
 Fast figure iteration (skips the slow LMM/bootstrap tables): add --figures-only, or --figs <tag>
 to render only matching figures (e.g. `--figs 8_3g --cohort all` ≈ 9 s vs a multi-minute full run).
-Tags: 8_3a/b/c/d/e/f/g, 12_3a/c/g/h/i. Do a full run first so the table CSVs exist.
+Tags: 8_3a/b/c/d/e/f/g/i/j, 12_3a/c/g/h/i. Do a full run first so the table CSVs exist.
 """
 
 # %pip install statsmodels
@@ -102,6 +108,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.ticker as mticker  # noqa: E402
 
 try:
     _ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -170,6 +177,15 @@ from utils.strata import (  # noqa: E402
 ROLL_WINDOW_DAYS = 30    # rolling TDD reference window (§7.5)
 ROLL_MIN_DAYS = 7        # min eligible days in the window for a usable rolling reference
 BOOTSTRAP_SEED = 20260520
+# fig 8.3e family: y-axis TIR reference gridlines (P1), the absolute-TDD x-axis variant figure_8_3i
+# (P2), and the density-panel / CI-ribbon overlays (P3). Hoisted per the "cutoffs at the top" rule.
+TIR_GRID_STEP = 5        # horizontal TIR gridline spacing (%) — read line values off the chart (P1)
+ABS_TDD_BIN_W = 10       # U/day fixed-width bins for the absolute-TDD decile line (P2)
+ABS_TDD_XMAX = 120       # absolute-TDD x-axis clip — ~p98.4 of eligible days; tail to 431 is <2% & sparse
+ABS_TDD_EDGES = np.arange(0, ABS_TDD_XMAX + 1, ABS_TDD_BIN_W)      # 0,10,…,120 (12 bins)
+ABS_TDD_MARKS = (ABS_TDD_EDGES[:-1] + ABS_TDD_EDGES[1:]) / 2.0     # bin centres 5,15,…,115
+ABS_TDD_MIN_BIN_N = 100  # absolute-TDD line dot suppressed below this many days; trims the sparse
+                         # absolute-TDD tails (percentile axis keeps every bin) — P2
 # Colours, the 2×2 metric grids, and the violin/histogram panel helpers are shared across
 # §8.1–§8.3 (utils.plotting): CE=0 data carries the endpoint's glycemic-range colour, the CE>0
 # comparator is grey, and within each the Low/High TDD stratum is light/dark (alpha).
@@ -287,38 +303,62 @@ def figure_8_3d_r_dist(ce0_strata):
 
 
 def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False, day_types=None, delivery_strategy=None,
-                               show_age_breakdown=False):
-    """Scatter: per-day TIR vs the day's within-user TDD percentile, for TDD-reference-eligible users,
-    coloured by the **same 5 day types as figure 8.3g** (3 nested CE=0 classifications + CE>0 +
-    CE>=3/BE>=3 HMA). TIR-only figure → colours come from day_type_colors("tir"): the 3 nested CE=0
-    arms a dark→light ramp of the TIR band colour, CE>0 grey, HMA bronze. Percentile = each day's
-    rank of tdd_units within that user's eligible days (0–100), comparable across users.
+                               show_age_breakdown=False, x_axis="percentile",
+                               show_density_panel=False):
+    """Scatter: per-day TIR vs the day's TDD position, for TDD-reference-eligible users, coloured by the
+    **same 5 day types as figure 8.3g** (3 nested CE=0 classifications + CE>0 + CE>=3/BE>=3 HMA). TIR-
+    only figure → colours come from day_type_colors("tir"): the 3 nested CE=0 arms a dark→light ramp of
+    the TIR band colour, CE>0 grey, HMA bronze.
 
-    All 5 day types get a decile-mean TIR LINE (11 dots on the x-ticks) over that category's days,
-    using the same (cumulative, flag-defined) membership as 8.3g — so the lines correspond exactly.
-    Plus a dashed black overall-mean line. The scatter behind shows ALL days, each coloured by its
-    MOST-SPECIFIC day type (a clean per-day partition: CE=0 BE=0 / BE=1 / BE≥2 → dark/med/light green;
-    CE>0 HMA → bronze, the rest grey); the two big categories (HMA/CE>0) are drawn fainter so they
-    don't wash out the smaller CE=0 greens. Restricted to days in one of the 5 day types (the CE=0-
-    contributing cohort, matching 8.3g).
+    `x_axis` selects the x position (default reproduces production fig 8.3e / appendix 12.3h):
+      "percentile"   — each day's rank of tdd_units within that user's eligible days (0–100); uniform
+                       by construction (~10% of every user's days per decile), comparable across users.
+      "absolute_tdd" — the raw tdd_units (U/day), fixed ABS_TDD_BIN_W-wide bins, x clipped at
+                       ABS_TDD_XMAX (the right tail to ~431 U/day is <2% of days). This is the §8.3i NEW
+                       analysis: it shows where on the real dose scale TIR moves, but POSITION CONFLATES
+                       between-user insulin need (body size) with within-user variation — it is NOT the
+                       within-user contrast (that is the percentile axis + Table 8.3d). Read per-cohort;
+                       a factual caveat is stamped on the figure.
 
-    `tercile_bands` shades the overall-reference tercile regions (cuts at RANK_TERCILES) — the Appendix
-    §12.3h overall-ref-with-bands variant; the unshaded primary is Figure 8.3e.
+    All day types in scope get a decile-mean TIR LINE over that category's (cumulative, flag-defined)
+    days, matching figure 8.3g; thin bins (< ABS_TDD_MIN_BIN_N days) drop their dot (a no-op on the
+    uniform percentile axis; trims the sparse absolute-TDD tails). Plus a dashed black overall line. The
+    scatter behind shows ALL days coloured by MOST-SPECIFIC day type (a clean per-day partition: CE=0
+    BE=0 / BE=1 / BE≥2; CE>0 HMA → bronze, the rest grey); the two big categories (HMA/CE>0) are drawn
+    fainter so they don't wash out the smaller CE=0 greens.
+
+    Horizontal TIR reference gridlines every TIR_GRID_STEP % are drawn behind the data on every variant
+    (P1) so line values read off the y-axis. `tercile_bands` shades the overall-reference tercile
+    regions (percentile axis only — the rank terciles have no fixed U/day cut) — the Appendix §12.3h
+    variant; the unshaded primary is Figure 8.3e.
+
+    `show_density_panel` (default False) adds a thin shared-x companion panel of per-bin user-day counts
+    stacked by day type — the population-density / n signal: on the percentile axis it is ~flat (shows
+    the day-type MIX + the rank-axis uniformity); on the absolute axis it shows how the population
+    concentrates and disperses into the tails. Default off, so the production figures change only by the
+    gridlines.
 
     `day_types` (default None = all 5) restricts the dots + decile lines to a subset of DAY_TYPE_ORDER
     labels — e.g. ("CE=0/BE=0", "CE>=3/BE>=3") for the clean no-announcement vs high-announcement
     contrast. `delivery_strategy` (default None = all days) restricts to AB/TB days (a STRATEGY_COL
-    value, e.g. "autobolus_on"); it is applied AFTER the within-user rank, so the x-axis stays the
-    OVERALL within-user TDD percentile over ALL eligible days — only which days are *shown* changes,
-    keeping the axis comparable to the unrestricted Figure 8.3e.
+    value, e.g. "autobolus_on"); on the percentile axis it is applied AFTER the within-user rank, so the
+    x-axis stays the OVERALL all-eligible-days percentile (only which days are *shown* changes); the
+    absolute axis is order-free.
 
     `show_age_breakdown` (default False) appends, per arm, the adult vs pediatric split of the
     contributing users + user-days to each legend entry (e.g. "879 adults / 24,264 days · 190 peds /
     3,779 days"), widening the figure and moving the legend outside the axes so it fits. Only
     meaningful for cohort=all (where both age groups are present); off leaves the figure unchanged."""
+    assert x_axis in ("percentile", "absolute_tdd"), x_axis
     df = pdf[pdf["n_eligible_days_for_tdd"] >= MIN_REF_DAYS].dropna(subset=["tdd_units", "tir"]).copy()
-    df["tdd_pct"] = df.groupby("_userId")["tdd_units"].rank(pct=True) * 100.0
-    if delivery_strategy is not None:  # AFTER the rank — x-axis stays the all-eligible-days percentile
+    # x position: within-user TDD percentile (default) OR absolute TDD. The rank is computed BEFORE the
+    # delivery_strategy filter so the percentile axis stays the all-eligible-days percentile (only which
+    # days are shown changes); the absolute axis is the raw value, so the filter order is immaterial.
+    if x_axis == "percentile":
+        df["_x"] = df.groupby("_userId")["tdd_units"].rank(pct=True) * 100.0
+    else:
+        df["_x"] = df["tdd_units"]
+    if delivery_strategy is not None:
         df = df[df[STRATEGY_COL] == delivery_strategy].copy()
     # Per-day colour = most-specific day type (the tightest nested CE=0 class, else HMA, else CE>0);
     # first match wins, so dots get one crisp day_type_colors("tir") colour. Days in none of the 5 (CE>0
@@ -341,15 +381,38 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False, day_types=None, deli
         return (f"\n  {ad['_userId'].nunique():,} adults / {len(ad):,} days"
                 f"\n  {pe['_userId'].nunique():,} peds / {len(pe):,} days")
 
-    fig, ax = plt.subplots(figsize=(14 if show_age_breakdown else 9.5, 6))
-    if tercile_bands:  # overall-ref tercile regions, drawn behind the scatter
+    # Axis geometry: percentile lines land on round ticks 0..100 (bins centred on the marks); absolute
+    # lines land on the fixed-width bin CENTRES (5,15,…) while ticks label the bin EDGES (0,10,…,120).
+    if x_axis == "percentile":
+        marks = np.arange(0, 101, 10)
+        edges = np.arange(-5, 106, 10)  # 10-pct-wide bins centred on the marks → dots land on ticks
+        xticks, xlim = marks, (0, 100)
+        xlabel = "within-user TDD percentile (all eligible days, %)"
+    else:
+        marks, edges = ABS_TDD_MARKS, ABS_TDD_EDGES
+        xticks, xlim = ABS_TDD_EDGES, (0, ABS_TDD_XMAX)
+        xlabel = "total daily insulin (U/day)"
+    # Thin-bin dot suppression applies ONLY to the absolute axis (its tails genuinely empty out); the
+    # uniform percentile axis keeps every bin → fig 8.3e is unchanged except for the gridlines.
+    min_bin_n = ABS_TDD_MIN_BIN_N if x_axis == "absolute_tdd" else 0
+
+    base_w = 14 if show_age_breakdown else 9.5
+    if show_density_panel:  # main axes + a short shared-x density panel below
+        fig = plt.figure(figsize=(base_w, 7.4))
+        gs = fig.add_gridspec(2, 1, height_ratios=[5, 1.15], hspace=0.07)
+        ax = fig.add_subplot(gs[0])
+        ax_den = fig.add_subplot(gs[1], sharex=ax)
+        ax.tick_params(labelbottom=False)
+    else:
+        fig, ax = plt.subplots(figsize=(base_w, 6))
+        ax_den = None
+
+    if tercile_bands and x_axis == "percentile":  # overall-ref tercile regions (percentile axis only)
         b_lo, b_hi = (q * 100.0 for q in RANK_TERCILES)
         ax.axvspan(0, b_lo, color="#000000", alpha=0.04, zorder=0)
         ax.axvspan(b_hi, 100, color="#000000", alpha=0.08, zorder=0)
         for b in (b_lo, b_hi):
             ax.axvline(b, color="#555555", ls=":", lw=1.5, zorder=1)
-    marks = np.arange(0, 101, 10)
-    edges = np.arange(-5, 106, 10)  # 10-pct-wide bins centred on the marks → dots land on ticks
 
     # Scatter for day-level spread — ALL days plotted, same colours as the lines (TIR band ramp).
     # The day types are very unequal in size (HMA + CE>0 are ~5-30× the CE=0 greens), so the two big
@@ -361,55 +424,93 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False, day_types=None, deli
     for cat in sorted(order, key=lambda c: counts[c], reverse=True):
         sub = df[df["dotcat"] == cat]
         if cat in big:
-            ax.scatter(sub["tdd_pct"], sub["tir"], s=4, color=tir_colors[cat], linewidths=0,
+            ax.scatter(sub["_x"], sub["tir"], s=4, color=tir_colors[cat], linewidths=0,
                        zorder=2, alpha=0.05)
         else:
-            ax.scatter(sub["tdd_pct"], sub["tir"], s=7, color=tir_colors[cat], linewidths=0,
+            ax.scatter(sub["_x"], sub["tir"], s=7, color=tir_colors[cat], linewidths=0,
                        zorder=3, alpha=0.18)
 
     # A decile-mean TIR line per day type — over that category's (cumulative, flag-defined) days, so
-    # the lines match figure 8.3g's 5 categories exactly.
+    # the lines match figure 8.3g's 5 categories exactly. Thin bins drop their dot (a gap).
     handles = []
     for flag, label in SUPPLEMENT_ARMS:
         if label not in order:  # honour the day_types subset (e.g. the 2-type contrast)
             continue
         sub = df[df[flag] == True]  # noqa: E712
-        binned = (sub.assign(_b=pd.cut(sub["tdd_pct"], edges, labels=marks))
-                     .groupby("_b", observed=False)["tir"].mean().reindex(marks))
+        g = sub.assign(_b=pd.cut(sub["_x"], edges, labels=marks)).groupby("_b", observed=False)["tir"]
+        binned = g.mean().reindex(marks)
+        binned = binned.where(g.count().reindex(marks).fillna(0) >= min_bin_n)
         h, = ax.plot(marks, binned.to_numpy(dtype=float), "-o", color=tir_colors[label], lw=2,
                      ms=5, zorder=5, label=f"{label} (n={len(sub):,}){_age_note(sub)}")
         handles.append(h)
 
-    # Overall mean TIR per decile across all categories (dashed black, on top).
-    overall = (df.assign(_b=pd.cut(df["tdd_pct"], edges, labels=marks))
-                 .groupby("_b", observed=False)["tir"].mean().reindex(marks))
+    # Overall mean TIR per bin across all categories (dashed black, on top).
+    g_all = df.assign(_b=pd.cut(df["_x"], edges, labels=marks)).groupby("_b", observed=False)["tir"]
+    overall = g_all.mean().reindex(marks).where(g_all.count().reindex(marks).fillna(0) >= min_bin_n)
     h_all, = ax.plot(marks, overall.to_numpy(dtype=float), "--o", color="#111111", lw=2.5, ms=5,
                      zorder=6, label=f"overall (n={len(df):,}){_age_note(df)}")
     handles.append(h_all)
 
-    ax.set_xlim(0, 100)
+    # Density companion panel: per-bin user-day counts stacked by day type (the dotcat partition →
+    # heights sum to total days/bin). Percentile axis ~flat (shows the mix + the uniform rank axis);
+    # absolute axis shows how the population concentrates and disperses into the tails.
+    if ax_den is not None:
+        bar_w = (edges[1] - edges[0]) * 0.85
+        bottoms = np.zeros(len(marks), dtype=float)
+        for cat in order:
+            sub = df[df["dotcat"] == cat]
+            cnt = (sub.assign(_b=pd.cut(sub["_x"], edges, labels=marks))
+                      .groupby("_b", observed=False).size().reindex(marks).fillna(0).to_numpy(float))
+            ax_den.bar(np.asarray(marks, dtype=float), cnt, bottom=bottoms, width=bar_w,
+                       color=tir_colors[cat], linewidth=0, align="center")
+            bottoms += cnt
+        ax_den.set_ylabel("user-days", fontsize=LEGEND_FS)
+        ax_den.set_ylim(bottom=0)
+        ax_den.margins(x=0)
+        ax_den.tick_params(labelsize=LEGEND_FS - 1)
+        ax_den.yaxis.set_major_formatter(
+            mticker.FuncFormatter(lambda v, _pos: f"{v/1000:.0f}k" if v >= 1000 else f"{v:.0f}"))
+
+    ax.set_xlim(*xlim)
     ax.set_ylim(0, 100)
-    ax.set_xticks(marks)
-    ax.set_xlabel("within-user TDD percentile (all eligible days, %)")
+    # P1: horizontal TIR reference gridlines (every TIR_GRID_STEP %), behind the data; labels every 10.
+    ax.set_axisbelow(True)
+    ax.set_yticks(np.arange(0, 101, 10))
+    ax.yaxis.set_minor_locator(mticker.MultipleLocator(TIR_GRID_STEP))
+    ax.grid(axis="y", which="major", color="#7d7d7d", lw=0.9, alpha=0.85)
+    ax.grid(axis="y", which="minor", color="#a8a8a8", lw=0.7, alpha=0.75)
     ax.set_ylabel("Time 70-180 mg/dL (%)")
+    bottom_ax = ax_den if ax_den is not None else ax  # x-label/ticks live on the bottom-most axis
+    bottom_ax.set_xticks(xticks)
+    bottom_ax.set_xlabel(xlabel)
+
     if show_age_breakdown:  # longer entries → legend outside the axes (right) so it doesn't cover dots
         ax.legend(handles=handles, fontsize=LEGEND_FS, loc="center left", bbox_to_anchor=(1.01, 0.5))
     else:
         ax.legend(handles=handles, fontsize=LEGEND_FS)
-    head = ("TIR vs within-user TDD percentile by day type" if day_types is None
-            else "TIR vs within-user TDD percentile: " + " vs ".join(order))
+    x_name = "within-user TDD percentile" if x_axis == "percentile" else "absolute TDD (U/day)"
+    head = (f"TIR vs {x_name} by day type" if day_types is None
+            else f"TIR vs {x_name}: " + " vs ".join(order))
     notes = []
     if delivery_strategy is not None:
         notes.append(f"{dict(STRATEGIES).get(delivery_strategy, delivery_strategy)} days only")
-    if tercile_bands:
+    if tercile_bands and x_axis == "percentile":
         notes.append("overall-ref tercile bands")
-    # 2-line title: metric/contrast on line 1, qualifiers + n on line 2 — keeps the longer AB / 2-type
-    # variants from overflowing the axes width. With no qualifiers (the plain fig 8.3e) it stays 1 line.
+    if x_axis == "absolute_tdd":
+        notes.append(f"x clipped at {ABS_TDD_XMAX} U/day; dots where bin n ≥ {ABS_TDD_MIN_BIN_N}")
+    # 2-line title: metric/contrast on line 1, qualifiers + n on line 2 — keeps the longer variants from
+    # overflowing the axes width. With no qualifiers (the plain fig 8.3e) it stays 1 line.
     n_note = f"(n={len(df):,})"
     title = f"{head}\n{'; '.join(notes)} — {n_note}" if notes else f"{head} {n_note}"
     ax.set_title(title, fontsize=TITLE_FS)
-    if show_age_breakdown:
-        fig.subplots_adjust(left=0.06, right=0.68, top=0.88, bottom=0.1)  # reserve right for the legend
+
+    # Body-size conflation caveat for the absolute axis lives in the report caption + decisions.md
+    # (per MJC: not stamped on the figure) — absolute TDD conflates between-user insulin need with
+    # within-user variation; the within-user contrast is fig 8.3e (percentile) + Table 8.3d.
+    if show_density_panel or show_age_breakdown:
+        fig.subplots_adjust(left=0.06 if show_age_breakdown else 0.09,
+                            right=0.68 if show_age_breakdown else 0.97,
+                            top=0.90, bottom=0.10, hspace=0.07)
     else:
         fig.tight_layout()
     return fig
@@ -698,6 +799,11 @@ def run(
         "8_3c": lambda: {"figure_8_3c_stacked_ranges.png": figure_8_3c_stacked(strata_8_3a)},
         "8_3d": lambda: {"figure_8_3d_R_distribution.png": figure_8_3d_r_dist(strata["CE=0/BE<=1"])},
         "8_3e": lambda: {"figure_8_3e_tir_vs_tdd_percentile.png": figure_8_3e_tir_vs_tdd_pct(pdf)},
+        "8_3i": lambda: {"figure_8_3i_tir_vs_tdd_absolute.png":               # NEW: absolute-TDD x-axis (P2)
+                         figure_8_3e_tir_vs_tdd_pct(pdf, x_axis="absolute_tdd",
+                                                    show_density_panel=True)},
+        "8_3j": lambda: {"figure_8_3j_tir_vs_tdd_percentile_density.png":      # percentile chart + density panel (P3)
+                         figure_8_3e_tir_vs_tdd_pct(pdf, show_density_panel=True)},
         "8_3f": lambda: figure_8_3a_violin(*_tercile_arms("overall", ce0_flag=CLASSIFICATIONS[1][0]),  # overall-ref tercile violins (CE=0/BE<=1)
                                            ref_note="overall TDD-rank terciles", fname_stem="figure_8_3f",
                                            strata=("Low", "Mid", "High"), ce0_label="CE=0/BE<=1"),
@@ -754,7 +860,7 @@ if __name__ == "__main__":
                               "(do a full run first so the tables exist)")
     _parser.add_argument("--figs", dest="figs_filter", default=None,
                          help="render only figure builders whose tag contains this substring "
-                              "(e.g. 8_3g); implies --figures-only. Tags: 8_3a/b/c/d/e/f/g, 12_3a/c/g/h/i")
+                              "(e.g. 8_3g); implies --figures-only. Tags: 8_3a/b/c/d/e/f/g/i/j, 12_3a/c/g/h/i")
     _args, _ = _parser.parse_known_args()
 
     try:

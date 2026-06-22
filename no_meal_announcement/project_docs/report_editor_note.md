@@ -68,6 +68,16 @@ in-image titles, the title→panel spacing, and the grid packing.
      keep their endpoint/range colours. **No data/statistics changed** — swap the embedded PNGs for the
      regenerated ones (all three cohorts).
 
+## 0c. §8.3 TIR-vs-TDD line charts — gridlines + new absolute-TDD figure (2026-06-22, D22; re-embed)
+
+Changes to the §8.3 "TIR vs TDD" scatter/line family. **Regenerate §8.3 (all cohorts) and re-embed.**
+
+1. **Fig 8.3e (`figure_8_3e_tir_vs_tdd_percentile.png`) + Appendix Fig 12.3h gained horizontal 5% TIR gridlines** — purely a readability change (line values now read off the y-axis); **no data/statistics changed**. Just re-embed the regenerated PNGs.
+2. **NEW Fig 8.3i (`figure_8_3i_tir_vs_tdd_absolute.png`)** — the *same* chart on an **absolute total-daily-insulin x-axis** (U/day, 0–120) with a per-bin user-day **density panel** below. This is a **descriptive/supporting** figure — decide whether to include it (suggest Appendix §12.3 if used). ⚠️ **Mandatory caption caveat (it is NOT on the figure):** *"X is absolute total daily insulin (U/day). Position conflates between-user insulin need (body size) with within-user day-to-day variation; this is a descriptive view, not the within-user TDD contrast — see Fig 8.3e (within-user percentile) and Table 8.3d. Read per cohort (adult/pediatric panels least confounded)."* Best shown as the **adult and pediatric** panels (the `all` panel is most confounded by the body-size mixture).
+3. **NEW Fig 8.3j (`figure_8_3j_tir_vs_tdd_percentile_density.png`)** — the percentile Fig 8.3e with the same density panel added (the panel is ~flat: the within-user rank axis is uniform by construction). Optional companion; include only if the density panel is wanted on the percentile chart.
+
+`figure_8_3i`/`figure_8_3j` are new files — they are **not** part of the §0 4×2-merge map. Provenance: decisions.md **D22**.
+
 ## 1. Numbering scheme
 
 - **§8.1 = the main analysis** — matches the governing plan (PLN-1008) exactly: Tables 8.1a/8.1b/8.1c
