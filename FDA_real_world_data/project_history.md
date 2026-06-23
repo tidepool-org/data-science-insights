@@ -4,6 +4,18 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-06-23: Per-user diagnosis-type lookup table + cohort diagnosis-breakdown queries
+
+A standalone per-user diabetes-diagnosis lookup for the FDA Loop-user universe, plus exploratory queries that break the diagnosis mix down across the three analysis cohorts (transition / stable / durability) — for characterizing the cohorts by diabetes type. No change to any §8 analysis.
+
+### New staging script
+- [data_staging/export_user_diagnosis_type.py](data_staging/export_user_diagnosis_type.py): builds `dev.fda_510k_rwd.user_diagnosis_type`, one row per FDA Loop user (distinct `_userId` in `loop_recommendations`). Pulls `diagnosisType` from `prod.default.patients` and `prod.default.seagull_profiles` — kept as separate `diagnosis_patients` / `diagnosis_seagull` columns so cross-source disagreement stays visible — flags JAEB-cohort membership (`is_jaeb`), and emits a resolved `diagnosis_type`. Resolution: within a source, multiple rows collapse via `MAX(NULLIF(TRIM(diagnosisType), ''))` (blank→NULL, lexical max otherwise); across sources, JAEB members are `type1` by definition, else patients, else seagull. JAEB membership is the union of the direct `jaeb_upload_to_userid.userid` column and the `uploadID→bddp` linkage used by §8-6/8-7. Seagull is assumed to expose a flat `diagnosisType` column keyed on `userid` (configurable via `SEAGULL_USERID_COL`). Standalone reference table — not wired into `fda_analysis_pipeline.yml`, no paired test yet.
+
+### Exploratory queries
+- [exploratory/cohort_diagnosis_breakdown.sql](exploratory/cohort_diagnosis_breakdown.sql): diagnosis-type breakdown (count + %) across the three cohorts by joining each cohort's users to `user_diagnosis_type`. Each cohort view mirrors its §8 loader's membership predicate; the transition view reproduces `load_transition_endpoints` exactly — including the both-half CGM-coverage gate (`cbg_count ≥ 2822` on both `tb_to_ab_seg1` and `tb_to_ab_seg2`) — so it matches the §8-1/8-5/8-8 cohort rather than the broader §8-4 all-valid-segments set. Targets the `_box080` transition variant; stable/durability are box-independent. Two adversarial verification passes confirmed the cohort views replicate the loaders.
+- [exploratory/cohort_diagnosis_type.sql](exploratory/cohort_diagnosis_type.sql): single-cohort (transition, box080) diagnosis breakdown joining `prod.default.patients` directly; distinguishes "not in patients record" from "in patients, no diagnosisType entry".
+- [exploratory/preset_counts.sql](exploratory/preset_counts.sql): preset-activation counts behind Table 8.4a (§8-4 cohort) — activations and distinct users by dosing mode, the cohort denominator and paired-N, and a per-preset-name breakdown; production + parallel `_box080` sections.
+
 ## 2026-06-12: Table 6.3a cohort-flow funnel (report §6.3, any validity-box build)
 
 The RPT-1001 report editor's box080-primary report copy needs the §6.3 sample-information tables regenerated per build (developer_note.md, 2026-06-12); these tables had never been produced by tracked code. This adds the Table 6.3a (Cohort Flow) generator; Table 6.3b (demographic breakdown) is still pending.

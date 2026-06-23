@@ -48,7 +48,7 @@ ALPHA_BONFERRONI = 0.05 / 3  # 0.017 — correction across 3 demographic factors
 # Subgroup definitions
 SUBGROUPS = {
     "gender_group": {
-        "label": "Gender",
+        "label": "Biological Sex",
         "categories": ["Male", "Female", "Other/Unknown"],
     },
     "age_group": {

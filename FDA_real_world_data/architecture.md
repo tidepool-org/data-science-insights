@@ -1,12 +1,14 @@
 # FDA Real World Data — Architecture
 
-## Current state (as of 2026-06-12)
+## Current state (as of 2026-06-23)
 
 Analyses **§8-1 through §8-8 implemented** across the transition (TB→AB), stable-AB, preset-override, and adoption-durability pipelines; 8-6/8-7 use a partner-CSV handoff (`--mode export` on Databricks → partner summary CSV → `--mode figures` locally). Per-script + integration tests live under `testing/`.
 
 The **TB→AB validity box is now configurable end-to-end**: `export_valid_transition_segments.py` takes `autobolus_low` / `autobolus_high` `run()` params (defaults 0.30 / 0.70 → each side > 0.70), the analysis loaders + transition analyses (8-1/2/3/4/5/8) take a `suffix`, and `exploratory/run_transition_variant.py` rebuilds the box-affected subtree into parallel `{suffix}` tables + `outputs/analysis_8_X{suffix}/` folders to evaluate a different box without touching production (default 0.80 box / `_box080`). 8-6/8-7 (stable-AB / durability) are box-independent and untouched.
 
 **Report §6.3 sample-information tables**: `analysis/analysis_6-3a_cohort_flow.py` emits Table 6.3a (cohort-flow funnel, BDDP sample → final transition cohort) for any build via `--suffix`, writing `outputs/cohort_6_3{suffix}/table_6_3a_cohort_flow.csv`. Box-independent upstream stages are re-derived in SQL (same window logic as the staging script); the validity-box stage is read from `valid_transition_segments{suffix}`; analysis-side stages come from `load_transition_endpoints(funnel=...)` — the same code path the §8 analyses use, so the final row matches their cohort N exactly. Requested in `developer_note.md` (2026-06-12); Table 6.3b (demographic breakdown) still pending.
+
+**Per-user diagnosis-type lookup**: `data_staging/export_user_diagnosis_type.py` builds `user_diagnosis_type` (one row per FDA Loop user — distinct `_userId` in `loop_recommendations`) carrying the diabetes diagnosis from `prod.default.patients` and `prod.default.seagull_profiles` (kept as separate `diagnosis_patients` / `diagnosis_seagull` columns), a JAEB-cohort flag, and a resolved `diagnosis_type` (JAEB → `type1`, else patients, else seagull). `exploratory/cohort_diagnosis_breakdown.sql` reports the diagnosis mix across all three analysis cohorts (transition / stable / durability) by joining each cohort to that lookup; `cohort_diagnosis_type.sql` (single-cohort, direct patients join) and `preset_counts.sql` (§8-4 preset-activation counts) are companion exploratory queries.
 
 **Next** (full list in "Pending / In Progress" at the bottom of `project_history.md`): Table 6.3b (demographic breakdown of the transition cohort) for the box080-primary report copy, plus 0.90-build §6.3 parity tables (developer_note.md 2026-06-12); guardrail values are placeholders — need FDA-confirmed limits; wire day-level classification (`loop_recommendation_day`) into the pipeline YAML + downstream; evaluate combined `loop_recommendations` vs per-method tables and compare dosingDecision-vs-HealthKit coverage; finish the argparse/param refactor on `compute_glycemic_endpoints.py` (the validity-box half of `export_valid_transition_segments.py` is done); expand the minimal `analysis_8-6`.
 
@@ -28,7 +30,8 @@ FDA_real_world_data/
 │   ├── export_cbg_from_overrides.py             — Filter CBG by preset override periods
 │   ├── export_carbohydrates_from_transitions.py — Extract food entries in transition segments; dedupes BDDP re-ingests via latest `created_timestamp`; carries `tb_to_ab_seg1_start` + `segment_rank` (per-segment attribution, matching CBG exporter)
 │   ├── export_overrides_from_transitions.py     — Extract + validate preset override events
-│   └── compute_glycemic_endpoints.py            — Compute TIR/TBR/TAR/CV/hypo events
+│   ├── compute_glycemic_endpoints.py            — Compute TIR/TBR/TAR/CV/hypo events
+│   └── export_user_diagnosis_type.py            — Build user_diagnosis_type: per-user diabetes diagnosis from prod patients + seagull_profiles, JAEB cohort → type1 override; FDA Loop-user universe (loop_recommendations)
 │
 ├── analysis/
 │   ├── analysis_6-3a_cohort_flow.py — Table 6.3a (RPT-1001 §6.3): stage-by-stage cohort-flow funnel, BDDP sample → final transition cohort; box-independent upstream stages re-derived in SQL, validity-box stage read from valid_transition_segments{suffix}, analysis-side stages via load_transition_endpoints(funnel=...); writes outputs/cohort_6_3{suffix}/
@@ -74,7 +77,10 @@ FDA_real_world_data/
     ├── autobolus_healthkit.sql            — Exploratory: parse HealthKit metadata for AB/TB classification
     ├── isf_for_valid_transition.py        — Histogram of ISF (mg/dL/U) across all pump-settings schedule entries during valid TB→AB transitions
     ├── transition_segment_score_separation.sql — Segment-score separation of the rank-1 "used" segments vs the candidate pool; cohort impact of tightening the validity box (carries the §8-1 coverage/guardrail/both-halves gates)
-    └── run_transition_variant.py          — Driver: switch the validity box (`--suffix`/`--autobolus-low`/`--autobolus-high`/`--skip-analysis`), rebuild the box-affected transition subtree into parallel `{suffix}` tables (branch-from-box: reuses production loop_cbg/bddp), and run the 6-3a cohort flow + analyses 8-1/2/3/4/5/8 into `outputs/*{suffix}/` (default 0.80 box / `_box080`)
+    ├── run_transition_variant.py          — Driver: switch the validity box (`--suffix`/`--autobolus-low`/`--autobolus-high`/`--skip-analysis`), rebuild the box-affected transition subtree into parallel `{suffix}` tables (branch-from-box: reuses production loop_cbg/bddp), and run the 6-3a cohort flow + analyses 8-1/2/3/4/5/8 into `outputs/*{suffix}/` (default 0.80 box / `_box080`)
+    ├── preset_counts.sql                  — Preset-activation counts behind Table 8.4a (§8-4 cohort): activations + distinct users by dosing mode, cohort denominator + paired-N, per-preset-name breakdown; production + parallel `_box080` sections
+    ├── cohort_diagnosis_type.sql          — Transition-cohort (box080) diagnosis breakdown joining prod.default.patients directly; splits "not in patients record" vs "in patients, no diagnosisType entry"
+    └── cohort_diagnosis_breakdown.sql     — Diagnosis-type breakdown (count + %) across all three cohorts (transition/stable/durability) via user_diagnosis_type; the transition view reproduces load_transition_endpoints (both-half CGM-coverage gate); targets the `_box080` transition variant
 ```
 
 ## Pipeline DAG
@@ -205,3 +211,5 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 | Per-user time-weighted settings + demographics keyed on rwd_user_id | `simulation/export/export_settings_and_demographics.py` |
 | Cohort settings vs Tidepool reference plots (by-age + 1×3 all-users) | `simulation/plot_settings_vs_reference.py` |
 | ISF distribution across valid-transition pump settings | `exploratory/isf_for_valid_transition.py` |
+| Per-user diabetes diagnosis (patients + seagull + JAEB→type1) | `data_staging/export_user_diagnosis_type.py` |
+| Diagnosis breakdown across the 3 analysis cohorts | `exploratory/cohort_diagnosis_breakdown.sql` |
