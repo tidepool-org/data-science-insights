@@ -3,7 +3,8 @@ Unit test for analysis_8-2 pandas helpers.
 
 Covers `create_table_8_2a` (sample characteristics across all three segments)
 and `_select_demo_users` (Figure 8.2b user selection). These helpers are
-pure-pandas and don't require Spark, so this runs as a plain pytest unit test.
+pure-pandas and don't require Spark, so this runs as a plain script — no
+pytest, no Spark — directly or via run_all_tests.py.
 
 Heavier behavior — `aggregate_override_endpoints` (per-activation aggregation,
 hypo rate computation), cohort/guardrail filtering, staging propagation — is
@@ -12,11 +13,11 @@ synthetic-BDDP integration test.
 """
 
 import importlib.util
+import math
 import os
 import sys
 
 import pandas as pd
-import pytest
 
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +37,11 @@ _spec.loader.exec_module(analysis_8_2)
 TB  = analysis_8_2.TB
 AB1 = analysis_8_2.AB1
 AB2 = analysis_8_2.AB2
+
+
+def _approx(actual, expected, rel_tol=1e-6, abs_tol=1e-12):
+    """Local stand-in for pytest.approx so this file needs no pytest."""
+    return math.isclose(actual, expected, rel_tol=rel_tol, abs_tol=abs_tol)
 
 
 def _act(user, segment, override_time, duration_s=3600, preset="Exercise",
@@ -187,13 +193,20 @@ def test_aggregate_override_endpoints_averages_endpoints_and_pools_hypo_rate():
     wide = aggregate_override_endpoints(df, ab_segment=AB1, grain="name")
     assert len(wide) == 1
     row = wide.iloc[0]
-    assert row["tir_seg1"] == pytest.approx(70.0)
-    assert row["tir_seg2"] == pytest.approx(75.0)
-    assert row["hypo_rate_seg1"] == pytest.approx(1 / 8)
-    assert row["hypo_rate_seg2"] == pytest.approx(0)
+    assert _approx(row["tir_seg1"], 70.0)
+    assert _approx(row["tir_seg2"], 75.0)
+    assert _approx(row["hypo_rate_seg1"], 1 / 8)
+    assert _approx(row["hypo_rate_seg2"], 0)
     assert row["activation_count_seg1"] == 2
     assert row["activation_count_seg2"] == 3
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    test_table_8_2a_counts_users_in_both_periods_across_seg2_or_seg3()
+    test_table_8_2a_hours_split_by_segment_for_cohort_users()
+    test_table_8_2a_handles_missing_segments()
+    test_select_demo_users_picks_preset_with_most_paired_seg2_users()
+    test_select_demo_users_ignores_unvalidated_pairs()
+    test_select_demo_users_caps_at_max_users()
+    test_aggregate_override_endpoints_averages_endpoints_and_pools_hypo_rate()
+    print("\nAll tests passed.")

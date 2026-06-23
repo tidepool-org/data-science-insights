@@ -50,7 +50,7 @@ FDA_real_world_data/
 │       └── statistics.py   — Paired t-test, Wilcoxon, ANOVA, Tukey, Dunn's, p-value formatting; shapiro + wilcoxon short-circuit to NaN when input has <2 distinct values (avoids scipy zero-range warnings)
 │
 ├── testing/
-│   ├── run_all_tests.py           — Recursive glob (**/test_*.py), report pass/fail
+│   ├── run_all_tests.py           — Recursive glob (**/test_*.py), runpy each as __main__, report pass/fail (suite is pytest-free — see Tests note below)
 │   ├── staging_test_helpers.py    — setup_test_table(), read_test_output(), assert_row_count(), make_loop_recs()
 │   ├── create_test_loop_data.py   — Synthetic loop data generator
 │   ├── data_staging/              — Paired tests for every data_staging/ script (13 files)
@@ -183,7 +183,7 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 
 **Analysis scripts** all follow: load tables via `spark.sql()` → filter by coverage + guardrails → compute stats → output tables/figures to `outputs/analysis_8_X/`. The transition analyses (8-1/2/3/4/5/8) take a `suffix` (threaded `run_in_databricks` → `run_analysis` → `load_data`, exposed as `--suffix`) that selects parallel `{suffix}` source tables and redirects output to `outputs/analysis_8_X{suffix}/`; `suffix=""` is production.
 
-**Tests** use `staging_test_helpers.py`: create temp Spark tables with synthetic data, run the staging function, assert on the output DataFrame, teardown.
+**Tests** use `staging_test_helpers.py`: create temp Spark tables with synthetic data, run the staging function, assert on the output DataFrame, teardown. The suite is **pytest-free**: each `test_*.py` runs its assertions either at module top level or from a `__main__` block that calls its `test_*` functions directly, and `run_all_tests.py` executes them with `runpy`. Pytest is avoided on purpose — on Databricks the tests live on the `/Workspace` FUSE mount, which rejects the `__pycache__` writes pytest's assertion rewriter requires (`OSError 95`); plain `runpy`/import tolerates it. Use a local `_approx()` (math.isclose) instead of `pytest.approx`.
 
 ## Quick Lookup
 

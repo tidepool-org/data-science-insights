@@ -4,6 +4,12 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-06-23: Test suite — drop the lone pytest dependency (runs clean on Databricks)
+
+Converted [testing/analysis/test_analysis_8_2.py](testing/analysis/test_analysis_8_2.py) — the suite's only pytest-based test — to the plain-script convention every other test file uses: a `__main__` block that calls each `test_*` function directly, with a local `_approx()` (math.isclose) replacing `pytest.approx`. No `pytest` import remains anywhere under `testing/`.
+
+Why: the suite is run by hitting Run-file on `run_all_tests.py`, which `runpy`-executes each `test_*.py` as `__main__`. On a Databricks cluster the tree lives on the `/Workspace` FUSE mount, which doesn't support `__pycache__` directory creation; pytest's assertion rewriter hard-fails there (`OSError 95 Operation not supported`), so any test calling `pytest.main()` aborted the whole run. Plain CPython import / `runpy` tolerates the same condition, so the rest of the suite was unaffected — this one file was the entire blocker.
+
 ## 2026-06-23: Per-user diagnosis-type lookup table + cohort diagnosis-breakdown queries
 
 A standalone per-user diabetes-diagnosis lookup for the FDA Loop-user universe, plus exploratory queries that break the diagnosis mix down across the three analysis cohorts (transition / stable / durability) — for characterizing the cohorts by diabetes type. No change to any §8 analysis.
@@ -847,3 +853,4 @@ _Update this section as work continues._
 - Day-level classification (`loop_recommendation_day`) not yet wired into pipeline YAML or consumed by downstream scripts
 - Evaluate whether combined `loop_recommendations` (with both methods) should replace individual method tables for downstream aggregation
 - Compare coverage/agreement between dosingDecision and HealthKit classification methods
+- `testing/analysis/test_statistics.py` defines 10 `test_*` functions but has no `__main__` block, so `run_all_tests.py` (runpy) imports it and runs none of them — add a `__main__` that calls each so they actually execute
