@@ -418,7 +418,13 @@ def export_by_jaeb_id(durability: pd.DataFrame, jaeb_map: pd.DataFrame, output_d
 # =============================================================================
 
 
-def run_analysis(spark, output_dir: str = OUTPUT_DIR):
+def run_analysis(spark, output_dir=None, suffix: str = ""):
+    # Durability is box-independent: `suffix` only routes the output directory
+    # (so a validity-box variant run drops its 8-7 copy in
+    # outputs/analysis_8_7{suffix}/) — the durability / event-time / JAEB tables
+    # are always read from production, identical across boxes.
+    if output_dir is None:
+        output_dir = OUTPUT_DIR + suffix
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)
@@ -480,8 +486,8 @@ def run_analysis(spark, output_dir: str = OUTPUT_DIR):
     }
 
 
-def run_in_databricks(spark):
-    return run_analysis(spark)
+def run_in_databricks(spark, suffix: str = ""):
+    return run_analysis(spark, suffix=suffix)
 
 
 # =============================================================================
@@ -590,6 +596,9 @@ def _parse_args():
                         help="Path to partner summary CSV (required for --mode figures).")
     parser.add_argument("--output-dir", default=OUTPUT_DIR,
                         help=f"Output directory (default: {OUTPUT_DIR}).")
+    parser.add_argument("--suffix", default="",
+                        help="output-dir suffix, e.g. _box080 (durability is "
+                             "box-independent — routes output only, not source tables).")
     return parser.parse_args()
 
 
@@ -600,4 +609,4 @@ if __name__ == "__main__":
             raise SystemExit("--mode figures requires --input-csv PATH")
         render_subgroup_figure(args.input_csv, args.output_dir)
     else:
-        run_in_databricks(spark)  # type: ignore[name-defined]
+        run_in_databricks(spark, suffix=args.suffix)  # type: ignore[name-defined]

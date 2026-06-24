@@ -4,8 +4,11 @@ Exploratory sensitivity driver — NOT part of fda_analysis_pipeline.yml. Switch
 the TB→AB segment-validity box to a different threshold, rebuilds the entire
 box-affected subtree into parallel `{suffix}` tables, and runs the §6.3 cohort
 flow plus every transition analysis (8-1, 8-2, 8-3, 8-4, 8-5, 8-8) into parallel
-`outputs/*{suffix}/` folders. Production tables/outputs and the box-independent
-branches (8-6 stable, 8-7 durability) are never touched.
+`outputs/*{suffix}/` folders. 8-7 (durability) is box-independent but is also run
+so the variant output folder is complete — it reads the production durability
+tables and only routes its output to `outputs/analysis_8_7{suffix}/` (numbers
+identical to the production 8-7). Production tables/outputs and the 8-6 (stable-AB)
+branch are never touched.
 
 "Branch from the box": everything upstream of valid_transition_segments
 (loop_recommendations, loop_cbg, bddp) is box-independent, so it is REUSED from
@@ -58,9 +61,12 @@ DEFAULT_SUFFIX = "_box080"
 DEFAULT_AUTOBOLUS_LOW = 0.20    # seg1 temp-basal floor = 1 - 0.20 = 0.80
 DEFAULT_AUTOBOLUS_HIGH = 0.80   # seg2 autobolus floor = 0.80
 
-# Transition analyses to re-run on the variant cohort (8-6/8-7 are box-independent).
-# 6-3a first: the cohort-flow funnel characterizes the variant cohort the
-# analyses then run on.
+# Analyses to run for the variant. 6-3a + the transition analyses (8-1/2/3/4/5/8)
+# read the box-affected {suffix} tables; 8-7 (durability) is box-independent and
+# only routes its output to outputs/analysis_8_7{suffix}/ (same numbers as
+# production) — included so the variant output set is complete. 8-6 (stable-AB,
+# partner-CSV handoff) stays excluded. 6-3a first: the cohort-flow funnel
+# characterizes the variant cohort the analyses then run on.
 ANALYSES = [
     "analysis_6-3a_cohort_flow.py",
     "analysis_8-1_comparative_clinical_performance_and_safety_of_autobolus_vs_temporary_basal_dosing_strategies.py",
@@ -68,6 +74,7 @@ ANALYSES = [
     "analysis_8-3_preset_parameter_changes.py",
     "analysis_8-4_preset_activation_duration.py",
     "analysis_8-5_demographic_subgroup_analysis.py",
+    "analysis_8-7_autobolus_adoption_durability.py",
     "analysis_8-8_carbohydrate_consumption_consistency.py",
 ]
 
