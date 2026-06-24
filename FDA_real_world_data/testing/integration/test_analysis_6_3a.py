@@ -57,14 +57,14 @@ try:
         print("PASS: table_6_3a_cohort_flow.csv written with expected columns")
 
         # ── Funnel shape ──────────────────────────────────────────────────
-        # 5 upstream stages + 6 loader stages.
-        assert len(table) == 11, f"expected 11 funnel stages, got {len(table)}"
+        # 5 upstream stages + 7 loader stages (incl. the type-1 diagnosis gate).
+        assert len(table) == 12, f"expected 12 funnel stages, got {len(table)}"
         users = table["n_users"].tolist()
         assert all(b <= a for a, b in zip(users, users[1:])), (
             f"n_users not non-increasing down the funnel: {users}"
         )
         assert users[0] > 0, "BDDP sample stage is empty"
-        print(f"PASS: 11-stage funnel, n_users non-increasing ({users})")
+        print(f"PASS: 12-stage funnel, n_users non-increasing ({users})")
 
         # ── Upstream SQL stages pinned to the fixture ─────────────────────
         # Exact pins (not just bounds) so an over-admitting drift from

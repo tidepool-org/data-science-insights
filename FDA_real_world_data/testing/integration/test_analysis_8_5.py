@@ -4,8 +4,8 @@ Uses the same `load_transition_endpoints` cohort as 8-1, plus the
 demographic bins from `_DEMOGRAPHICS` in build_synthetic_bddp.py.
 
 Bins exercised by the synthetic cohort:
-- Age: Children (6-<12): int_user_15 (8y); Adolescents (12-<18): int_user_03;
-       Adults (18-<65): int_user_01/02/12/13/14; Older Adults (≥65): int_user_16.
+- Age: Children (6–<12): int_user_15 (8y); Adolescents (12–<18): int_user_03;
+       Adults (18–64): int_user_01/02/12/13/14; Older Adults (≥65): int_user_16.
 - Gender: M (02, 03, 12, 14, 15); F (01, 13, 16).
 - YLD: Early (<5y): 03, 14, 15; Established (5-<15y): 01, 12, 13;
        Long-duration (≥15y): 02, 16.
@@ -89,9 +89,9 @@ try:
         # Check the age bins our archetypes cover.
         age_bins = set(df["age_group"].dropna())
         for bin_label, who in (
-            ("Children (6-<12)", "int_user_15"),
-            ("Adolescents (12-<18)", "int_user_03"),
-            ("Adults (18-<65)", "int_user_01"),
+            ("Children (6–<12)", "int_user_15"),
+            ("Adolescents (12–<18)", "int_user_03"),
+            ("Adults (18–64)", "int_user_01"),
             ("Older Adults (≥65)", "int_user_16"),
         ):
             assert any(bin_label in str(b) for b in age_bins) or bin_label in age_bins, (

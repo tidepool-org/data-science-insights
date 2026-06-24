@@ -42,6 +42,7 @@ TABLES = {
     "user_dates": f"{P}user_dates",
     "user_gender": f"{P}user_gender",
     "jaeb_link": f"{P}jaeb_upload_to_userid",
+    "user_diagnosis_type": f"{P}user_diagnosis_type",
     "loop_recommendations": f"{P}loop_recommendations",
     "loop_cbg": f"{P}loop_cbg",
     "valid_transition_segments": f"{P}valid_transition_segments",
@@ -60,7 +61,8 @@ TABLES = {
     "valid_stable_guardrails": f"{P}valid_stable_guardrails",
 }
 
-# When all of these exist, run() short-circuits.
+# When all of these exist, run() short-circuits. user_diagnosis_type is included
+# so an older build that predates the type-1 gate forces a one-time rebuild.
 TERMINAL_TABLES = (
     "glycemic_endpoints_transition",
     "glycemic_endpoints_stable",
@@ -69,6 +71,7 @@ TERMINAL_TABLES = (
     "valid_stable_guardrails",
     "valid_transition_carbs",
     "autobolus_event_times",
+    "user_diagnosis_type",
 )
 
 
@@ -159,6 +162,12 @@ def run(spark, force=False):
         spark,
         input_table=TABLES["bddp"],
         output_table=TABLES["loop_recommendations"],
+    )
+    print("[integration.run_pipeline] build_user_diagnosis_type...")
+    build_synthetic_bddp.build_user_diagnosis_type(
+        spark,
+        TABLES["user_diagnosis_type"],
+        TABLES["loop_recommendations"],
     )
     print("[integration.run_pipeline] export_cbg_from_loop...")
     export_cbg_from_loop.run(
@@ -323,6 +332,7 @@ PROD_TO_TEST = {
     "dev.fda_510k_rwd.glycemic_endpoints_override": TABLES["glycemic_endpoints_override"],
     "dev.fda_510k_rwd.valid_transition_guardrails": TABLES["valid_transition_guardrails"],
     "dev.fda_510k_rwd.valid_stable_guardrails": TABLES["valid_stable_guardrails"],
+    "dev.fda_510k_rwd.user_diagnosis_type": TABLES["user_diagnosis_type"],
     "dev.default.bddp_sample_all_2": TABLES["bddp"],
     "dev.default.bddp_user_dates": TABLES["user_dates"],
     "dev.default.user_gender": TABLES["user_gender"],

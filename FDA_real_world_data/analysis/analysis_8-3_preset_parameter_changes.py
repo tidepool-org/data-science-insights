@@ -50,7 +50,7 @@ from utils.constants import (
     STARTING_GLUCOSE_LOW, STARTING_GLUCOSE_HIGH,
 )
 from utils.statistics import test_normality, compute_paired_statistics, format_p
-from utils.data_loading import COHORT_WHERE
+from utils.data_loading import load_allowed_transition_segments
 
 # =============================================================================
 # Parameter definitions: (display_name, seg1_col, seg2_col, unit)
@@ -79,21 +79,10 @@ def load_data(spark, suffix: str = "") -> pd.DataFrame:
     suffix='_box080' reads the parallel 0.80-box cohort tables.
     """
     # ── Step 1: eligible override events ─────────────────────────────────────
-    # Cohort: Loop-version filter + guardrail-violation exclusion. Mirrors the
-    # filter in load_transition_endpoints (utils/data_loading.py).
-    allowed_segments = spark.sql(f"""
-        SELECT s._userId, s.tb_to_ab_seg1_start
-        FROM dev.fda_510k_rwd.valid_transition_segments{suffix} s
-        LEFT ANTI JOIN (
-            SELECT _userId, CAST(segment_start AS DATE) AS tb_to_ab_seg1_start
-            FROM dev.fda_510k_rwd.valid_transition_guardrails{suffix}
-            GROUP BY _userId, CAST(segment_start AS DATE)
-            HAVING SUM(COALESCE(TRY_CAST(violation_count AS DOUBLE), 0)) > 0
-        ) g
-          ON s._userId = g._userId
-         AND s.tb_to_ab_seg1_start = g.tb_to_ab_seg1_start
-        WHERE {COHORT_WHERE}
-    """)
+    # Eligible transition segments: cohort gate + guardrail exclusion + type-1
+    # diagnosis gate (load_allowed_transition_segments) — the same gates the
+    # 8-1/8-5/8-8 loader applies, kept in one place.
+    allowed_segments = load_allowed_transition_segments(spark, suffix=suffix)
 
     # Restrict to seg1 (TB) and seg2 (initial AB); seg3 (days 14–28) was added
     # for Analysis 8-2 Table 8.2c and is out of scope for the parameter-change

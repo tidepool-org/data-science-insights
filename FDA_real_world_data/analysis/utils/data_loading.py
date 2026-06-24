@@ -44,6 +44,21 @@ _MAX_LOOP_VERSION_STR = (
     f".{MAX_LOOP_VERSION_INT % 1_000}"
 )
 
+# Diagnosis-type cohort gate. Every analysis cohort is restricted to confirmed
+# type-1 users (the FDA Loop indication). Strict: only diagnosis_type = 'type1'
+# qualifies — type2/other, unresolved (NULL), and users absent from the lookup
+# are all excluded. The lookup (data_staging/export_user_diagnosis_type.py)
+# already resolves JAEB-cohort members to 'type1', so they survive. The table is
+# box-independent (no {suffix}).
+DIAGNOSIS_TABLE = f"{CATALOG}.user_diagnosis_type"
+TYPE1_DX = "type1"
+# Self-contained predicate for SQL cohort builders that expose `_userId`
+# (analysis_8-3 / analysis_8-4) — AND it onto COHORT_WHERE.
+TYPE1_SEGMENT_WHERE = (
+    f"_userId IN (SELECT _userId FROM {DIAGNOSIS_TABLE} "
+    f"WHERE diagnosis_type = '{TYPE1_DX}')"
+)
+
 
 def _record_funnel(funnel, stage, description, df):
     """Append a cohort-flow snapshot (Table 6.3a) to `funnel`; no-op if None.
@@ -59,6 +74,54 @@ def _record_funnel(funnel, stage, description, df):
         "n_users": int(df["_userId"].nunique()),
         "n_segments": int(df[SEGMENT_KEY].drop_duplicates().shape[0]),
     })
+
+
+def load_type1_user_ids(spark) -> set:
+    """Return the set of `_userId`s resolved to type-1 diabetes.
+
+    Strict gate (FDA Loop indication): only `diagnosis_type = 'type1'` in
+    `user_diagnosis_type` qualifies. Users who are type2/other, have an
+    unresolved diagnosis (NULL), or are absent from the lookup are excluded.
+    JAEB-cohort members are resolved to 'type1' upstream, so they survive.
+    The lookup is box-independent — same set for every validity-box build.
+    """
+    ids = (
+        spark.table(DIAGNOSIS_TABLE)
+        .where(f"diagnosis_type = '{TYPE1_DX}'")
+        .select("_userId")
+        .toPandas()["_userId"]
+    )
+    return set(ids)
+
+
+def load_allowed_transition_segments(spark, suffix: str = ""):
+    """Eligible (user, seg1_start) transition segments, as a Spark DataFrame.
+
+    The cohort the override analyses (8-3 / 8-4) build their work from: every
+    valid transition segment that (a) passes the analysis cohort gate
+    (COHORT_WHERE — Loop version + age), (b) carries no pump-settings guardrail
+    violation, and (c) belongs to a confirmed type-1 user (TYPE1_SEGMENT_WHERE).
+
+    These are the same gates `load_transition_endpoints` applies for 8-1/8-5/8-8.
+    8-3/8-4 don't use that loader (they need override data, not glycemic
+    endpoints), so they share the gate here rather than duplicating the SQL.
+
+    Returns a DataFrame with columns (_userId, tb_to_ab_seg1_start).
+    """
+    return spark.sql(f"""
+        SELECT s._userId, s.tb_to_ab_seg1_start
+        FROM {CATALOG}.valid_transition_segments{suffix} s
+        LEFT ANTI JOIN (
+            SELECT _userId, CAST(segment_start AS DATE) AS tb_to_ab_seg1_start
+            FROM {CATALOG}.valid_transition_guardrails{suffix}
+            GROUP BY _userId, CAST(segment_start AS DATE)
+            HAVING SUM(COALESCE(TRY_CAST(violation_count AS DOUBLE), 0)) > 0
+        ) g
+          ON s._userId = g._userId
+         AND s.tb_to_ab_seg1_start = g.tb_to_ab_seg1_start
+        WHERE {COHORT_WHERE}
+          AND {TYPE1_SEGMENT_WHERE}
+    """)
 
 
 def load_transition_endpoints(spark, suffix: str = "", funnel=None) -> pd.DataFrame:
@@ -129,6 +192,18 @@ def load_transition_endpoints(spark, suffix: str = "", funnel=None) -> pd.DataFr
         f"Known Loop version < {_MAX_LOOP_VERSION_STR}, or unknown version and "
         f"segment ending before {MAX_SEG2_END_DATE}; age ≥ {MIN_AGE} y at "
         f"segment start or unknown",
+        endpoints,
+    )
+
+    # Diagnosis gate: restrict to confirmed type-1 users (FDA Loop indication).
+    type1_ids = load_type1_user_ids(spark)
+    endpoints = endpoints[endpoints["_userId"].isin(type1_ids)].copy()
+    print(f"  Type-1 filter kept {endpoints['_userId'].nunique()} users")
+
+    _record_funnel(
+        funnel, "Type 1 diabetes",
+        "Diagnosis resolved to type-1 in user_diagnosis_type (JAEB→type1, else "
+        "patients/seagull); non-type1, unresolved, or absent users excluded",
         endpoints,
     )
 
@@ -246,6 +321,12 @@ def load_override_endpoints(spark, suffix: str = "") -> pd.DataFrame:
     pre_cohort = endpoints["_userId"].nunique()
     endpoints = endpoints.merge(allowed, on="_userId", how="inner")
     print(f"  Cohort filter kept {endpoints['_userId'].nunique()}/{pre_cohort} users")
+
+    # Diagnosis gate: confirmed type-1 users only (FDA Loop indication).
+    type1_ids = load_type1_user_ids(spark)
+    pre_dx = endpoints["_userId"].nunique()
+    endpoints = endpoints[endpoints["_userId"].isin(type1_ids)].copy()
+    print(f"  Type-1 filter kept {endpoints['_userId'].nunique()}/{pre_dx} users")
 
     # Guardrail-violation exclusion.
     guardrails = (

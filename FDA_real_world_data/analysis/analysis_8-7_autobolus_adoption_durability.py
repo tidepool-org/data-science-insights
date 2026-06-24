@@ -38,6 +38,7 @@ import pandas as pd
 from scipy.stats import beta as beta_dist
 
 from utils.constants import COLORS_ACCENT, COLORS_PRIMARY, COLORS_SECONDARY, FONT
+from utils.data_loading import load_type1_user_ids
 
 OUTPUT_DIR = "outputs/analysis_8_7"
 
@@ -69,6 +70,12 @@ def load_durability(spark) -> pd.DataFrame:
         & (df["has_final_coverage"] == True)  # noqa: E712
         & (df["is_age_eligible"] == True)  # noqa: E712
     ].copy()
+
+    # Diagnosis gate: confirmed type-1 users only (FDA Loop indication).
+    type1_ids = load_type1_user_ids(spark)
+    pre_dx = len(df)
+    df = df[df["_userId"].isin(type1_ids)].copy()
+    print(f"  Type-1 filter kept {len(df)}/{pre_dx} qualified users")
 
     for col in df.select_dtypes(include=["object"]).columns:
         if col not in ("_userId", "gender"):

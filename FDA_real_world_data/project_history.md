@@ -4,6 +4,31 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-06-24: Type-1 diagnosis gate across all analysis cohorts
+
+Every §8 analysis cohort (and the Table 6.3a funnel) is now restricted to confirmed type-1 diabetes users — the FDA Loop indication. Strict gate: keep only `user_diagnosis_type.diagnosis_type = 'type1'`; type2/other, unresolved (NULL), and users absent from the lookup all drop. JAEB-cohort members survive because the lookup resolves them to type1.
+
+### Single source of truth
+- [analysis/utils/data_loading.py](analysis/utils/data_loading.py): `load_type1_user_ids(spark)` (pandas set, for the loaders) and `TYPE1_SEGMENT_WHERE` (SQL predicate, for SQL-side cohort builders), both reading the box-independent `user_diagnosis_type` lookup via `DIAGNOSIS_TABLE` / `TYPE1_DX`. New `load_allowed_transition_segments(spark, suffix)` returns the eligible `(_userId, tb_to_ab_seg1_start)` set — cohort gate (`COHORT_WHERE`) + guardrail exclusion + type-1 — the SQL that analysis_8-3 / 8-4 previously kept byte-identical copies of.
+
+### Applied
+- `load_transition_endpoints` (8-1/8-5/8-8) — type-1 set filter plus a new "Type 1 diabetes" funnel stage, so Table 6.3a (analysis_6-3a) reports the exclusion as a cohort-flow row (11 → 12 stages).
+- `load_override_endpoints` (8-2) — type-1 set filter.
+- analysis_8-3 / 8-4 — now call `load_allowed_transition_segments` instead of their duplicated cohort SQL.
+- analysis_8-7 `load_durability` — type-1 set filter on the qualified cohort.
+- analysis_8-6 — JAEB-only by construction (JAEB ⇒ type1), so a defensive assert that the gate drops nothing.
+
+### Tests
+- [testing/integration/build_synthetic_bddp.py](testing/integration/build_synthetic_bddp.py): `build_user_diagnosis_type` (CTAS, one row per synthetic Loop user → all type1), wired into run_pipeline.py (`TABLES` + `TERMINAL_TABLES` + the build step + the `PROD_TO_TEST` redirect). All-type1 keeps every cohort at its pre-gate composition, so the existing analysis tests are unchanged apart from 6-3a's stage count.
+- New [testing/integration/test_type1_diagnosis_gate.py](testing/integration/test_type1_diagnosis_gate.py) pins the exclusion path (type2 / other / NULL / absent all dropped) — the all-type1 fixture alone would pass even if the gate were a no-op.
+- Fixed a pre-existing dash-character mismatch in `test_analysis_8_5.py` (ASCII hyphen vs the analysis's en-dash age-bin labels) that the repopulated cohort surfaced.
+
+The `simulation/export/*` scripts read the segment tables directly in SQL and do **not** inherit the gate — the simulator scenario set will diverge from the type-1 analysis cohort until separately updated (see Pending).
+
+## 2026-06-24: run_all_tests.py — live compact bars
+
+`run_all_tests.py` now renders one colored bar per test (green pass / red fail), grouped by subdirectory, streamed live as each test finishes (flushed, so the bars tick in real time even when stdout is block-buffered on Databricks). Each test's own stdout/stderr is captured and hidden; a failing test shows its error plus the tail of its captured output, and every failure is listed again at the end. Verbose mode (flip `VERBOSE`, env `VERBOSE=1`, or `--verbose`/`-v`) streams full per-test output. On a real TTY the in-flight test shows `running…` and is overwritten in place by its resolved bar; on failure it exits non-zero via `sys.exit(1)` (no traceback over the recap).
+
 ## 2026-06-23: Test suite — drop the lone pytest dependency (runs clean on Databricks)
 
 Converted [testing/analysis/test_analysis_8_2.py](testing/analysis/test_analysis_8_2.py) — the suite's only pytest-based test — to the plain-script convention every other test file uses: a `__main__` block that calls each `test_*` function directly, with a local `_approx()` (math.isclose) replacing `pytest.approx`. No `pytest` import remains anywhere under `testing/`.
@@ -854,3 +879,4 @@ _Update this section as work continues._
 - Evaluate whether combined `loop_recommendations` (with both methods) should replace individual method tables for downstream aggregation
 - Compare coverage/agreement between dosingDecision and HealthKit classification methods
 - `testing/analysis/test_statistics.py` defines 10 `test_*` functions but has no `__main__` block, so `run_all_tests.py` (runpy) imports it and runs none of them — add a `__main__` that calls each so they actually execute
+- The type-1 diagnosis gate is applied in the analysis loaders only; the `simulation/export/*` scripts read `valid_transition_segments` / `glycemic_endpoints_transition` directly in SQL and so still include non-type-1 users — wire the gate (or a type-1 filter) through the simulator-scenario exports so the scenario set matches the §8 cohort

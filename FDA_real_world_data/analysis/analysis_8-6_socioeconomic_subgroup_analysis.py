@@ -41,7 +41,7 @@ import pandas as pd
 
 from utils import MIN_CBG_COUNT
 from utils.constants import COLORS_PRIMARY, COLORS_SECONDARY, FONT
-from utils.data_loading import MIN_AGE
+from utils.data_loading import MIN_AGE, load_type1_user_ids
 
 OUTPUT_DIR = "outputs/analysis_8_6"
 
@@ -112,6 +112,18 @@ def load_data(spark) -> pd.DataFrame:
     merged = endpoints.merge(jaeb_map, on="_userId", how="inner")
     merged = merged.drop_duplicates(subset="PtID")
     print(f"  Users after JAEB linkage: {len(merged)}")
+
+    # Diagnosis gate (defensive): the cohort is JAEB-linked, and JAEB members
+    # resolve to type-1 in user_diagnosis_type by definition, so this should
+    # drop nothing. Apply + assert to catch any lookup inconsistency.
+    type1_ids = load_type1_user_ids(spark)
+    pre_dx = merged["_userId"].nunique()
+    merged = merged[merged["_userId"].isin(type1_ids)].copy()
+    dropped = pre_dx - merged["_userId"].nunique()
+    assert dropped == 0, (
+        f"type-1 gate dropped {dropped} JAEB-linked user(s) — JAEB members "
+        f"should all resolve to type1 in user_diagnosis_type"
+    )
 
     return merged
 

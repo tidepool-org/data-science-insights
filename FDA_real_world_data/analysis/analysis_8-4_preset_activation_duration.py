@@ -39,7 +39,7 @@ S_PER_HOUR = 3_600   # override duration is stored in seconds
 
 from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT
 from utils.statistics import test_normality, compute_paired_statistics, format_p
-from utils.data_loading import COHORT_WHERE
+from utils.data_loading import load_allowed_transition_segments
 
 
 # =============================================================================
@@ -54,21 +54,10 @@ def load_data(spark, suffix: str = "") -> pd.DataFrame:
 
     suffix='_box080' reads the parallel 0.80-box cohort tables.
     """
-    # Cohort: Loop-version filter + guardrail-violation exclusion. Mirrors the
-    # filter in load_transition_endpoints (utils/data_loading.py).
-    allowed_segments = spark.sql(f"""
-        SELECT s._userId, s.tb_to_ab_seg1_start
-        FROM dev.fda_510k_rwd.valid_transition_segments{suffix} s
-        LEFT ANTI JOIN (
-            SELECT _userId, CAST(segment_start AS DATE) AS tb_to_ab_seg1_start
-            FROM dev.fda_510k_rwd.valid_transition_guardrails{suffix}
-            GROUP BY _userId, CAST(segment_start AS DATE)
-            HAVING SUM(COALESCE(TRY_CAST(violation_count AS DOUBLE), 0)) > 0
-        ) g
-          ON s._userId = g._userId
-         AND s.tb_to_ab_seg1_start = g.tb_to_ab_seg1_start
-        WHERE {COHORT_WHERE}
-    """)
+    # Eligible transition segments: cohort gate + guardrail exclusion + type-1
+    # diagnosis gate (load_allowed_transition_segments) — the same gates the
+    # 8-1/8-5/8-8 loader applies, kept in one place.
+    allowed_segments = load_allowed_transition_segments(spark, suffix=suffix)
 
     users_df = allowed_segments.select("_userId").distinct().toPandas()
 

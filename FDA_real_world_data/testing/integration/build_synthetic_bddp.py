@@ -891,3 +891,30 @@ def build_jaeb_link(spark, table_name):
         pdf, schema="`uploadID` string, `PtID` string"
     ).write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(table_name)
     print(f"Wrote {len(rows)} JAEB linkage row(s) to {table_name}")
+
+
+def build_user_diagnosis_type(spark, table_name, loop_recommendations_table):
+    """One row per synthetic Loop user, resolved diagnosis = 'type1'.
+
+    Mirrors dev.fda_510k_rwd.user_diagnosis_type (data_staging/
+    export_user_diagnosis_type.py): the FDA Loop-user universe is the distinct
+    _userId in loop_recommendations. The §8 loaders gate every cohort on
+    diagnosis_type = 'type1', so marking every synthetic user type1 keeps the
+    cohorts at their pre-gate composition. The gate's *exclusion* path
+    (non-type1 dropped) is exercised separately by test_type1_diagnosis_gate.py.
+
+    Columns match production: _userId, diagnosis_patients, diagnosis_seagull,
+    is_jaeb, diagnosis_type.
+    """
+    spark.sql(f"""
+        CREATE OR REPLACE TABLE {table_name} AS
+        SELECT DISTINCT
+            _userId,
+            'type1'              AS diagnosis_patients,
+            CAST(NULL AS STRING) AS diagnosis_seagull,
+            FALSE                AS is_jaeb,
+            'type1'              AS diagnosis_type
+        FROM {loop_recommendations_table}
+    """)
+    n = spark.table(table_name).count()
+    print(f"Wrote {n} diagnosis row(s) to {table_name} (all type1)")
