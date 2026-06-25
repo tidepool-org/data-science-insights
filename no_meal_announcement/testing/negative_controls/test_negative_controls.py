@@ -13,6 +13,7 @@ Tolerances are slightly wider than the memo's strict bands to absorb B=200 Monte
 import importlib.util
 import os
 
+import pandas as pd
 import pytest
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +38,8 @@ NULL_CENTER_MAX = 0.15             # |signed mean of the null TIR contrasts| (ce
 def elig():
     if not os.path.exists(nc.SNAPSHOT):
         pytest.skip(f"snapshot not on disk: {nc.SNAPSHOT}")  # input is git-ignored — prerequisite, not a failure
+    if "diagnosis_type" not in pd.read_csv(nc.SNAPSHOT, nrows=0).columns:
+        pytest.skip(f"snapshot missing 'diagnosis_type' — regenerate it (predates the §7 type-1 merge)")
     return nc.load_eligible()
 
 

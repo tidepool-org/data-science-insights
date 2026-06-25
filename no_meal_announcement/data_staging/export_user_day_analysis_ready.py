@@ -35,6 +35,9 @@ Inputs:
     nma_user_day_tdd                       (delivered basal+bolus per day)
     nma_user_day_age                       (age_years, is_pediatric per §7.6)
     dev.default.user_gender                (per-user sex for Sample Information; LEFT JOIN, null if unknown)
+    dev.fda_510k_rwd.user_diagnosis_type   (per-user resolved diabetes diagnosis, built by the FDA
+                                            pipeline; LEFT JOIN on the RAW _userId, carried pre-hash for
+                                            the §7 type-1 cohort gate applied downstream at the loader)
 
 Privacy: `_userId` is PSEUDONYMIZED at the final SELECT (deterministic salted SHA-256, see
 USERID_SALT) so the analysis-ready table + its CSV snapshot never carry the raw user id off
@@ -44,7 +47,8 @@ hash). The column name is unchanged, so analyses keep a stable per-user key with
 Outputs:
     nma_user_day_analysis_ready
         One row per (user, local_day) — classification flags, endpoints, TDD + ratio,
-        delivery strategy, Loop version, eligibility, age + sex (`_userId` pseudonymized).
+        delivery strategy, Loop version, eligibility, age + sex + diabetes diagnosis
+        (`_userId` pseudonymized).
         Analysis-ready for §8.1/§8.2/§8.3.
     <outputs>/nma_user_day_analysis_ready.csv
         A single-file CSV snapshot of the same table (pandas dump from the driver), for
@@ -137,6 +141,7 @@ def run(
     tdd_table="dev.fda_510k_rwd.nma_user_day_tdd",
     age_table="dev.fda_510k_rwd.nma_user_day_age",
     user_gender_table="dev.default.user_gender",
+    diagnosis_table="dev.fda_510k_rwd.user_diagnosis_type",
     output_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
     output_csv=None,
 ):
@@ -184,6 +189,11 @@ WITH base AS (
     age.is_pediatric,
     -- Sex (LEFT JOIN dev.default.user_gender — null if unknown; per-user constant; for §8.1 Sample Information)
     g.gender,
+    -- Resolved diabetes diagnosis (LEFT JOIN dev.fda_510k_rwd.user_diagnosis_type on the RAW _userId).
+    -- Carried into the snapshot here, pre-hash, because the hashed export key (line below) can't be
+    -- joined to the FDA lookup downstream. Per-user constant; NULL when the user is absent from the
+    -- lookup. The §7 type-1 cohort gate filters on this column at the analysis loader (not here).
+    dx.diagnosis_type,
     -- Strategy + Loop version. delivery_strategy uses the central bolus classifier's per-day
     -- automatic_bolus_count (HealthKit flag OR dosingDecision fallback, over subType='normal'
     -- boluses too) — this also catches subType='normal' + HK-silent + dd-automatic boluses that
@@ -214,6 +224,8 @@ WITH base AS (
     AND cls.local_day = age.local_day
   LEFT JOIN {user_gender_table} g
     ON cls._userId = g.userid
+  LEFT JOIN {diagnosis_table} dx
+    ON cls._userId = dx._userId
   WHERE (lr.version_int IS NOT NULL AND lr.version_int < {MAX_LOOP_VERSION_INT})
      OR (lr.version_int IS NULL AND cls.local_day < DATE '{MAX_DAY_IF_VERSION_UNKNOWN}')
 ),
@@ -273,6 +285,7 @@ if __name__ == "__main__":
     _parser.add_argument("--tdd_table", default="dev.fda_510k_rwd.nma_user_day_tdd")
     _parser.add_argument("--age_table", default="dev.fda_510k_rwd.nma_user_day_age")
     _parser.add_argument("--user_gender_table", default="dev.default.user_gender")
+    _parser.add_argument("--diagnosis_table", default="dev.fda_510k_rwd.user_diagnosis_type")
     _parser.add_argument("--output_table", default="dev.fda_510k_rwd.nma_user_day_analysis_ready")
     _parser.add_argument("--output_csv", default=None, help="CSV path (default: outputs/<table>.csv)")
     _parser.add_argument("--no_csv", action="store_true", help="print the CSV size only; skip the write")
@@ -287,6 +300,7 @@ if __name__ == "__main__":
         _args.tdd_table,
         _args.age_table,
         _args.user_gender_table,
+        _args.diagnosis_table,
         _args.output_table,
         output_csv=False if _args.no_csv else _args.output_csv,
     )

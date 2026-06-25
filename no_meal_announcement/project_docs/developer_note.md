@@ -13,6 +13,60 @@ recolor). All §8.1/§8.2 body tables verified against the current CSVs (match).
 Appendix C was moved out to a standalone companion doc, a duplicate §8.1 HMA paragraph was removed, and
 label/style normalizations were applied — all report-side, no analysis change._
 
+## 0a. 2026-06-24 — T1D-only resync of the report (tables + figures + prose, all blue)
+
+The analysis outputs were regenerated to **exclude users not known to be type 1**; the whole report
+was re-synced from the new CSVs/PNGs the same way RPT-1001 was (CSV → doc, changed cells/runs blue,
+then verified). Tooling lives in `…/510k/claude/scripts/rpt1008/` (`sync_1008.py` apply+verify all 36
+tables, `figures_1008.py`, `prose_edits_1008.py`, `cleanup_1008.py`, `build_1008.sh`). Result:
+**3274/3274 table cells verify against the regenerated CSVs**; 27/29 figures re-embedded byte-identical;
+68 prose/caption numbers updated; 2483 runs blue-marked. The `.docx` is back in the Drive folder.
+
+**Cohort shift (headline):** users 2,171 → **1,925**; user-days 879,810 → **786,073** (adult 1,528 /
+pediatric 449). CE>0 comparator 1,324 → **1,175** users. Directions/conclusions unchanged; magnitudes
+shifted (e.g. §8.4 stratum×strategy interaction p 0.509 → **0.858**, still n.s.).
+
+**⚠️ Three items had NO regenerated source in this run and were left showing prior-cohort data.**
+They are the only places in the report not refreshed to the T1D cohort — please confirm / regenerate:
+
+1. **Table 12.1d — windowed match-feasibility** (§12.1, "Match feasibility for the windowed analysis —
+   share of CE=0 days with an in-window (±45-day) CE>0 comparator and composition of unmatched days").
+   - *What it is:* 3 classification rows × 7 cols — Arm, Matched %, Unmatched %, Pure non-announcer,
+     Sustained non-announcing, Sparse/gap, Nearest CE>0 day median [IQR].
+   - *Why left as-is:* the regenerated outputs do **not** emit a match-composition CSV. The **only**
+     refreshable field is `pct_matched` in `table_12_1a_windowed_sensitivity.csv` (constant across
+     endpoints) — it covers the Matched/Unmatched % columns but **not** the pure / sustained / sparse-gap
+     split or the nearest-CE>0 median[IQR]. Updating just the % columns would pair new-cohort match rates
+     with old-cohort composition (internally inconsistent), so the whole row was left untouched.
+   - *Current vs available Matched %:* CE=0/BE=0 88.6% → **90.3%**; CE=0/BE≤1 87.3% → **88.6%**;
+     CE=0/BE≤∞ 70.0% → **70.1%** (new = `matched_nma_days/total_nma_days` from `table_12_1a`).
+   - *To resolve:* re-run the windowed match-feasibility step on the T1D cohort so it writes the full
+     composition (a `table_12_1d_*` CSV or equivalent); then it syncs like the rest. If only the % columns
+     are wanted, say so and the report editor will pull them from `table_12_1a` and footnote the rest.
+
+2. **Report Figures 8.4b & 8.4c — TIR vs within-user TDD percentile scatters** (§8.4; embedded as
+   `word/media/image13.png` and `image30.png`).
+   - *Captions:* 8.4b "Time in range vs within-user TDD percentile by day type for Autobolus days only";
+     8.4c "Time in range vs within-user TDD percentile: CE=0/BE=0 vs CE≥3/BE≥3 for Autobolus days only".
+   - *Why left as-is:* no matching PNG exists in `analysis_8_4/{cohort}/` (only `figure_8_4a_4x2.png` and
+     `figure_8_4b_carb_entry_by_strategy.png`). The regenerated TIR-vs-TDD-percentile family lives in
+     **§8.3** (`figure_8_3e_tir_vs_tdd_percentile`, `figure_8_3i_tir_vs_tdd_absolute`,
+     `figure_8_3j_tir_vs_tdd_percentile_density`) — none is the per-day-type / AB-only or
+     CE=0/BE=0-vs-CE≥3 view these two embeds show. They appear to be bespoke or pre-pipeline figures, so
+     **both still render the prior cohort**.
+   - *Load-bearing:* Figure **8.4c is cited in the §9 discussion** as the recommended labeling
+     illustration ("such as Figure 8.4c"), so it shouldn't be left stale.
+   - *To resolve:* emit the two source PNGs from the analysis (AB-day percentile scatter by day type, and
+     CE=0/BE=0 vs CE≥3/BE≥3), or decide they're superseded by 8.3e/8.3i/8.3j and replace/remove the embeds.
+
+3. **"~72% of user-days" autobolus share** (prose, appears 3× — §7.3 bolus-classification deviation,
+   the Analysis-4 methods, and the §8.2 results).
+   - *Why left as-is:* it's the share of **all** eligible user-days labeled autobolus-on — a cohort-wide
+     denominator that isn't read from any single synced table (the §8.2/§8.4 strategy splits are gated
+     subsets, not the full denominator). It's approximate ("~"), so a small shift wouldn't change wording.
+   - *To resolve:* compute autobolus-on user-days ÷ total eligible user-days on the T1D snapshot; if it no
+     longer rounds to ~72%, update all three mentions.
+
 ## 0. Before you switch to testing — short checklist
 
 **✅ Developer status — 2026-06-07 (all four resolved):**

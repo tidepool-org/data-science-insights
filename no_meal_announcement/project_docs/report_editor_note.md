@@ -5,6 +5,40 @@ _As of 2026-06-06. For whoever assembles the report from the analysis outputs. O
 cohort. Sections 1–6 below are §8.1-specific; section 7 covers the §8.2/§8.3 high-engagement additions;
 section 8 covers the new §8.4 delivery-strategy analysis._
 
+## 0·resync. 2026-06-25 — T1D-resync gaps (developer_note items 1–3): item 3 now a synced cell
+
+Response to the three "no regenerated source" items in `developer_note.md` (the T1D resync).
+
+**Item 3 — RESOLVED: the autobolus-on share is now a synced Table 1 cell.** Table 1
+(`analysis_8_1/{cohort}/sample_information.csv` + combined `table_8_1_sample_information.csv`) gains a
+row **`Autobolus-on user-days, n (%)`** — autobolus-on eligible user-days ÷ all eligible user-days, the
+exact cohort-wide denominator the prose cites. Sync the **three** prose mentions (§7.3 bolus-classification
+deviation · Analysis-4 methods · §8.2 results) from this cell instead of hardcoding:
+
+| cohort | Autobolus-on user-days, n (%) |
+|---|---|
+| all | **605,932 (77.1%)** |
+| adult | 466,427 (76.3%) |
+| pediatric | 139,481 (79.8%) |
+
+⚠️ The value is **77.1% (~77%), not ~72%.** The "~72%" was **already stale** before the T1D resync — the
+snapshot has been ~77% autobolus-on since the D7 central-classifier change (2026-06-04); it is 77.1% both
+pre- and post-T1D-gate, so this is **not** a cohort effect. It now refreshes with every regen, so it can't
+silently rot again (that prior-stale-prose path is exactly how ~72% slipped through).
+
+**Item 2 — figures 8.4b/8.4c are reproducible, not bespoke.** The §8.3 scatter builder
+`figure_8_3e_tir_vs_tdd_pct(pdf, *, day_types=…, delivery_strategy=…)` already supports the AB-only /
+day-type views these two embeds show (8.4b = AB-only by day type; 8.4c = AB-only CE=0/BE=0 vs CE≥3/BE≥3).
+**Pending (developer):** wire two emit calls + regenerate so they re-embed on the T1D cohort (un-stales the
+§9 citation of 8.4c). Until then leaving them on prior-cohort data is correct.
+
+**Item 1 — Table 12.1d needs a new generator (biggest).** Confirmed there is **no** match-composition
+generator in-repo — only `pct_matched` in `table_12_1a_windowed_sensitivity.csv` is refreshable (Matched %:
+CE=0/BE=0 90.3 · CE=0/BE≤1 88.6 · CE=0/BE≤∞ 70.1). The pure / sustained / sparse-gap split + nearest-CE>0
+median[IQR] were an external one-off; refreshing them needs a new §12.1 generator, **blocked on the three
+bucket definitions** (not recorded in-repo). Leaving the whole row on prior-cohort data, as you did, is the
+right call until that lands.
+
 ## 0. Figure layout update — 2026-06-07 (re-embed needed; developer_note §0 ask #1)
 
 Three figure changes; **regenerate all cohorts and re-embed**. No data/statistics changed — purely the

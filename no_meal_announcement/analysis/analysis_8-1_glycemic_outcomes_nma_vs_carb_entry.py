@@ -344,6 +344,10 @@ def create_sample_information(pdf):
     data_staging/export_user_day_analysis_ready.py), the sex rows read 'N/A (gender pending)'
     so the run completes before the Databricks regeneration step."""
     n_days = int(len(pdf))
+    # §7.3 delivery-strategy share over ALL eligible user-days (cohort-wide denominator). This is the
+    # autobolus-on user-day fraction the report cites in prose (§7.3 / Analysis-4 methods / §8.2); it
+    # lives in no other synced table, so emit it here as a cell that refreshes with every regen.
+    n_ab = int((pdf["delivery_strategy"] == "autobolus_on").sum()) if "delivery_strategy" in pdf.columns else None
     first = pdf.sort_values("local_day").groupby("_userId", as_index=False).first()
     n_users = int(len(first))
     age = pd.to_numeric(first["age_years"], errors="coerce").dropna()
@@ -354,6 +358,8 @@ def create_sample_information(pdf):
     rows = [
         ("Users, n", str(n_users)),
         ("User-days, n", str(n_days)),
+        ("Autobolus-on user-days, n (%)",
+         f"{n_ab} ({100.0 * n_ab / n_days:.1f}%)" if n_ab is not None and n_days else "N/A"),
         ("Age, mean ± SD", f"{age.mean():.1f} ± {age.std(ddof=1):.1f}" if len(age) > 1 else "N/A"),
         ("Age, median [IQR]",
          f"{age.median():.1f} [{age.quantile(0.25):.1f}, {age.quantile(0.75):.1f}]"

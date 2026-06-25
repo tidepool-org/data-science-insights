@@ -63,9 +63,10 @@ def test_restrict_comparator_no_hma_column_is_ok():
 
 def _cohort_frame():
     return pd.DataFrame({
-        "_userId":      ["a", "p", "u", "y"],
-        "is_pediatric": [False, True, np.nan, False],
-        "age_years":    [40.0, 12.0, np.nan, 4.0],   # 'y' is a known <6 user
+        "_userId":        ["a", "p", "u", "y"],
+        "is_pediatric":   [False, True, np.nan, False],
+        "age_years":      [40.0, 12.0, np.nan, 4.0],   # 'y' is a known <6 user
+        "diagnosis_type": ["type1"] * 4,               # all type1 → the §7 gate is a no-op here
     })
 
 
@@ -87,6 +88,47 @@ def test_filter_cohort_all_retains_unknown_age_drops_known_young():
 def test_filter_cohort_min_age_none_disables_floor():
     out = filter_cohort(_cohort_frame(), cohort="all", min_age=None)
     assert set(out["_userId"]) == {"a", "p", "u", "y"}
+
+
+# ---------------------------------------------------------------------------
+# filter_cohort — §7 type-1 diagnosis gate (strict == 'type1', default-on)
+# ---------------------------------------------------------------------------
+
+def _diagnosis_frame():
+    """All adult + age-eligible, so only the type-1 gate decides who survives."""
+    return pd.DataFrame({
+        "_userId":        ["t1", "t2", "oth", "nul"],
+        "is_pediatric":   [False, False, False, False],
+        "age_years":      [40.0, 40.0, 40.0, 40.0],
+        "diagnosis_type": ["type1", "type2", "other", np.nan],
+    })
+
+
+def test_filter_cohort_type1_gate_keeps_only_type1():
+    # Default require_type1=True: type2 / other / NULL all drop (FDA-matching strict).
+    out = filter_cohort(_diagnosis_frame(), cohort="all")
+    assert out["_userId"].tolist() == ["t1"]
+
+
+def test_filter_cohort_type1_gate_off_retains_all_diagnoses():
+    out = filter_cohort(_diagnosis_frame(), cohort="all", require_type1=False)
+    assert set(out["_userId"]) == {"t1", "t2", "oth", "nul"}
+
+
+def test_filter_cohort_require_type1_raises_without_column():
+    """Default-on gate must FAIL LOUD on a pre-merge snapshot — never silently pass an
+    ungated cohort when `diagnosis_type` is absent."""
+    df = pd.DataFrame({
+        "_userId":      ["a"],
+        "is_pediatric": [False],
+        "age_years":    [40.0],
+    })
+    raised = False
+    try:
+        filter_cohort(df, cohort="all")   # require_type1 defaults True; no diagnosis_type column
+    except KeyError:
+        raised = True
+    assert raised
 
 
 # ---------------------------------------------------------------------------

@@ -13,17 +13,28 @@ SNAPSHOT = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma_user_
 OUT = os.path.normpath(os.path.join(_DIR, "..", "..", "analysis", "outputs"))
 
 
+def _skip_unless_snapshot_has(*cols):
+    """Skip when the recompute input (the git-ignored snapshot) is absent OR predates a needed
+    column — e.g. the §7 `diagnosis_type` merge. A not-ready input is a prerequisite, not a failure
+    (a bare checkout / stale snapshot shouldn't drown the suite)."""
+    if not os.path.exists(SNAPSHOT):
+        pytest.skip(f"snapshot not on disk: {SNAPSHOT}")
+    have = set(pd.read_csv(SNAPSHOT, nrows=0).columns)
+    missing = [c for c in cols if c not in have]
+    if missing:
+        pytest.skip(f"snapshot missing {missing} — regenerate it (predates the §7 type-1 merge)")
+
+
 def test_table_8_3a_ce0_be0_low_tir():
     """Table 8.3a, mean-reference Low stratum (R = tdd_ratio < 1), CE=0/BE=0, TIR."""
     output_csv = os.path.join(OUT, "analysis_8_3/all/table_8_3a_per_user_by_stratum.csv")
-    if not os.path.exists(SNAPSHOT):
-        pytest.skip(f"snapshot not on disk: {SNAPSHOT}")  # the recompute input (git-ignored) — prerequisite, not a failure
+    _skip_unless_snapshot_has("diagnosis_type")
     if not os.path.exists(output_csv):
         pytest.fail(f"output table missing: {output_csv} — regenerate the analysis outputs from the snapshot")
 
     df = pd.read_csv(
         SNAPSHOT,
-        usecols=["_userId", "day_eligible", "user_eligible", "age_years",
+        usecols=["_userId", "day_eligible", "user_eligible", "age_years", "diagnosis_type",
                  "in_ce0_be0", "tir", "tdd_ratio", "n_eligible_days_for_tdd"],
     )
 
@@ -31,6 +42,7 @@ def test_table_8_3a_ce0_be0_low_tir():
     # keep age >= 6 OR unknown age (= filter_cohort). Recomputed inline, not imported from the pipeline.
     e = df[(df["day_eligible"] == True) & (df["user_eligible"] == True)]   # noqa: E712
     e = e[e["age_years"].isna() | (e["age_years"] >= 6)]
+    e = e[e["diagnosis_type"] == "type1"]   # §7 type-1 gate (= filter_cohort require_type1)
 
     # Mean-reference strata: among TDD-reference-eligible users (>=30 eligible days), CE=0/BE=0 days
     # with tdd_ratio < 1 are the Low stratum; per-user mean TIR, then across-user mean.
@@ -51,14 +63,13 @@ def test_table_8_3a_ce0_be0_low_tir():
 def test_table_8_3d_ce0_beinf_low_tir():
     """Table 8.3d, PRIMARY overall-reference rank-TERCILE, same-user-set gated, broadest CE=0 arm (CE=0/BE<=inf), Low stratum, TIR."""
     output_csv = os.path.join(OUT, "analysis_8_3/all/table_8_3d_rank_tercile_strata.csv")
-    if not os.path.exists(SNAPSHOT):
-        pytest.skip(f"snapshot not on disk: {SNAPSHOT}")  # the recompute input (git-ignored) — prerequisite, not a failure
+    _skip_unless_snapshot_has("diagnosis_type")
     if not os.path.exists(output_csv):
         pytest.fail(f"output table missing: {output_csv} — regenerate the analysis outputs from the snapshot")
 
     df = pd.read_csv(
         SNAPSHOT,
-        usecols=["_userId", "day_eligible", "user_eligible", "age_years",
+        usecols=["_userId", "day_eligible", "user_eligible", "age_years", "diagnosis_type",
                  "in_ce0_be_inf", "tir", "tdd_units", "n_eligible_days_for_tdd"],
     )
 
@@ -66,6 +77,7 @@ def test_table_8_3d_ce0_beinf_low_tir():
     # keep age >= 6 OR unknown age (= filter_cohort). Recomputed inline, not imported from the pipeline.
     e = df[(df["day_eligible"] == True) & (df["user_eligible"] == True)]   # noqa: E712
     e = e[e["age_years"].isna() | (e["age_years"] >= 6)]
+    e = e[e["diagnosis_type"] == "type1"]   # §7 type-1 gate (= filter_cohort require_type1)
 
     # Overall-reference rank: rank each day's TDD over the user's ALL eligible days (deterministic
     # tie-break), then keep the broadest CE=0 arm and cut into terciles (Low/Mid/High).

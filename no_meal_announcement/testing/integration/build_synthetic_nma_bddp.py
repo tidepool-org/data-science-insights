@@ -544,6 +544,36 @@ def build_loop_recommendations(spark, table_name: str) -> None:
     print(f"Wrote {len(rows):,} loop_recommendations rows to {table_name}")
 
 
+def build_user_diagnosis_type(spark, table_name: str, loop_recommendations_table: str) -> None:
+    """Write the synthetic `user_diagnosis_type` lookup — one row per synthetic Loop
+    user, resolved diagnosis = 'type1'.
+
+    Mirrors dev.fda_510k_rwd.user_diagnosis_type (FDA data_staging/
+    export_user_diagnosis_type.py): the Loop-user universe is the distinct `_userId` in
+    loop_recommendations. export_user_day_analysis_ready LEFT JOINs this on the RAW
+    `_userId` (pre-hash) to carry `diagnosis_type`, and filter_cohort gates every cohort
+    on `diagnosis_type == 'type1'`. Marking every synthetic user type1 keeps the cohorts at
+    their pre-gate composition so the existing user-survival invariants hold; the gate's
+    *exclusion* path (type2/other/NULL dropped) is exercised by
+    testing/analysis/test_data_loader.py.
+
+    Columns match production: `_userId, diagnosis_patients, diagnosis_seagull, is_jaeb,
+    diagnosis_type`.
+    """
+    spark.sql(f"""
+        CREATE OR REPLACE TABLE {table_name} AS
+        SELECT DISTINCT
+            _userId,
+            'type1'              AS diagnosis_patients,
+            CAST(NULL AS STRING) AS diagnosis_seagull,
+            FALSE                AS is_jaeb,
+            'type1'              AS diagnosis_type
+        FROM {loop_recommendations_table}
+    """)
+    n = spark.table(table_name).count()
+    print(f"Wrote {n} user_diagnosis_type row(s) to {table_name} (all type1)")
+
+
 def build_loop_cbg(spark, table_name: str) -> None:
     """Write the synthetic `loop_cbg` cleaned-CGM table that export_user_day_cbg
     slices (columns `_userId`, `cbg_timestamp`, `cbg_mg_dl`, `is_plausible`).

@@ -64,6 +64,15 @@ STRATEGY_COL = "delivery_strategy"
 # (export_user_day_age.MAX_PLAUSIBLE_AGE), so this floor + that bound together gate age.
 MIN_AGE = 6
 
+# §7 type-1-diabetes cohort gate (added 2026-06-24), mirroring the FDA PLN-1001 gate
+# (load_type1_user_ids / TYPE1_SEGMENT_WHERE over user_diagnosis_type). filter_cohort drops every
+# row whose `diagnosis_type` — carried into the snapshot pre-hash by export_user_day_analysis_ready
+# from dev.fda_510k_rwd.user_diagnosis_type — is not exactly 'type1'. FDA-matching STRICT semantics:
+# JAEB members resolve to canonical 'type1'; type2/other, unresolved NULL, and users absent from the
+# lookup all drop. Default-on — every §8 NMA analysis cohort is type-1 only.
+REQUIRE_TYPE1 = True
+TYPE1_DIAGNOSIS_VALUE = "type1"
+
 # Rolling temporal-match window for the §8.1 windowed-comparator sensitivity: a CE=0 (NMA) day is
 # paired only against CE>0 comparator days within ± WINDOW_HALF calendar days of it (same user), to
 # control within-user temporal drift (Loop-version era, seasonality). See windowed_matched_means.
@@ -137,11 +146,19 @@ def load_day_level(spark, analysis_ready_table):
     return prepare_day_level(spark.table(analysis_ready_table).toPandas())
 
 
-def filter_cohort(pdf, cohort: Literal["adult", "pediatric", "all"] = "all", min_age=MIN_AGE):
-    """§7.6 age cohort. NULL `is_pediatric` (DOB unknown or implausible) is excluded from
-    both adult and pediatric, retained in `all`. `min_age` (§6 floor, default MIN_AGE=6)
-    drops users KNOWN to be younger than the floor; unknown/nulled-age users are retained
-    (PLN-1001 `is_age_eligible OR dob IS NULL`). Pass `min_age=None` to disable the floor."""
+def filter_cohort(pdf, cohort: Literal["adult", "pediatric", "all"] = "all", min_age=MIN_AGE,
+                  require_type1=REQUIRE_TYPE1):
+    """§7.6 age cohort + §7 type-1 gate. NULL `is_pediatric` (DOB unknown or implausible) is
+    excluded from both adult and pediatric, retained in `all`. `min_age` (§6 floor, default
+    MIN_AGE=6) drops users KNOWN to be younger than the floor; unknown/nulled-age users are
+    retained (PLN-1001 `is_age_eligible OR dob IS NULL`). Pass `min_age=None` to disable the floor.
+
+    `require_type1` (default REQUIRE_TYPE1=True) keeps only rows with `diagnosis_type == 'type1'`,
+    mirroring the FDA gate. Unlike the age floor's retain-unknown rule, this is a STRICT drop:
+    type2/other, unresolved NULL, and users absent from the lookup are all excluded (a deliberate
+    FDA-matching regulatory choice — see decisions.md / t1d_filter_plan.md). Needs the
+    `diagnosis_type` column from export_user_day_analysis_ready; pass require_type1=False to run
+    against a pre-merge snapshot."""
     out = pdf
     if cohort == "adult":
         out = out[out["is_pediatric"] == False]  # noqa: E712
@@ -151,6 +168,14 @@ def filter_cohort(pdf, cohort: Literal["adult", "pediatric", "all"] = "all", min
         raise ValueError(f"unknown cohort: {cohort!r}")
     if min_age is not None:
         out = out[out["age_years"].isna() | (out["age_years"] >= min_age)]
+    if require_type1:
+        if "diagnosis_type" not in out.columns:
+            raise KeyError(
+                "filter_cohort(require_type1=True) needs the 'diagnosis_type' column, absent from "
+                "this snapshot. Regenerate nma_user_day_analysis_ready (export_user_day_analysis_ready "
+                "now carries diagnosis_type), or pass require_type1=False for a pre-merge run."
+            )
+        out = out[out["diagnosis_type"] == TYPE1_DIAGNOSIS_VALUE]
     return out.copy()
 
 

@@ -66,6 +66,7 @@ TABLES = {
     "user_gender": f"{P}user_gender",
     "loop_recommendations": f"{P}loop_recommendations",
     "loop_cbg": f"{P}loop_cbg",
+    "user_diagnosis_type": f"{P}user_diagnosis_type",
     # NMA staging outputs.
     "cbg": f"{P}user_day_cbg",
     "coverage": f"{P}user_day_coverage",
@@ -207,6 +208,8 @@ def run(spark, force=False):
     build_synthetic_nma_bddp.build_user_gender(spark, TABLES["user_gender"])
     build_synthetic_nma_bddp.build_loop_recommendations(spark, TABLES["loop_recommendations"])
     build_synthetic_nma_bddp.build_loop_cbg(spark, TABLES["loop_cbg"])
+    build_synthetic_nma_bddp.build_user_diagnosis_type(
+        spark, TABLES["user_diagnosis_type"], TABLES["loop_recommendations"])
 
     # ── Step 2: CBG slice + glycemic endpoints ────────────────────────────────
     print("[nma.run_pipeline] export_user_day_cbg...")
@@ -282,6 +285,7 @@ def run(spark, force=False):
         tdd_table=TABLES["tdd"],
         age_table=TABLES["age"],
         user_gender_table=TABLES["user_gender"],
+        diagnosis_table=TABLES["user_diagnosis_type"],
         output_table=TABLES["analysis_ready"],
         output_csv=False,  # don't write a CSV into no_meal_announcement/outputs/
     )

@@ -34,6 +34,7 @@ Forward-looking checklist: where work stopped and what's blocked. Past-tense det
 
 ## Pipeline / structure
 
+- [ ] **Apply the FDA type-1-diabetes (T1D) cohort gate to NMA** — full plan + lift in **[t1d_filter_plan.md](t1d_filter_plan.md)** (drafted 2026-06-24). Genuinely additive (T1D is NOT in the D21 carry-over set). Approach: staging pre-hash `LEFT JOIN user_diagnosis_type` carry-column + a strict `filter_cohort` gate (analysis-side join is blocked by the hashed `_userId`, D16). Code is ~6–8 lines; the lift is the Databricks regen + §8.1–8.4 re-run + RPT-1008 re-sync. ⚠️ **Step-0 pre-flight gates the design** (token spelling + N-dropped) and **4 MJC decisions are open** before coding.
 - [ ] **Pseudonymize `_userId` in the FDA-pipeline exports too** (D16) — the FDA exports still write raw `_userId`; apply the same salted-hash-at-export treatment.
 - [ ] **Move NMA-day-frequency** (§4 secondary objective, bullet 3) out of `analysis_8-1` into a dedicated overview module (house CONSORT flow + PAF distribution there too). Table 8.1c stays in §8.1.
 - [ ] **Relocate the supplement outputs** per MJC ("move the supplement into the analysis folder") — clarify the exact target first; then update `lmm_weighting_sensitivity.py` `OUT_DIR` + `../docs/weighting_sensitivity.md`.

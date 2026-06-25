@@ -24,20 +24,32 @@ SNAPSHOT = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma_user_
 OUT = os.path.normpath(os.path.join(_DIR, "..", "..", "analysis", "outputs"))
 
 
+def _skip_unless_snapshot_has(*cols):
+    """Skip when the recompute input (the git-ignored snapshot) is absent OR predates a needed
+    column — e.g. the §7 `diagnosis_type` merge. A not-ready input is a prerequisite, not a failure
+    (a bare checkout / stale snapshot shouldn't drown the suite)."""
+    if not os.path.exists(SNAPSHOT):
+        pytest.skip(f"snapshot not on disk: {SNAPSHOT}")
+    have = set(pd.read_csv(SNAPSHOT, nrows=0).columns)
+    missing = [c for c in cols if c not in have]
+    if missing:
+        pytest.skip(f"snapshot missing {missing} — regenerate it (predates the §7 type-1 merge)")
+
+
 def test_table_8_1a_ce0_be0_tir():
     """Table 8.1a, Method A (per-user mean TIR, then mean across users)."""
     out_csv = os.path.join(OUT, "analysis_8_1/all/table_8_1a_per_user_means.csv")
-    if not os.path.exists(SNAPSHOT):
-        pytest.skip(f"snapshot not on disk: {SNAPSHOT}")  # the recompute input (git-ignored) — prerequisite, not a failure
+    _skip_unless_snapshot_has("diagnosis_type")
     if not os.path.exists(out_csv):
         pytest.fail(f"output table missing: {out_csv} — regenerate the analysis outputs from the snapshot")
 
-    df = pd.read_csv(SNAPSHOT, usecols=["_userId", "day_eligible", "user_eligible", "age_years", "in_ce0_be0", "tir"])
+    df = pd.read_csv(SNAPSHOT, usecols=["_userId", "day_eligible", "user_eligible", "age_years", "diagnosis_type", "in_ce0_be0", "tir"])
 
     # Eligible days of eligible users (= prepare_day_level), then cohort=all with the §6 age floor:
     # keep age >= 6 OR unknown age (= filter_cohort). Recomputed inline, not imported from the pipeline.
     e = df[(df["day_eligible"] == True) & (df["user_eligible"] == True)]   # noqa: E712
     e = e[e["age_years"].isna() | (e["age_years"] >= 6)]
+    e = e[e["diagnosis_type"] == "type1"]   # §7 type-1 gate (= filter_cohort require_type1)
 
     # Method A: each user's mean TIR over their CE=0/BE=0 days, then the across-user mean (equal weight).
     recompute = e[e["in_ce0_be0"] == True].groupby("_userId")["tir"].mean().mean()  # noqa: E712
@@ -59,20 +71,20 @@ def test_table_8_1b_ce0_be0_tir_lmm():
     import warnings
 
     out_csv = os.path.join(OUT, "analysis_8_1/all/table_8_1b_lmm_contrasts.csv")
-    if not os.path.exists(SNAPSHOT):
-        pytest.skip(f"snapshot not on disk: {SNAPSHOT}")  # the recompute input (git-ignored) — prerequisite, not a failure
+    _skip_unless_snapshot_has("diagnosis_type")
     if not os.path.exists(out_csv):
         pytest.fail(f"output table missing: {out_csv} — regenerate the analysis outputs from the snapshot")
 
     df = pd.read_csv(
         SNAPSHOT,
-        usecols=["_userId", "day_eligible", "user_eligible", "age_years", "in_ce0_be0", "in_ce0_be_inf", "in_ce_gt0", "tir"],
+        usecols=["_userId", "day_eligible", "user_eligible", "age_years", "diagnosis_type", "in_ce0_be0", "in_ce0_be_inf", "in_ce_gt0", "tir"],
     )
 
     # Eligible days of eligible users (= prepare_day_level), then cohort=all with the §6 age floor:
     # keep age >= 6 OR unknown age (= filter_cohort). Recomputed inline, not imported from the pipeline.
     e = df[(df["day_eligible"] == True) & (df["user_eligible"] == True)]   # noqa: E712
     e = e[e["age_years"].isna() | (e["age_years"] >= 6)]
+    e = e[e["diagnosis_type"] == "type1"]   # §7 type-1 gate (= filter_cohort require_type1)
 
     # Rebuild the 2-arm day-level frame: NMA = CE=0/BE=0 days; CE>0 = comparator days restricted to
     # users with >=1 CE=0 day (= restrict_comparator). Then fit outcome ~ arm + (1|user) — Method B.
@@ -101,17 +113,17 @@ def test_table_8_1b_ce0_be0_tir_lmm():
 def test_table_1_sample_information_counts():
     """Table 1 (sample_information): eligible Users + User-days."""
     out_csv = os.path.join(OUT, "analysis_8_1/all/sample_information.csv")
-    if not os.path.exists(SNAPSHOT):
-        pytest.skip(f"snapshot not on disk: {SNAPSHOT}")  # the recompute input (git-ignored) — prerequisite, not a failure
+    _skip_unless_snapshot_has("diagnosis_type")
     if not os.path.exists(out_csv):
         pytest.fail(f"output table missing: {out_csv} — regenerate the analysis outputs from the snapshot")
 
-    df = pd.read_csv(SNAPSHOT, usecols=["_userId", "day_eligible", "user_eligible", "age_years"])
+    df = pd.read_csv(SNAPSHOT, usecols=["_userId", "day_eligible", "user_eligible", "age_years", "diagnosis_type"])
 
     # Eligible days of eligible users (= prepare_day_level), then cohort=all with the §6 age floor:
     # keep age >= 6 OR unknown age (= filter_cohort). Recomputed inline, not imported from the pipeline.
     e = df[(df["day_eligible"] == True) & (df["user_eligible"] == True)]   # noqa: E712
     e = e[e["age_years"].isna() | (e["age_years"] >= 6)]
+    e = e[e["diagnosis_type"] == "type1"]   # §7 type-1 gate (= filter_cohort require_type1)
 
     # Eligible distinct users + eligible user-days — the top two rows of Table 1 (Sample Information).
     users = e["_userId"].nunique()

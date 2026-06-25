@@ -27,9 +27,6 @@ Outputs (analysis/outputs/analysis_8_supp/<cohort>/):
 Usage: python analysis_8-supp_nma_finding_explanation.py [--cohort {adult,pediatric,all}]
 """
 
-%pip install statsmodels
-dbutils.library.restartPython()
-
 from __future__ import annotations
 
 import argparse
@@ -146,7 +143,7 @@ def figure_s1_intake(pdf, a81):
     for ax, (col, lab, unit) in zip(axes, [("tdd_units", "Per-user mean TDD by arm", "TDD (U/day)"),
                                            ("bolus_units", "Per-user mean bolus insulin by arm",
                                             "Bolus (U/day)")]):
-        violin_box_panel(ax, a81.arm_violin_groups(pdf, col, base=TIDEPOOL),
+        violin_box_panel(ax, a81.arm_violin_groups(pdf, col),
                          title=lab, title_color=TIDEPOOL, separators=(3.5,))
         ax.set_ylabel(unit)
     fig.suptitle("S1: intake proxies by arm — CE=0 arms vs CE>0 comparator", fontsize=SUPTITLE_FS)
@@ -160,7 +157,7 @@ def figure_s3_tbr(pdf, a81):
     fig, axes = plt.subplots(1, 2, figsize=(13, 6.4))
     for ax, (col, lab) in zip(axes, [("tbr", "Time <70 (%)"), ("tbr_very_low", "Time <54 (%)")]):
         base = endpoint_color(col)
-        violin_box_panel(ax, a81.arm_violin_groups(pdf, col, base=base),
+        violin_box_panel(ax, a81.arm_violin_groups(pdf, col),
                          title=lab, title_color=base, separators=(3.5,))
         ax.set_ylabel(f"Per-user mean {lab}")
     fig.suptitle("S3: per-user time below range by arm (safety check)", fontsize=SUPTITLE_FS)
