@@ -13,6 +13,54 @@ build (previous primary) and 0.90 build move to the §12 supplement. The validit
 `{suffix}` outputs (`_box080` / `_box090`); 8-6/8-7 (stable-AB / durability) are box-independent and
 identical across builds._
 
+## 0c. Reading Table 8.4 — the two Ns + zero-inflation — 2026-06-24 (prose/caption guidance; no code change)
+
+Table 8.4a is easy to misread because of its **denominator design**: N = 351 is *every* eligible type-1
+transition user, not just preset users. Users with no preset activations in a 14-day window are **0-filled,
+not dropped** — deliberately, so "did switching to autobolus change preset reliance?" keeps the full cohort
+(same retention point as §0b). Two consequences to carry into prose:
+
+- **Tiny means with huge SDs are expected, not an error.** Only **39 / 351 (11.1%)** activated any preset,
+  so ~312 users contribute 0 to both columns. The mean is pulled toward 0 and the SD dwarfs it because the
+  distribution is a spike at 0 plus a short right tail of heavy users. **Lead with the non-parametric
+  companion** (median [IQR] / Wilcoxon) for the duration and frequency rows — the medians sit at ~0, which is
+  the honest summary; the paired-t mean ± SD is the secondary view.
+- **The N differs by row on purpose — 351 vs 32.** "Total duration" and "frequency" are defined for everyone
+  (0 is a valid value) → **N = 351**. "Mean duration per activation" is **undefined without ≥1 activation in
+  both windows** (0 ÷ 0 → NaN, not 0-filled), and the paired test only uses pairs that are non-NaN on both
+  sides → **N = 32** (users who activated a preset under *both* TB and AB). This reconciles the count row: 39
+  used a preset under TB, 39 under AB, but only 32 under both.
+
+**Suggested footnote:** "N = 351 is all eligible transition users; users with no preset activations in a
+window contribute 0 and are retained. Mean duration per activation is undefined without an activation in both
+windows, so it is restricted to the 32 users who activated a preset under both temp-basal and autobolus
+delivery. Preset usage is strongly zero-inflated (11.1% of users activated any preset) — see the companion
+non-parametric table for median [IQR] summaries."
+
+## 0b. §8.1-vs-§8.4 cohort difference — 2026-06-24 (caption correction; no code change)
+
+The Table 6.3b draft caption attributes the 8.1 (N = 322) vs 8.4 (N = 351) gap to "guardrails-based
+exclusion that applies in 8.1 but not in 8.4." **That is incorrect — please reword.** Guardrail, cohort
+(Loop version + age), and type-1 gates are applied **identically** to both: 8.1/8.5/8.8 via
+`load_transition_endpoints`, and 8.3/8.4 via `load_allowed_transition_segments` (the guardrail anti-join
+was added to that loader in the same change as the type-1 gate). Guardrails cannot be what separates the
+cohorts — and the guardrail limits are still placeholders (§2), so they may currently exclude ~0 users
+in either analysis.
+
+The real driver: **8.1's endpoint is glycemic** (TIR/TBR/TAR from CGM), so it additionally requires both
+14-day halves to clear the CGM-coverage gate and be paired. **8.4's endpoint is preset-activation
+duration** (from override events, not CGM), so CGM coverage is irrelevant to it — users with sparse CGM
+are correctly retained (and 0-filled if they have no activations). The differing Ns are expected and
+correct: each analysis includes everyone for whom *its own* outcome is well-defined. We are deliberately
+**not** equalizing the cohorts — applying 8.1's coverage gate to 8.4 would discard valid, measurable
+duration data and bias 8.4 toward high-CGM users for no methodological reason.
+
+- **Suggested caption:** "The difference between 8.1 (N = 322) and 8.4 (N = 351) reflects the CGM-coverage
+  and paired-both-halves requirement that 8.1's glycemic outcomes impose but 8.4's duration outcomes do
+  not; cohort, guardrail, and type-1 gating are identical across both."
+- If you want an apples-to-apples view, ask and we can add a **sensitivity cut of 8.4 restricted to the
+  8.1 cohort** alongside the full-cohort primary — without changing 8.4's primary inclusion.
+
 ## 0. Type-1 diabetes restriction — 2026-06-24 (cohort change; every N shifts; re-run + re-sync needed)
 
 Every §8 analysis cohort and the §6.3 cohort flow are now gated to **confirmed type-1 diabetes** users
