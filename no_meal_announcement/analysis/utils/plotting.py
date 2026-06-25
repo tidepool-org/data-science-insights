@@ -52,6 +52,9 @@ RANGE_COLORS = {"<54": "#E03830", "54-70": "#FF6D5C", "70-180": "#5AC692",
 RANGE_COLS = [("r_lt54", "<54"), ("r_54_70", "54-70"), ("r_70_180", "70-180"),
               ("r_180_250", "180-250"), ("r_gt250", ">250")]
 
+# Decimal places on stacked-bar segment % labels (figs 8.1a / 12.1a / 8.3c).
+STACKED_BAR_PCT_DECIMALS = 2
+
 # Each endpoint coloured by its glycemic range; the 3 non-range metrics get the Tidepool brand.
 ENDPOINT_COLORS = {
     "tir": "#5AC692",            # 70-180 (in range)

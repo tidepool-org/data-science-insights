@@ -32,7 +32,10 @@ import os
 NORMALITY_ALPHA = 0.05
 OUTPUT_DIR = "outputs/analysis_8_1"
 
-from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT, COLORS_STACKED_BAR
+from utils.constants import (
+    FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT, COLORS_STACKED_BAR,
+    STACKED_BAR_PCT_DECIMALS,
+)
 from utils.statistics import test_normality, compute_paired_statistics, hodges_lehmann_ci, format_p
 from utils.data_loading import load_transition_endpoints
 
@@ -272,14 +275,14 @@ def create_figure_8_1c(df: pd.DataFrame, output_path: str):
     
     for cat, label in zip(categories, range_labels):
         v1, v2 = max(0, seg1[cat]), max(0, seg2[cat])
-        c_tb, c_ab = COLORS_STACKED_BAR[cat]
-        ax.bar(0, v1, width, bottom=bot1, color=c_tb, label=label, edgecolor="white", lw=0.5)
-        ax.bar(1, v2, width, bottom=bot2, color=c_ab, label="_nolegend_", edgecolor="white", lw=0.5)
+        color = COLORS_STACKED_BAR[cat]
+        ax.bar(0, v1, width, bottom=bot1, color=color, label=label, edgecolor="white", lw=0.5)
+        ax.bar(1, v2, width, bottom=bot2, color=color, label="_nolegend_", edgecolor="white", lw=0.5)
         if v1 > 1:
-            ax.text(0, bot1 + v1 / 2, f"{v1:.1f}%", ha="center", va="center",
+            ax.text(0, bot1 + v1 / 2, f"{v1:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="center", va="center",
                     fontsize=FONT["annotation"])
         if v2 > 1:
-            ax.text(1, bot2 + v2 / 2, f"{v2:.1f}%", ha="center", va="center",
+            ax.text(1, bot2 + v2 / 2, f"{v2:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="center", va="center",
                     fontsize=FONT["annotation"])
         bot1 += v1
         bot2 += v2
@@ -358,22 +361,22 @@ def create_figure_8_1c_horizontal(df: pd.DataFrame, output_path: str):
 
     for cat, label in zip(categories, range_labels):
         v1, v2 = max(0, seg1[cat]), max(0, seg2[cat])
-        c_tb, c_ab = COLORS_STACKED_BAR[cat]
-        ax.barh(1, v1, height, left=left1, color=c_tb, label=label, edgecolor="white", lw=0.5)
-        ax.barh(0, v2, height, left=left2, color=c_ab, label="_nolegend_", edgecolor="white", lw=0.5)
+        color = COLORS_STACKED_BAR[cat]
+        ax.barh(1, v1, height, left=left1, color=color, label=label, edgecolor="white", lw=0.5)
+        ax.barh(0, v2, height, left=left2, color=color, label="_nolegend_", edgecolor="white", lw=0.5)
         if v1 > 1:
             if cat == min_cat_seg1:
-                ax.text(left1 + v1, 1, f"{v1:.1f}%", ha="left", va="center",
+                ax.text(left1 + v1, 1, f"{v1:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="left", va="center",
                         fontsize=FONT["annotation"])
             else:
-                ax.text(left1 + v1 / 2, 1, f"{v1:.1f}%", ha="center", va="center",
+                ax.text(left1 + v1 / 2, 1, f"{v1:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="center", va="center",
                         fontsize=FONT["annotation"])
         if v2 > 1:
             if cat == min_cat_seg2:
-                ax.text(left2 + v2, 0, f"{v2:.1f}%", ha="left", va="center",
+                ax.text(left2 + v2, 0, f"{v2:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="left", va="center",
                         fontsize=FONT["annotation"])
             else:
-                ax.text(left2 + v2 / 2, 0, f"{v2:.1f}%", ha="center", va="center",
+                ax.text(left2 + v2 / 2, 0, f"{v2:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="center", va="center",
                         fontsize=FONT["annotation"])
         left1 += v1
         left2 += v2

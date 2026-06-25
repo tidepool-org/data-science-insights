@@ -21,14 +21,19 @@ COLORS_PRIMARY   = "#607cff"
 COLORS_SECONDARY = "#4f59be"
 COLORS_ACCENT    = "#241144"
 
+# One canonical shade per glycemic range — Temp Basal and Autobolus bars share it (the two
+# bars are distinguished by x-position + axis labels, not by shade). Matches NMA's RANGE_COLORS
+# so the two projects' stacked range bars read identically.
 COLORS_STACKED_BAR = {
-    # [temp_basal, autobolus] — lighter shade for TB, darker for AB
-    "<54":     ["#FC7A74", "#E03830"],
-    "54-70":   ["#FFA99D", "#FF6D5C"],
-    "70-180":  ["#92E0BA", "#5AC692"],
-    "180-250": ["#CCAFF0", "#AA85DE"],
-    ">250":    ["#A384E0", "#7046CC"],
+    "<54":     "#E03830",
+    "54-70":   "#FF6D5C",
+    "70-180":  "#5AC692",
+    "180-250": "#AA85DE",
+    ">250":    "#7046CC",
 }
+
+# Decimal places on stacked-bar segment % labels (figure 8.1c).
+STACKED_BAR_PCT_DECIMALS = 1
 
 # =============================================================================
 # Inclusion criteria — starting glucose at the time an override is activated.

@@ -4,6 +4,7 @@ from .constants import (
     COLORS_SECONDARY,
     COLORS_ACCENT,
     COLORS_STACKED_BAR,
+    STACKED_BAR_PCT_DECIMALS,
 )
 from .statistics import (
     test_normality,

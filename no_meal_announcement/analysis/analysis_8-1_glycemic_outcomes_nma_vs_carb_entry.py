@@ -110,6 +110,7 @@ from utils.plotting import (  # noqa: E402
     HIGH_MA_COLOR,
     RANGE_COLORS,
     RANGE_COLS,
+    STACKED_BAR_PCT_DECIMALS,
     SUPTITLE_FS,
     day_type_colors,
     endpoint_color,
@@ -525,11 +526,11 @@ def make_stacked_bar(pdf):
             if rlabel == "54-70":
                 # second-lowest range is thin and crowds the bottom: offset the label
                 # upward with a thin leader line.
-                ax.annotate(f"{v:.1f}%", xy=(xi, cen), xytext=(0, 16),
+                ax.annotate(f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", xy=(xi, cen), xytext=(0, 16),
                             textcoords="offset points", ha="center", va="bottom", fontsize=13,
                             arrowprops=dict(arrowstyle="-", lw=0.6, color="gray"))
             else:
-                ax.text(xi, cen, f"{v:.1f}%", ha="center", va="center", fontsize=13)
+                ax.text(xi, cen, f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="center", va="center", fontsize=13)
         bottom += vals
 
     ax.set_xticks(x)
@@ -812,11 +813,11 @@ def make_windowed_stacked_bar(pdf):
             if rlabel == "<54":
                 continue
             if rlabel == "54-70":
-                ax.annotate(f"{v:.1f}%", xy=(xi, cen), xytext=(0, 16), textcoords="offset points",
+                ax.annotate(f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", xy=(xi, cen), xytext=(0, 16), textcoords="offset points",
                             ha="center", va="bottom", fontsize=13,
                             arrowprops=dict(arrowstyle="-", lw=0.6, color="gray"))
             else:
-                ax.text(xi, cen, f"{v:.1f}%", ha="center", va="center", fontsize=13)
+                ax.text(xi, cen, f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="center", va="center", fontsize=13)
         bottom += vals
     ax.set_xticks(x); ax.set_xticklabels(arm_labels)
     ax.set_ylabel("Mean time in range (%)"); ax.set_ylim(0, 108)

@@ -146,6 +146,7 @@ from utils.plotting import (  # noqa: E402
     HIGH_MA_COLOR,
     LEGEND_FS,
     RANGE_COLORS,
+    STACKED_BAR_PCT_DECIMALS,
     SUPTITLE_FS,
     TITLE_FS,
     day_type_colors,
@@ -257,11 +258,11 @@ def figure_8_3c_stacked(strata_8_3a):
             if k == "<54":
                 continue
             if k == "54-70":
-                ax.annotate(f"{v:.1f}%", xy=(gi, cen), xytext=(0, 16), textcoords="offset points",
+                ax.annotate(f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", xy=(gi, cen), xytext=(0, 16), textcoords="offset points",
                             ha="center", va="bottom", fontsize=10,
                             arrowprops=dict(arrowstyle="-", lw=0.6, color="gray"))
             else:
-                ax.text(gi, cen, f"{v:.1f}%", ha="center", va="center", fontsize=10)
+                ax.text(gi, cen, f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="center", va="center", fontsize=10)
     # Dashed connectors across each day type's Low|High pair, one per internal segment boundary —
     # show how each range shifts Low→High (the gap between the paired bars).
     for j in range(0, len(groups), 2):
