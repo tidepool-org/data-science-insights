@@ -26,46 +26,32 @@ tables, `figures_1008.py`, `prose_edits_1008.py`, `cleanup_1008.py`, `build_1008
 pediatric 449). CE>0 comparator 1,324 → **1,175** users. Directions/conclusions unchanged; magnitudes
 shifted (e.g. §8.4 stratum×strategy interaction p 0.509 → **0.858**, still n.s.).
 
-**⚠️ Three items had NO regenerated source in this run and were left showing prior-cohort data.**
-They are the only places in the report not refreshed to the T1D cohort — please confirm / regenerate:
+**Status of the three T1D-resync gaps (items 1–3): ✅ ALL RESOLVED (2026-06-25).** The whole report is
+now on the T1D cohort — table verify 3295/3295 (36 tables), prose 71/71, figures 26/26. Detail below.
 
-1. **Table 12.1d — windowed match-feasibility** (§12.1, "Match feasibility for the windowed analysis —
-   share of CE=0 days with an in-window (±45-day) CE>0 comparator and composition of unmatched days").
-   - *What it is:* 3 classification rows × 7 cols — Arm, Matched %, Unmatched %, Pure non-announcer,
-     Sustained non-announcing, Sparse/gap, Nearest CE>0 day median [IQR].
-   - *Why left as-is:* the regenerated outputs do **not** emit a match-composition CSV. The **only**
-     refreshable field is `pct_matched` in `table_12_1a_windowed_sensitivity.csv` (constant across
-     endpoints) — it covers the Matched/Unmatched % columns but **not** the pure / sustained / sparse-gap
-     split or the nearest-CE>0 median[IQR]. Updating just the % columns would pair new-cohort match rates
-     with old-cohort composition (internally inconsistent), so the whole row was left untouched.
-   - *Current vs available Matched %:* CE=0/BE=0 88.6% → **90.3%**; CE=0/BE≤1 87.3% → **88.6%**;
-     CE=0/BE≤∞ 70.0% → **70.1%** (new = `matched_nma_days/total_nma_days` from `table_12_1a`).
-   - *To resolve:* re-run the windowed match-feasibility step on the T1D cohort so it writes the full
-     composition (a `table_12_1d_*` CSV or equivalent); then it syncs like the rest. If only the % columns
-     are wanted, say so and the report editor will pull them from `table_12_1a` and footnote the rest.
+1. **✅ RESOLVED 2026-06-25 — Table 12.1d synced.** The developer reconstructed the retired
+   match-composition generator (validated to reproduce the decisions.md-D15 oracle exactly) and wired it
+   into §12.1, emitting `analysis_8_1/{cohort}/table_12_1d_windowed_match_feasibility.csv`. Bucket defs are
+   now pinned: pure non-announcer = user with 0 CE>0 days; sparse/gap = `<20` of the user's days in the
+   ±45d window; sustained = the rest. All 18 cells synced + blue (`sync_tables.py` builder `t121d`). T1D
+   `all`: CE=0/BE=0 90.3/9.7/8.1/90.1/1.8 · 106 [65, 198]; CE=0/BE≤1 88.6/11.4/13.0/85.8/1.2 · 126 [70, 226];
+   CE=0/BE≤∞ 70.1/29.9/27.7/71.7/0.6 · 187 [97, 344].
 
-2. **Report Figures 8.4b & 8.4c — TIR vs within-user TDD percentile scatters** (§8.4; embedded as
-   `word/media/image13.png` and `image30.png`).
-   - *Captions:* 8.4b "Time in range vs within-user TDD percentile by day type for Autobolus days only";
-     8.4c "Time in range vs within-user TDD percentile: CE=0/BE=0 vs CE≥3/BE≥3 for Autobolus days only".
-   - *Why left as-is:* no matching PNG exists in `analysis_8_4/{cohort}/` (only `figure_8_4a_4x2.png` and
-     `figure_8_4b_carb_entry_by_strategy.png`). The regenerated TIR-vs-TDD-percentile family lives in
-     **§8.3** (`figure_8_3e_tir_vs_tdd_percentile`, `figure_8_3i_tir_vs_tdd_absolute`,
-     `figure_8_3j_tir_vs_tdd_percentile_density`) — none is the per-day-type / AB-only or
-     CE=0/BE=0-vs-CE≥3 view these two embeds show. They appear to be bespoke or pre-pipeline figures, so
-     **both still render the prior cohort**.
-   - *Load-bearing:* Figure **8.4c is cited in the §9 discussion** as the recommended labeling
-     illustration ("such as Figure 8.4c"), so it shouldn't be left stale.
-   - *To resolve:* emit the two source PNGs from the analysis (AB-day percentile scatter by day type, and
-     CE=0/BE=0 vs CE≥3/BE≥3), or decide they're superseded by 8.3e/8.3i/8.3j and replace/remove the embeds.
+2. **✅ RESOLVED 2026-06-25 — Figures 8.4b & 8.4c re-embedded.** The developer emitted AB-only variants of
+   fig 8.3e (`analysis_8_3/{cohort}/figure_8_3e_ab_by_day_type.png` = 8.4b, all 5 day types;
+   `figure_8_3e_ab_ce0be0_vs_hma.png` = 8.4c, CE=0/BE=0 vs CE≥3/BE≥3 — the §9-cited view), per
+   report_editor_note §0·resync item 2. Both embedded on the `all` cohort and verified.
+   - ⚠️ **Media-renumbering caveat (new):** the live `.docx` had been re-saved (a Word/Docs round-trip),
+     which **renumbered every `word/media/imageN.png` sequentially** — so 8.4b/8.4c were image17/image18,
+     not the original image13/image30, and a media-name-based re-embed mis-fires. Figures are now matched
+     and verified **by caption, not media name** (`verify_figures.py` → 26/26 OK). `sync_figures.py`'s
+     media-name map is correct only for a **pristine** build; for a round-tripped doc, re-embed by caption.
 
-3. **"~72% of user-days" autobolus share** (prose, appears 3× — §7.3 bolus-classification deviation,
-   the Analysis-4 methods, and the §8.2 results).
-   - *Why left as-is:* it's the share of **all** eligible user-days labeled autobolus-on — a cohort-wide
-     denominator that isn't read from any single synced table (the §8.2/§8.4 strategy splits are gated
-     subsets, not the full denominator). It's approximate ("~"), so a small shift wouldn't change wording.
-   - *To resolve:* compute autobolus-on user-days ÷ total eligible user-days on the T1D snapshot; if it no
-     longer rounds to ~72%, update all three mentions.
+3. **✅ RESOLVED 2026-06-25 — "~72%" autobolus share.** Table 1 gained an `Autobolus-on user-days, n (%)`
+   row (605,932 / 786,073 = **77.1%**, all cohort; synced + blue), and the three prose mentions (§7.3
+   bolus-classification deviation · Analysis-4 methods · §8.2 results) were corrected "~72%" → **"~77%"**.
+   The "~72%" was already stale pre-T1D (snapshot ~77% since the D7 classifier change), per
+   report_editor_note §0·resync item 3 — now a synced cell so it can't silently rot again.
 
 ## 0. Before you switch to testing — short checklist
 

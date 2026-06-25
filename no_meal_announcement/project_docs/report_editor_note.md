@@ -26,18 +26,34 @@ snapshot has been ~77% autobolus-on since the D7 central-classifier change (2026
 pre- and post-T1D-gate, so this is **not** a cohort effect. It now refreshes with every regen, so it can't
 silently rot again (that prior-stale-prose path is exactly how ~72% slipped through).
 
-**Item 2 — figures 8.4b/8.4c are reproducible, not bespoke.** The §8.3 scatter builder
-`figure_8_3e_tir_vs_tdd_pct(pdf, *, day_types=…, delivery_strategy=…)` already supports the AB-only /
-day-type views these two embeds show (8.4b = AB-only by day type; 8.4c = AB-only CE=0/BE=0 vs CE≥3/BE≥3).
-**Pending (developer):** wire two emit calls + regenerate so they re-embed on the T1D cohort (un-stales the
-§9 citation of 8.4c). Until then leaving them on prior-cohort data is correct.
+**Item 2 — DONE: the two §8.4 scatters now emit from the pipeline on the T1D cohort.** They were
+reproducible after all — added AB-only variants of fig 8.3e (`figure_8_3e_tir_vs_tdd_pct`, the existing
+generator), per cohort. **Re-embed these in place of the prior-cohort image13/image30:**
 
-**Item 1 — Table 12.1d needs a new generator (biggest).** Confirmed there is **no** match-composition
-generator in-repo — only `pct_matched` in `table_12_1a_windowed_sensitivity.csv` is refreshable (Matched %:
-CE=0/BE=0 90.3 · CE=0/BE≤1 88.6 · CE=0/BE≤∞ 70.1). The pure / sustained / sparse-gap split + nearest-CE>0
-median[IQR] were an external one-off; refreshing them needs a new §12.1 generator, **blocked on the three
-bucket definitions** (not recorded in-repo). Leaving the whole row on prior-cohort data, as you did, is the
-right call until that lands.
+| report figure | source PNG (per cohort) | view |
+|---|---|---|
+| **Fig 8.4b** | `analysis_8_3/{cohort}/figure_8_3e_ab_by_day_type.png` | TIR vs within-user TDD percentile, all 5 day types, **AB days only** |
+| **Fig 8.4c** | `analysis_8_3/{cohort}/figure_8_3e_ab_ce0be0_vs_hma.png` | TIR vs TDD percentile, **CE=0/BE=0 vs CE≥3/BE≥3, AB only** (the §9-cited view) |
+
+They live in the §8_3 output dir (beside the 8.3e/8.3i/8.3j family the generator already produces, to avoid
+colliding with the existing `figure_8_4b_carb_entry_by_strategy.png`); `--figs 8_3e_ab` re-renders just these.
+
+**Item 1 — DONE: Table 12.1d is now a synced pipeline table on the T1D cohort.** The retired composition
+generator was reconstructed from decisions.md D15 + the surviving diagnostic CSV and **validated to reproduce
+that oracle exactly** (every Table-12.1d column, pre-T1D), so the lost bucket definitions are now pinned:
+pure non-announcer = user with 0 CE>0 days; sparse/gap = `<20` of the user's days in the ±45d window;
+sustained = the rest. It's wired into §12.1 (`analysis_8-1 → create_windowed_match_feasibility`) so it
+refreshes every run. **Build Table 12.1d from `analysis_8_1/{cohort}/table_12_1d_windowed_match_feasibility.csv`.**
+T1D `all` values:
+
+| arm | Matched % | Unmatched % | Pure | Sustained | Sparse/gap | Nearest CE>0 median [IQR] |
+|---|---|---|---|---|---|---|
+| CE=0/BE=0 | 90.3 | 9.7 | 8.1% | 90.1% | 1.8% | 106 [65, 198] |
+| CE=0/BE≤1 | 88.6 | 11.4 | 13.0% | 85.8% | 1.2% | 126 [70, 226] |
+| CE=0/BE≤∞ | 70.1 | 29.9 | 27.7% | 71.7% | 0.6% | 187 [97, 344] |
+
+(The CSV also carries per-bucket n's + the window params. The CSV-only `edge_truncated_pct` from the old
+diagnostic is intentionally dropped — it was never a Table 12.1d column.)
 
 ## 0. Figure layout update — 2026-06-07 (re-embed needed; developer_note §0 ask #1)
 

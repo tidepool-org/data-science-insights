@@ -804,6 +804,16 @@ def run(
                                                     show_density_panel=True)},
         "8_3j": lambda: {"figure_8_3j_tir_vs_tdd_percentile_density.png":      # percentile chart + density panel (P3)
                          figure_8_3e_tir_vs_tdd_pct(pdf, show_density_panel=True)},
+        # AB-only variants of fig 8.3e — the source PNGs for the report's §8.4 TDD-percentile scatters
+        # (autobolus days only): all day types (report Fig 8.4b) and the CE=0/BE=0 vs CE>=3/BE>=3 contrast
+        # (report Fig 8.4c, cited in the §9 discussion). The percentile rank is the all-eligible-days rank
+        # (the AB filter is applied AFTER ranking — see figure_8_3e_tir_vs_tdd_pct).
+        "8_3e_ab": lambda: {"figure_8_3e_ab_by_day_type.png":
+                            figure_8_3e_tir_vs_tdd_pct(pdf, delivery_strategy="autobolus_on")},
+        "8_3e_ab_ce0hma": lambda: {"figure_8_3e_ab_ce0be0_vs_hma.png":
+                                   figure_8_3e_tir_vs_tdd_pct(
+                                       pdf, day_types=("CE=0/BE=0", "CE>=3/BE>=3"),
+                                       delivery_strategy="autobolus_on")},
         "8_3f": lambda: figure_8_3a_violin(*_tercile_arms("overall", ce0_flag=CLASSIFICATIONS[1][0]),  # overall-ref tercile violins (CE=0/BE<=1)
                                            ref_note="overall TDD-rank terciles", fname_stem="figure_8_3f",
                                            strata=("Low", "Mid", "High"), ce0_label="CE=0/BE<=1"),

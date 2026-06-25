@@ -42,6 +42,7 @@ Outputs (analysis/outputs/analysis_8_1/<cohort>/):
     figure_8_1c_paired_delta_grid{1,2}_*.png  (within-user NMA-CE>0 paired Δ + NMA-CE>=3/BE>=3 overlay)
   Appendix §12.1 (windowed-comparator sensitivity, per-NMA-day ±45d match — mirrors §8.1 layout):
     table_12_1a_windowed_sensitivity.csv (windowed NMA vs CE>0 per classification x endpoint)
+    table_12_1d_windowed_match_feasibility.csv (match share + unmatched-day composition: pure / sustained / sparse-gap + nearest CE>0)
     figure_12_1a_windowed_stacked_bars.png / figure_12_1b_windowed_violin_grid{1,2}_*.png / figure_12_1c_windowed_delta_grid{1,2}_*.png
   Appendix §12.1 (cont.) — high-engagement CE>=3/BE>=3 arm vs CE>0:
     table_12_1b_high_engagement_lmm.csv (full-record LMM) / table_12_1c_high_engagement_windowed.csv (windowed ±45d match)
@@ -91,6 +92,7 @@ from utils.data_loader import (  # noqa: E402
     MIN_AGE,
     SUPPLEMENT_ARMS,
     WINDOW_DAYS,
+    WINDOW_HALF,
     analysis_dir,
     default_analysis_ready_csv,
     filter_cohort,
@@ -601,6 +603,75 @@ def make_paired_delta_grids(pdf):
                                     "headline NMA arm: CE=0 / BE≤1")
 
 
+# §12.1 windowed match-feasibility (Table 12.1d) — the window-population cutoff that splits an unmatched
+# day into a coverage "sparse/gap" vs a behavioural "sustained non-announcing" day: fewer than this many
+# of the user's own days inside the ±WINDOW_HALF window ⇒ sparse/gap. (decisions.md D15.)
+POP_WIN_THRESHOLD = 20
+
+
+def create_windowed_match_feasibility(pdf, classifications=CLASSIFICATIONS):
+    """Table 12.1d: per NMA arm, how feasible the windowed (±WINDOW_HALF-day) CE>0 match is, and WHY the
+    unmatched CE=0 days are unmatched. A CE=0 day is *matched* iff the user has a CE>0 day (any carb-logging
+    day, `carb_entry_count > 0` — unrestricted, not the restrict_comparator flag) within ±WINDOW_HALF
+    calendar days. Unmatched days are partitioned into: **pure non-announcer** (the user logs no carbs at
+    all → zero CE>0 days, so they can never match), **sparse/gap** (fewer than POP_WIN_THRESHOLD of the
+    user's days fall in the ±WINDOW_HALF window → a coverage gap), and **sustained non-announcing** (the
+    rest — a deep CE=0 stretch). Also reports the nearest-CE>0 calendar distance (median [IQR]) over the
+    unmatched days that have any CE>0 day. Reconstructed to reproduce the retired diagnostic exactly
+    (decisions.md D15; validated against outputs/review_feasibility/unmatched_ce0_day_reasons.csv)."""
+    carb = pd.to_numeric(pdf["carb_entry_count"], errors="coerce").fillna(0).values
+    be = pd.to_numeric(pdf["bolus_entry_count"], errors="coerce").fillna(0).values
+    ordd = (pd.to_datetime(pdf["local_day"]) - pd.Timestamp("2000-01-01")).dt.days.values
+    base = pd.DataFrame({"_userId": pdf["_userId"].values, "ord": ordd, "carb": carb, "be": be})
+    all_ord = {u: np.sort(s["ord"].values) for u, s in base.groupby("_userId")}
+    cep_ord = {u: np.sort(s.loc[s["carb"] > 0, "ord"].values) for u, s in base.groupby("_userId")}
+    arm_mask = {"CE=0/BE=0":    (base["carb"] == 0) & (base["be"] == 0),
+                "CE=0/BE<=1":   (base["carb"] == 0) & (base["be"] <= 1),
+                "CE=0/BE<=inf": (base["carb"] == 0)}
+
+    rows = []
+    for _flag, label in classifications:
+        arm = base[arm_mask[label]]
+        total = len(arm)
+        matched = pure = sustained = sparse = 0
+        nearest = []
+        for u, s in arm.groupby("_userId"):
+            a, c = all_ord[u], cep_ord[u]
+            for o in s["ord"].values:
+                if c.size == 0:
+                    pure += 1
+                    continue
+                lo = np.searchsorted(c, o - WINDOW_HALF, "left")
+                hi = np.searchsorted(c, o + WINDOW_HALF, "right")
+                if hi > lo:
+                    matched += 1
+                    continue
+                i = np.searchsorted(c, o)
+                nearest.append(min(abs(int(c[j]) - o) for j in (i, i - 1) if 0 <= j < c.size))
+                wlo = np.searchsorted(a, o - WINDOW_HALF, "left")
+                whi = np.searchsorted(a, o + WINDOW_HALF, "right")
+                if (whi - wlo) < POP_WIN_THRESHOLD:
+                    sparse += 1
+                else:
+                    sustained += 1
+        un = total - matched
+        nn = np.array(nearest, dtype=float) if nearest else np.array([np.nan])
+        pct_un = lambda x: round(100.0 * x / un, 1) if un else 0.0
+        rows.append({
+            "arm": label, "total_ce0_days": total,
+            "matched_pct": round(100.0 * matched / total, 1) if total else 0.0,
+            "unmatched_pct": round(100.0 * un / total, 1) if total else 0.0,
+            "pure_non_announcer_n": pure, "pure_non_announcer_pct": pct_un(pure),
+            "sustained_non_announcing_n": sustained, "sustained_non_announcing_pct": pct_un(sustained),
+            "sparse_or_gap_n": sparse, "sparse_or_gap_pct": pct_un(sparse),
+            "nearest_cepos_median_d": round(float(np.median(nn)), 0),
+            "nearest_cepos_p25_d": round(float(np.percentile(nn, 25)), 0),
+            "nearest_cepos_p75_d": round(float(np.percentile(nn, 75)), 0),
+            "window_half_days": WINDOW_HALF, "pop_win_threshold": POP_WIN_THRESHOLD,
+        })
+    return pd.DataFrame(rows)
+
+
 def create_windowed_contrast_table(pdf, fda_stats, classifications=CLASSIFICATIONS):
     """Table 12.1 (windowed-comparator sensitivity): the §8.1 NMA-vs-CE>0 contrast recomputed with a
     per-NMA-day ±(WINDOW_DAYS/2)-day temporal match — each NMA day is compared only to the mean of
@@ -837,6 +908,9 @@ def run(
         # Table 12.1 (windowed-comparator sensitivity): NMA vs CE>0 with a per-NMA-day ±45d match.
         create_windowed_contrast_table(pdf, fda_stats).to_csv(
             os.path.join(output_dir, "table_12_1a_windowed_sensitivity.csv"), index=False)
+        # Table 12.1d: windowed match-feasibility + unmatched-CE0-day composition (decisions.md D15).
+        create_windowed_match_feasibility(pdf).to_csv(
+            os.path.join(output_dir, "table_12_1d_windowed_match_feasibility.csv"), index=False)
         # Appendix §12.1: the high meal-announcement arm (CE>=3/BE>=3) contrasted vs CE>0 — full-record
         # LMM (table_12_1b_high_engagement_lmm) + windowed (table_12_1c_high_engagement_windowed). NB CE>=3/BE>=3 ⊂ CE>0 (overlapping
         # reference, "heavy vs typical meal day"); Table 8.1a already carries the descriptive column.
