@@ -99,6 +99,7 @@ from utils.plotting import (  # noqa: E402
     LEGEND_FS,
     RANGE_COLORS,
     RANGE_COLS,
+    STACKED_BAR_PCT_DECIMALS,
     SUPTITLE_FS,
     TICK_FS,
     TITLE_FS,
@@ -488,6 +489,19 @@ def make_figure_8_2d(display_frames):
             vals = np.array(means[rc])
             ax.bar(x, vals, bottom=bottom, color=RANGE_COLORS[rlabel], edgecolor="white",
                    label=rlabel)
+            # Per-segment % labels, matching the §8.1 / §8.3 stacked bars: skip the
+            # smallest (<54) band, offset the thin 54-70 band upward with a leader.
+            centers = bottom + vals / 2.0
+            for xi, (v, cen) in enumerate(zip(vals, centers)):
+                if rlabel == "<54":
+                    continue
+                if rlabel == "54-70":
+                    ax.annotate(f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", xy=(xi, cen), xytext=(0, 16),
+                                textcoords="offset points", ha="center", va="bottom", fontsize=11,
+                                arrowprops=dict(arrowstyle="-", lw=0.6, color="gray"))
+                else:
+                    ax.text(xi, cen, f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="center",
+                            va="center", fontsize=11)
             bottom += vals
         ax.set_xticks(x)
         ax.set_xticklabels(bar_labels, fontsize=TICK_FS)

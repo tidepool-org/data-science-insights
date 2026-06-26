@@ -900,8 +900,12 @@ def build_user_diagnosis_type(spark, table_name, loop_recommendations_table):
     export_user_diagnosis_type.py): the FDA Loop-user universe is the distinct
     _userId in loop_recommendations. The §8 loaders gate every cohort on
     diagnosis_type = 'type1', so marking every synthetic user type1 keeps the
-    cohorts at their pre-gate composition. The gate's *exclusion* path
-    (non-type1 dropped) is exercised separately by test_type1_diagnosis_gate.py.
+    cohorts at their pre-gate composition. Because of this, the per-analysis
+    integration tests pass whether or not a given loader actually applies the
+    gate — the gate's *exclusion* path is therefore exercised separately:
+    test_type1_diagnosis_gate.py pins the helper (load_type1_user_ids), and
+    test_type1_gate_wired_in_loaders.py pins that every cohort loader CALLS it
+    (a no-type1 diagnosis table must empty every analysis cohort).
 
     Columns match production: _userId, diagnosis_patients, diagnosis_seagull,
     is_jaeb, diagnosis_type.
