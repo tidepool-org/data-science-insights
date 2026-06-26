@@ -21,10 +21,11 @@ CATALOG = "dev.fda_510k_rwd"
 
 # Cohort eligibility:
 #   - If Loop version is known, keep segments below this version_int.
-#   - If Loop version is unknown, fall back to segments ending before this date.
+#   - If Loop version is unknown, fall back to segments ending before the Loop
+#     3.4.0 release date — before then, an undeclared version can only be <3.4.0.
 #   - Loop autobolus indication: age ≥6 at segment start (or DOB unknown).
-MAX_LOOP_VERSION_INT = 3_004_000  # Loop 3.4.0
-MAX_SEG2_END_DATE = "2024-07-13"
+MAX_LOOP_VERSION_INT = 3_004_000   # Loop 3.4.0
+MAX_SEG2_END_DATE = "2024-07-13"   # Loop 3.4.0 release date (GitHub LoopKit/Loop v3.4.0, 2024-07-13)
 MIN_AGE = 6
 
 # Cohort predicate against `valid_transition_segments`. Imported by
