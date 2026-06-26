@@ -50,7 +50,7 @@ from utils.constants import (
 )
 from utils.data_loading import (
     MAX_LOOP_VERSION_INT, MAX_SEG2_END_DATE,
-    load_override_endpoints, aggregate_override_endpoints,
+    load_override_endpoints, aggregate_override_endpoints, load_type1_user_ids,
 )
 from utils.statistics import compute_paired_statistics, format_p
 
@@ -125,8 +125,10 @@ def build_datasets(
 def load_activations(spark, suffix: str = "") -> pd.DataFrame:
     """
     Per-activation rows from `overrides_by_segment` with cohort + guardrail +
-    starting-glucose filters applied. Used by Table 8.2a (counts and hours)
-    and Figure 8.2b (glucose traces). The two `is_valid_name_only_seg{2,3}`
+    starting-glucose + type-1 diagnosis filters applied. Used by Table 8.2a
+    (counts and hours) and Figure 8.2b (glucose traces). The type-1 gate is the
+    same one `load_override_endpoints` applies, so Table 8.2a describes the same
+    cohort as the 8.2b / 8.2c endpoint tables. The two `is_valid_name_only_seg{2,3}`
     flags are kept on each row so downstream code can filter for the
     appropriate segment-pair.
 
@@ -157,8 +159,18 @@ def load_activations(spark, suffix: str = "") -> pd.DataFrame:
         spark.table(f"dev.fda_510k_rwd.overrides_by_segment{suffix}")
         .join(cohort, on=["_userId", "tb_to_ab_seg1_start"], how="inner")
         .filter(F.col("is_starting_glucose_in_range") == True)  # noqa: E712
-    )
-    return activations.toPandas()
+    ).toPandas()
+
+    # Diagnosis gate: confirmed type-1 users only (FDA Loop indication) — the
+    # same gate load_override_endpoints applies, so Table 8.2a's cohort matches
+    # the 8.2b / 8.2c endpoint cohort instead of silently including non-type1
+    # users. The lookup is box-independent (no suffix).
+    type1_ids = load_type1_user_ids(spark)
+    pre_dx = activations["_userId"].nunique()
+    activations = activations[activations["_userId"].isin(type1_ids)].copy()
+    print(f"  Type-1 filter kept {activations['_userId'].nunique()}/{pre_dx} users")
+
+    return activations
 
 
 # =============================================================================
