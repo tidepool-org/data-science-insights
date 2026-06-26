@@ -138,7 +138,9 @@ def build_day_type_frame(pdf, treatment_flag, treatment_label=NMA_LABEL):
     strat_names = [s for s, _ in STRATEGIES]
     treat = pdf.loc[pdf[treatment_flag] == True].copy()  # noqa: E712
     treat[DAY_TYPE_COL] = treatment_label
-    cmp = pdf.loc[pdf[COMPARATOR_FLAG] == True].copy()  # noqa: E712
+    # Disjoint comparator: drop the treatment arm's own days from the CE>0 reference — a no-op for the main
+    # NMA pass (CE=0 ∩ CE>0 = ∅) and removes the overlapping HMA days (CE>=3/BE>=3 ⊂ CE>0) for the §12.2 fit.
+    cmp = pdf.loc[(pdf[COMPARATOR_FLAG] == True) & (pdf[treatment_flag] == False)].copy()  # noqa: E712
     cmp[DAY_TYPE_COL] = COMPARATOR_LABEL
     frame = pd.concat([treat, cmp], ignore_index=True)
     return frame[frame[STRATEGY_COL].isin(strat_names)].copy()

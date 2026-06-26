@@ -246,13 +246,17 @@ def create_table_8_1b(pdf, nma_stats, classifications=CLASSIFICATIONS):
         for col, ep_label in ENDPOINTS:
             # Day-level 2-arm slice; arm reference = CE>0 so the coef is NMA - CE>0.
             nma = pdf.loc[pdf[nma_flag] == True, ["_userId", col]].assign(arm="NMA")  # noqa: E712
-            cmp = pdf.loc[pdf[COMPARATOR_FLAG] == True, ["_userId", col]].assign(arm="CE>0")  # noqa: E712
+            # Disjoint comparator: exclude the treatment arm's own days from the CE>0 reference. No-op for
+            # the 3 NMA classifications (a CE=0 day is never CE>0); for the overlapping CE>=3/BE>=3 arm
+            # (HMA ⊂ CE>0) it removes the HMA days from the reference so they are not entered in both arms.
+            cmp = pdf.loc[(pdf[COMPARATOR_FLAG] == True) & (pdf[nma_flag] == False),
+                          ["_userId", col]].assign(arm="CE>0")  # noqa: E712
             sl = pd.concat([nma, cmp], ignore_index=True).dropna(subset=[col])
             sl["arm"] = pd.Categorical(sl["arm"], categories=["CE>0", "NMA"])
 
             # Non-parametric companion: per-user within-arm MEDIAN, paired NMA - CE>0.
             nma_med = pdf[pdf[nma_flag] == True].groupby("_userId")[col].median()  # noqa: E712
-            cmp_med = pdf[pdf[COMPARATOR_FLAG] == True].groupby("_userId")[col].median()  # noqa: E712
+            cmp_med = pdf[(pdf[COMPARATOR_FLAG] == True) & (pdf[nma_flag] == False)].groupby("_userId")[col].median()  # noqa: E712
             np_diff = pd.DataFrame({"NMA": nma_med, "CMP": cmp_med}).dropna()
             np_diff = np_diff["NMA"] - np_diff["CMP"]
             if len(np_diff):

@@ -219,7 +219,9 @@ def windowed_matched_means(pdf, nma_flag, cmp_flag, endpoints, half=WINDOW_HALF)
     total_nma = matched_nma = 0
     for _, sub in pdf.groupby("_userId"):
         nm = (sub[nma_flag] == True).to_numpy()   # noqa: E712
-        cm = (sub[cmp_flag] == True).to_numpy()    # noqa: E712
+        # Comparator pool excludes the treatment arm's own days: no-op for disjoint CE=0-vs-CE>0 matching;
+        # for the overlapping CE>=3/BE>=3 windowed contrast it stops HMA days being their own comparator.
+        cm = ((sub[cmp_flag] == True) & (sub[nma_flag] == False)).to_numpy()    # noqa: E712
         n_nma = int(nm.sum())
         if n_nma == 0:
             continue
