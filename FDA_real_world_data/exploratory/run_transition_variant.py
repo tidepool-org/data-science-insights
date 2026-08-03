@@ -76,7 +76,23 @@ ANALYSES = [
     "analysis_8-5_demographic_subgroup_analysis.py",
     "analysis_8-7_autobolus_adoption_durability.py",
     "analysis_8-8_carbohydrate_consumption_consistency.py",
+    "analysis_ir-1_preset_characterization.py",
 ]
+
+
+# The box-affected staging subtree, in build/dependency order — the tables
+# build_tables() materialises per suffix. Imported by teardown_boxes.py so
+# build and teardown share one list (a drift test pins it to build_tables).
+BOX_TABLES = (
+    "valid_transition_segments",
+    "valid_transition_cbg",
+    "glycemic_endpoints_transition",
+    "valid_transition_guardrails",
+    "overrides_by_segment",
+    "valid_override_cbg",
+    "glycemic_endpoints_override",
+    "valid_transition_carbs",
+)
 
 
 def _t(name, suffix):

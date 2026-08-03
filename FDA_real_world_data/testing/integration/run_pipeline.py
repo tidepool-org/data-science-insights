@@ -63,6 +63,9 @@ TABLES = {
 
 # When all of these exist, run() short-circuits. user_diagnosis_type is included
 # so an older build that predates the type-1 gate forces a one-time rebuild.
+# NOTE: existence-only — a schema change to an existing table is NOT detected;
+# after one, re-run the affected staging script against the test tables (or
+# teardown + rebuild).
 TERMINAL_TABLES = (
     "glycemic_endpoints_transition",
     "glycemic_endpoints_stable",

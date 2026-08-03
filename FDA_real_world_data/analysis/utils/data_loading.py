@@ -28,13 +28,22 @@ MAX_LOOP_VERSION_INT = 3_004_000   # Loop 3.4.0
 MAX_SEG2_END_DATE = "2024-07-13"   # Loop 3.4.0 release date (GitHub LoopKit/Loop v3.4.0, 2024-07-13)
 MIN_AGE = 6
 
-# Cohort predicate against `valid_transition_segments`. Imported by
-# analysis_8-3 / analysis_8-4 so the cohort definition lives in one place.
-COHORT_WHERE = (
+# Loop-version half of the cohort predicate. Exported separately because
+# analysis_8-2's Table 8.2a / Figure 8.2b path uses it WITHOUT the age term —
+# deliberately: the reported 8.2a numbers predate the age gate and are kept
+# stable, with the deviation flagged in the report rather than regenerated
+# (2026-07-30 decision; see report_editor_note.md §0e).
+VERSION_WHERE = (
     f"((tb_to_ab_max_loop_version_int IS NOT NULL "
     f"  AND tb_to_ab_max_loop_version_int < {MAX_LOOP_VERSION_INT}) "
     f" OR (tb_to_ab_max_loop_version_int IS NULL "
-    f"  AND tb_to_ab_seg2_end < DATE '{MAX_SEG2_END_DATE}')) "
+    f"  AND tb_to_ab_seg2_end < DATE '{MAX_SEG2_END_DATE}'))"
+)
+
+# Cohort predicate against `valid_transition_segments`. Imported by
+# analysis_8-3 / analysis_8-4 so the cohort definition lives in one place.
+COHORT_WHERE = (
+    f"{VERSION_WHERE} "
     f"AND (tb_to_ab_age_years >= {MIN_AGE} OR tb_to_ab_age_years IS NULL)"
 )
 

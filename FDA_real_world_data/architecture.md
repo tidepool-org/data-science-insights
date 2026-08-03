@@ -1,6 +1,8 @@
 # FDA Real World Data — Architecture
 
-## Current state (as of 2026-06-24)
+## Current state (as of 2026-08-03)
+
+**FDA interactive-review response (presets)**: `analysis/analysis_ir-1_preset_characterization.py` characterizes every preset activation by an eligible transition user — parameter distributions (mean/SD/min–max/median[IQR]) by period at activation + distinct-config grains (Table IR-1a), activation-level effective + programmed durations (IR-1b), per-user frequency/exposure zero-filled over the full cohort (IR-1c) and among preset users only (IR-1d), per-preset-name breakdown with small-cell flag (IR-1e), and data checks (CR≡ISF tie, basal reciprocal linkage, 8.1-cohort preset exposure) (IR-1f). Descriptive only — 8-3/8-4 cohort gates, no validity/starting-glucose filters; keyed on `segment`, all three periods. Registered in the variant driver; run per build (`""` / `_box080` / `_box090`), **defaulting to `_box080`** (the report primary) on a bare Run-file. Staging now also preserves the as-programmed `stated_duration` on `overrides_by_segment` (re-stage all builds before quoting programmed durations; production + `_box080` re-staged 2026-08-03, `_box090` still outstanding). The Table 8.2a / Fig 8.2b cohort predicate is single-sourced as `VERSION_WHERE` and **deliberately omits the age ≥ 6 gate** (flag-don't-fix decision 2026-07-30 — reported numbers stay stable, deviation disclosed in the report; see report_editor_note.md §0e). `production_runs/run_all_boxes.py` is the one-click driver: rebuild + analyze all three builds (`_box080` primary → production `""` → `_box090`) in sequence.
 
 Analyses **§8-1 through §8-8 implemented** across the transition (TB→AB), stable-AB, preset-override, and adoption-durability pipelines; 8-6/8-7 use a partner-CSV handoff (`--mode export` on Databricks → partner summary CSV → `--mode figures` locally). Per-script + integration tests live under `testing/`.
 
@@ -31,7 +33,7 @@ FDA_real_world_data/
 │   ├── export_cbg_from_stable.py                — Filter CBG by stable AB segments
 │   ├── export_cbg_from_overrides.py             — Filter CBG by preset override periods
 │   ├── export_carbohydrates_from_transitions.py — Extract food entries in transition segments; dedupes BDDP re-ingests via latest `created_timestamp`; carries `tb_to_ab_seg1_start` + `segment_rank` (per-segment attribution, matching CBG exporter)
-│   ├── export_overrides_from_transitions.py     — Extract + validate preset override events
+│   ├── export_overrides_from_transitions.py     — Extract + validate preset override events; emits effective `duration` (min of stated, gap-to-next, segment-end) plus as-programmed `stated_duration`
 │   ├── compute_glycemic_endpoints.py            — Compute TIR/TBR/TAR/CV/hypo events
 │   └── export_user_diagnosis_type.py            — Build user_diagnosis_type: per-user diabetes diagnosis from prod patients + seagull_profiles, JAEB cohort → type1 override; FDA Loop-user universe (loop_recommendations)
 │
@@ -45,6 +47,7 @@ FDA_real_world_data/
 │   ├── analysis_8-6_*.py  — Socioeconomic subgroup analysis (stable AB cohort). Two modes: `--mode export` (Databricks) writes `glycemic_endpoints_by_jaeb_id.csv` for the partner team; `--mode figures` (local, pure pandas/matplotlib) reads the partner's returned summary CSV (median/Q1/Q3 of TIR, TBR, hypoEventRate14Day across Race/Ethnicity, Income, Education, Insurance, helpStartLoop) and renders figures 8.6a/b/c via `ax.bxp()` with whiskers collapsed to the IQR
 │   ├── analysis_8-7_*.py  — Autobolus adoption durability. `--mode default` (Databricks): Table 8.7a + Figures 8.7a (stacked bar), 8.7b (KM retention curve) and 8.7c (per-user trajectories), plus `autobolus_durability_by_jaeb_id.csv` for the partner team. `--mode figures` (local): reads the partner's per-subgroup CSV (N, NumDiscontinued, PropDiscontinued, Barnard's-test RD + 99% Bonferroni CI + p-value, across the same five subgroups as 8-6) and renders Figure 8.7d — one panel per subgroup, two boxes per panel via `ax.bxp()` with whiskers collapsed to the per-level 95% Clopper-Pearson CI on the proportion
 │   ├── analysis_8-8_*.py  — Carbohydrate consumption consistency
+│   ├── analysis_ir-1_preset_characterization.py — FDA interactive-review response: descriptive preset characterization (Tables IR-1a parameter distributions by period × grain, IR-1b activation durations, IR-1c per-user usage zero-filled over the full cohort, IR-1d per-user usage among preset users only, IR-1e per-preset-name breakdown [free-text names — screen before external use], IR-1f data checks); 8-3/8-4 cohort gates, no validity/starting-glucose filters
 │   ├── plot_stable_ab_sample_size.py — CONSORT chart, sample size heatmap, AB% distribution
 │   └── utils/
 │       ├── constants.py    — Font sizes, color schemes, STARTING_GLUCOSE_LOW/HIGH (70/180) shared across 8-2 and 8-3
@@ -56,7 +59,8 @@ FDA_real_world_data/
 │   ├── staging_test_helpers.py    — setup_test_table(), read_test_output(), assert_row_count(), make_loop_recs()
 │   ├── create_test_loop_data.py   — Synthetic loop data generator
 │   ├── data_staging/              — Paired tests for every data_staging/ script (13 files)
-│   ├── integration/               — End-to-end tests: synthetic BDDP → all staging scripts → analysis. build_synthetic_bddp.py emits a deterministic BDDP fixture with explicit DDL schema (defeats Databricks Connect's all-None-column drop) covering 21 archetypes (transition / multi-preset / carb-change / demographic / stable-AB / durability / outlier-filter / day-undercoverage cohorts); run_pipeline.py chains every staging script against the fixture (and builds a synthetic all-type1 `user_diagnosis_type`), exposes RedirectingSpark to swap prod table names → `test_*` equivalents at analysis time, `get_spark()` to bridge notebook/Databricks-Connect contexts, and `session()` to call `run()` before a with-block (no automatic teardown — tables persist across runs via the idempotency guard); archetypes.md catalogs the planned synthetic users; test_analysis_6_3a.py plus test_analysis_8_1.py through test_analysis_8_8.py exercise each analysis, and test_type1_diagnosis_gate.py pins the type-1 cohort gate's exclusion path; run_all_tests.py sequences them all. Run on Databricks.
+│   ├── integration/               — End-to-end tests: synthetic BDDP → all staging scripts → analysis. build_synthetic_bddp.py emits a deterministic BDDP fixture with explicit DDL schema (defeats Databricks Connect's all-None-column drop) covering 21 archetypes (transition / multi-preset / carb-change / demographic / stable-AB / durability / outlier-filter / day-undercoverage cohorts); run_pipeline.py chains every staging script against the fixture (and builds a synthetic all-type1 `user_diagnosis_type`), exposes RedirectingSpark to swap prod table names → `test_*` equivalents at analysis time, `get_spark()` to bridge notebook/Databricks-Connect contexts, and `session()` to call `run()` before a with-block (no automatic teardown — tables persist across runs via the idempotency guard); archetypes.md catalogs the planned synthetic users; test_analysis_6_3a.py plus test_analysis_8_1.py through test_analysis_8_8.py and test_analysis_ir_1.py (fail-fast stale-catalog assert on `stated_duration`) exercise each analysis, and test_type1_diagnosis_gate.py pins the type-1 cohort gate's exclusion path; run_all_tests.py sequences them all. Run on Databricks.
+│   ├── production_runs/           — Recorder-based pins, no Spark (2 files): run_all_boxes BOX_CONFIGS ↔ variant-driver/staging defaults; teardown_boxes list ↔ BOX_TABLES
 │   └── simulation/                — Tests for simulation/export/ (2 files; build_scenario_json pure-Python + export_single_user_day unit + Spark TZ-shift)
 │
 ├── simulation/
@@ -71,18 +75,24 @@ FDA_real_world_data/
 ├── docs/
 │   └── dosing_strategy_classification.md  — AB/TB classification logic, false positive mitigations, both methods
 │
-└── exploratory/
-    ├── autobolus_frequency.py              — Ad-hoc autobolus frequency analysis
-    ├── autobolus_matching.sql              — Match bolus to loop dosingDecision within ±5s
-    ├── autobolus_false_positives.sql       — Boluses with multiple DDs within 5 seconds
-    ├── autobolus_labeling_comparison.py   — Compare 3 autobolus labeling methods (subType, recommendedBolus, dosingDecision match)
-    ├── autobolus_healthkit.sql            — Exploratory: parse HealthKit metadata for AB/TB classification
-    ├── isf_for_valid_transition.py        — Histogram of ISF (mg/dL/U) across all pump-settings schedule entries during valid TB→AB transitions
-    ├── transition_segment_score_separation.sql — Segment-score separation of the rank-1 "used" segments vs the candidate pool; cohort impact of tightening the validity box (carries the §8-1 coverage/guardrail/both-halves gates)
-    ├── run_transition_variant.py          — Driver: switch the validity box (`--suffix`/`--autobolus-low`/`--autobolus-high`/`--skip-analysis`), rebuild the box-affected transition subtree into parallel `{suffix}` tables (branch-from-box: reuses production loop_cbg/bddp), and run the 6-3a cohort flow + analyses 8-1/2/3/4/5/8 into `outputs/*{suffix}/` (default 0.80 box / `_box080`)
-    ├── preset_counts.sql                  — Preset-activation counts behind Table 8.4a (§8-4 cohort): activations + distinct users by dosing mode, cohort denominator + paired-N, per-preset-name breakdown; production + parallel `_box080` sections
-    ├── cohort_diagnosis_type.sql          — Transition-cohort (box080) diagnosis breakdown joining prod.default.patients directly; splits "not in patients record" vs "in patients, no diagnosisType entry"
-    └── cohort_diagnosis_breakdown.sql     — Diagnosis-type breakdown (count + %) across all three cohorts (transition/stable/durability) via user_diagnosis_type; the transition view reproduces load_transition_endpoints (both-half CGM-coverage gate); targets the `_box080` transition variant
+├── exploratory/
+│   ├── autobolus_frequency.py              — Ad-hoc autobolus frequency analysis
+│   ├── autobolus_matching.sql              — Match bolus to loop dosingDecision within ±5s
+│   ├── autobolus_false_positives.sql       — Boluses with multiple DDs within 5 seconds
+│   ├── autobolus_labeling_comparison.py   — Compare 3 autobolus labeling methods (subType, recommendedBolus, dosingDecision match)
+│   ├── autobolus_healthkit.sql            — Exploratory: parse HealthKit metadata for AB/TB classification
+│   ├── isf_for_valid_transition.py        — Histogram of ISF (mg/dL/U) across all pump-settings schedule entries during valid TB→AB transitions
+│   ├── transition_segment_score_separation.sql — Segment-score separation of the rank-1 "used" segments vs the candidate pool; cohort impact of tightening the validity box (carries the §8-1 coverage/guardrail/both-halves gates)
+│   ├── run_transition_variant.py          — Driver: switch the validity box (`--suffix`/`--autobolus-low`/`--autobolus-high`/`--skip-analysis`), rebuild the box-affected transition subtree into parallel `{suffix}` tables (branch-from-box: reuses production loop_cbg/bddp), and run the 6-3a cohort flow + analyses 8-1/2/3/4/5/8 + IR-1 into `outputs/*{suffix}/` (default 0.80 box / `_box080`); exports BOX_TABLES (the box-affected subtree list) for the production_runs/ drivers
+│   ├── preset_counts.sql                  — Preset-activation counts behind Table 8.4a (§8-4 cohort): activations + distinct users by dosing mode, cohort denominator + paired-N, per-preset-name breakdown; production + parallel `_box080` sections
+│   ├── cohort_diagnosis_type.sql          — Transition-cohort (box080) diagnosis breakdown joining prod.default.patients directly; splits "not in patients record" vs "in patients, no diagnosisType entry"
+│   └── cohort_diagnosis_breakdown.sql     — Diagnosis-type breakdown (count + %) across all three cohorts (transition/stable/durability) via user_diagnosis_type; the transition view reproduces load_transition_endpoints (both-half CGM-coverage gate); targets the `_box080` transition variant
+│
+├── production_runs/                       — One-click production run drivers (Databricks Run-file entry points)
+│   ├── run_all_boxes.py                   — Rebuild + analyze every validity-box build in sequence via run_transition_variant.run(): `_box080` 0.20/0.80 (report primary, first) → production `""` 0.30/0.70 (rebuilds prod tables in place) → `_box090` 0.10/0.90; `--only _box080,prod` subset, `--skip-analysis` staging-only
+│   └── teardown_boxes.py                  — DROP IF EXISTS the BOX_TABLES subtree for the variant namespaces (production guarded behind `--include-prod`); `--test-catalog` also runs run_pipeline.teardown, `--dry-run` prints only
+│
+└── reports/                               — Regulatory response drafts (e.g. the IR-1 interactive-review response); prose lives here, generated tables stay under outputs/
 ```
 
 ## Pipeline DAG
@@ -107,7 +117,7 @@ Phase 3A: Transition Analyses
     → export_cbg_from_overrides        → valid_override_cbg (carries override_time, duration, segment (tb_to_ab_seg1/2/3), dosing_mode (temp_basal/autobolus), is_valid_name_only_{seg2,seg3}, is_starting_glucose_in_range)
       → compute_glycemic_endpoints (mode=override; per-activation grain — group_cols include override_time + duration so each activation produces its own endpoint row) → glycemic_endpoints_override
         → Analysis 8-2 (load_override_endpoints loads per-activation; aggregate_override_endpoints averages up to preset-name primary or exact-config sensitivity grain, pairs TB vs seg2 for Table 8.2b and TB vs seg3 for Table 8.2c)
-    → Analysis 8-3, 8-4
+    → Analysis 8-3, 8-4, IR-1
   export_segments_within_guardrails (mode=transition) → valid_transition_guardrails
 
 Phase 3B: Stable AB Analyses
@@ -200,6 +210,9 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 | Pump settings validation | `export_segments_within_guardrails.py` |
 | TIR/TBR/TAR/hypo computation | `compute_glycemic_endpoints.py` |
 | Override extraction + validity | `export_overrides_from_transitions.py` |
+| Preset characterization (FDA interactive review) | `analysis/analysis_ir-1_preset_characterization.py` |
+| One-click all-box rebuild + analyze | `production_runs/run_all_boxes.py` |
+| One-click box/test-catalog teardown | `production_runs/teardown_boxes.py` |
 | Carb extraction | `export_carbohydrates_from_transitions.py` |
 | Statistical tests | `analysis/utils/statistics.py` |
 | Data loading + filtering | `analysis/utils/data_loading.py` |

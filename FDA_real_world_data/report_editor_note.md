@@ -13,6 +13,95 @@ build (previous primary) and 0.90 build move to the §12 supplement. The validit
 `{suffix}` outputs (`_box080` / `_box090`); 8-6/8-7 (stable-AB / durability) are box-independent and
 identical across builds._
 
+## 0e. IR-1 output contract + caption guidance — 2026-07-30 (later same day; supersedes the earlier IR-1 table list)
+
+**Final lettering — one table per letter, six CSVs** (under `outputs/analysis_ir_1{suffix}/`; a bare
+run of the analysis now **defaults to the box080 primary build**, `--suffix ""` for the 0.70 build):
+
+| Table | File |
+|---|---|
+| IR-1a | `table_ir1a_parameter_distributions.csv` |
+| IR-1b | `table_ir1b_activation_durations.csv` |
+| IR-1c | `table_ir1c_per_user_full_cohort.csv` |
+| IR-1d | `table_ir1d_per_user_preset_users.csv` |
+| IR-1e | `table_ir1e_preset_name_breakdown.csv` |
+| IR-1f | `table_ir1f_data_checks.csv` |
+
+⚠ **Discard stale lettered files.** The letters were reshuffled when IR-1d split out; any previously
+synced `table_ir1b_per_user_frequency_duration.csv`, `table_ir1c_preset_name_breakdown.csv`, or
+`table_ir1d_data_checks.csv` is an older vintage — delete it (there is deliberately no auto-cleanup).
+The draft table labeled "IR-1b-2" **is IR-1d**: its †-derived means will reproduce exactly (mean of
+per-user counts ≡ pooled total ÷ user count) and the CSV adds the missing SD / min–max / median [IQR].
+Expect heavy-user skew — medians well below means.
+
+**IR-1c vs IR-1d captions.** IR-1c = *the average eligible user*: zero-filled over the full cohort
+(non-users contribute 0 → zero-inflated medians; same framing as Table 8.4a, §0c). IR-1d = *the
+average preset user*: membership is **per window** (≥1 activation in that window, no zero-fill), so
+its N differs by window and is NOT the all-window union — e.g. box080 shows 39 preset users in each
+window but a 51-user union; the union appears only in IR-1f ("Users with ≥1 activation"). The
+mean-duration-per-activation row is identical between IR-1c and IR-1d by construction (it can never
+be zero-filled) — a built-in cross-check, not an error.
+
+**IR-1b caption.** In aggregate, effective duration can EXCEED programmed duration even though it is
+a truncation row-wise: indefinite overrides (NULL programmed duration) appear only in the effective
+row, with durations imputed as time-to-next-override / window-end (up to ~14 days). The N gap between
+the two rows per period is the indefinite count, and the medians of the two rows match. Suggested
+caption line: "Effective durations include N indefinite overrides per period whose duration is the
+time to the next override or the window end; programmed durations exclude them."
+
+FDA's interactive-review question asks us to characterize the configurable presets behind 8.1/8.2/8.4:
+(a) the preset settings available in the dataset, (b) per-parameter distributions (mean, SD, **range**)
+during the TB and AB periods, (c) per-user activation frequency and duration per period, (d) whether
+these are the same presets analyzed in 8.3, and (e) whether the to-be-marketed presets have configurable
+settings beyond basal rate / CR-ISF / glucose target.
+
+**New output set** — `outputs/analysis_ir_1{suffix}/` (run per build; box080 primary):
+
+- **Table IR-1a** — parameter distributions (N, N users, mean ± SD, min–max, median [IQR]) for the five
+  stored parameters (basal-rate, carb-ratio, insulin-sensitivity scale factors; target low; target high)
+  plus target midpoint, by period, at two grains: **per-activation (primary)** and per distinct
+  (user, preset name, exact config).
+- **Table IR-1b** — activation-level **effective** and **programmed** duration distributions by period.
+- **Table IR-1c** — per-user frequency / total preset time / mean duration per activation, zero-filled
+  over the **full cohort** denominator (Table 8.4a's design) with min–max added — "the average user";
+  expect zero-inflated medians.
+- **Table IR-1d** — the same per-user outcomes among **preset users only** (≥1 activation in that
+  window, no zero-fill) — "the average preset user"; each period's N is that window's preset-user count.
+- **Table IR-1e** — per-preset-name usage breakdown. ⚠ Preset names are **user-entered free text** —
+  must be screened for identifying content and small cells (< 5 users are flagged) before anything
+  leaves the analysis environment.
+- **Table IR-1f** — data checks for the response prose: the CR-factor ≡ ISF-factor tie rate, whether the
+  carb-ratio factor ≈ 1/basal (i.e., whether DIY Loop presets reduce to a single "insulin needs" dial;
+  ISF's tie to CR is the separate check), NULL-programmed-duration counts (⚠ a NULL programmed duration —
+  indefinite override — still yields a bounded non-NULL *effective* duration via the gap/segment-end
+  fallback; ~5% of raw preset records), and how many of the final **8.1** cohort used any preset in their
+  rank-1 transition window.
+
+Prose points to carry into the response: **8.1 does not condition on presets** — preset-active time is
+unmodeled background exposure inside its 14-day halves (39/351 users, 11.1%, activated any preset;
+IR-1f gives the 8.1-cohort figure); the dataset stores **scale factors relative to scheduled therapy**,
+not absolute settings; durations in prior tables are **effective** (bounded by min of programmed,
+gap-to-next, segment-end) — IR-1b now reports programmed alongside; on (d), the accurate phrasing is
+"**same parameter definitions, same source records, gated subset of activations**" (8.3 gates on
+seg2-pair validity + starting glucose and excludes seg3, so it is *not* a superset of 8.2's paired set);
+(e) is a **product/regulatory question** — the TL 2.0 preset feature list is not derivable from this repo.
+
+**⚠ Table 8.2a / Figure 8.2b age-gate deviation — flag in prose, numbers unchanged (decision
+2026-07-30):** the 8.2a / Figure 8.2b cohort predicate applies the Loop-version gate but **not the
+age ≥ 6 term** that Tables 8.2b/8.2c and every other §8 cohort apply. Decision: keep the reported
+8.2a numbers exactly as they are (no regeneration) and **disclose the deviation** in the report.
+The code now single-sources the predicate (`VERSION_WHERE` vs `COHORT_WHERE`); the omission is
+deliberate — don't switch the 8.2a path to `COHORT_WHERE` without a report decision (the pinning
+test was removed 2026-08-03). Suggested footnote: "The Table 8.2a / Figure 8.2b sample applies the
+Loop-version cohort gate but not the age ≥ 6 restriction applied elsewhere; the endpoint comparisons
+(Tables 8.2b/8.2c) are fully gated. Any under-6 preset users counted here therefore do not contribute
+to the endpoint analyses."
+
+**Run order — one click:** `production_runs/run_all_boxes.py` rebuilds the box-affected staging subtree
+(including the new `stated_duration` column) and runs 6-3a + 8-1/2/3/4/5/7/8 + IR-1 for all three
+builds in sequence (`_box080` primary first, then production `""`, then `_box090`). Subset via
+`--only _box080,prod`; staging-only via `--skip-analysis`.
+
 ## 0c. Reading Table 8.4 — the two Ns + zero-inflation — 2026-06-24 (prose/caption guidance; no code change)
 
 Table 8.4a is easy to misread because of its **denominator design**: N = 351 is *every* eligible type-1
@@ -152,6 +241,8 @@ listed):
   {`""` (0.70), `_box080`, `_box090`}.
 - **§8.x:** per-build outputs under `outputs/analysis_8_X{suffix}/`; the box080-primary copies are synced under
   `outputs_supplement/*_box080`.
+- **IR-1 (interactive review):** six lettered CSVs under `outputs/analysis_ir_1{suffix}/` — the exact
+  filenames are the table in §0e; one table per letter, older-vintage lettered files are to be discarded.
 
 ---
 

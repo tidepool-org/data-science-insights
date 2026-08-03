@@ -55,9 +55,14 @@ segments_rows = [
     },
 ]
 
-# Exercise preset: 2 in seg1 + 2 in seg2 + 2 in seg3, same params → valid for
-# both seg2 and seg3 pairings (name + full).
-# Sleep preset: 1 in seg1 + 1 in seg2 + 0 in seg3 → invalid for both pairings.
+# Exercise preset: 3 in seg1 + 2 in seg2 + 3 in seg3, same params → valid for
+# both seg2 and seg3 pairings (name + full). Includes a NULL-programmed-duration
+# row (seg1, Jan 7 — effective duration falls back to the segment-end clip since
+# LEAST skips NULLs) and a segment-end-clipped row (seg3, Feb 11 20:00 — stated
+# 28800 s crosses the Feb 11 seg3 end, clipped to 14400 s).
+# Sleep preset: 1 in seg1 + 2 in seg2 + 0 in seg3 → invalid for both pairings
+# (needs ≥2 in seg1 too); the two seg2 activations sit 2 h apart so the first
+# one's 8-h stated duration is gap-truncated to 7200 s.
 EXERCISE = {
     "overridePreset": "Exercise",
     "basalRateScaleFactor": "0.5",
@@ -82,17 +87,25 @@ bddp_rows = [
     # Jan 5 10:00: starting glucose 200 (out of range)
     {"_userId": "user_a", "time_string": "2025-01-03 10:00:00", "created_timestamp": "2025-01-03 10:00:01", **EXERCISE},
     {"_userId": "user_a", "time_string": "2025-01-05 10:00:00", "created_timestamp": "2025-01-05 10:00:01", **EXERCISE},
+    # Exercise in seg1 with NULL programmed duration (indefinite override):
+    # effective duration = clip to seg1 end (Jan 15 00:00 − Jan 7 10:00 = 655200 s).
+    {"_userId": "user_a", "time_string": "2025-01-07 10:00:00", "created_timestamp": "2025-01-07 10:00:01", **{**EXERCISE, "duration": None}},
     # Exercise in seg2 (×2)
     # Jan 17 10:00: starting glucose 90 (in range)
     # Jan 19 10:00: no CBG within 30 min (NULL starting glucose, not in range)
     {"_userId": "user_a", "time_string": "2025-01-17 10:00:00", "created_timestamp": "2025-01-17 10:00:01", **EXERCISE},
     {"_userId": "user_a", "time_string": "2025-01-19 10:00:00", "created_timestamp": "2025-01-19 10:00:01", **EXERCISE},
-    # Exercise in seg3 (×2): both with in-range starting glucose
+    # Exercise in seg3 (×3): first two with in-range starting glucose; the
+    # Feb 11 20:00 activation states 28800 s but seg3 ends Feb 11, so the
+    # segment clip cuts the effective duration to 14400 s (Feb 12 00:00).
     {"_userId": "user_a", "time_string": "2025-01-31 10:00:00", "created_timestamp": "2025-01-31 10:00:01", **EXERCISE},
     {"_userId": "user_a", "time_string": "2025-02-02 10:00:00", "created_timestamp": "2025-02-02 10:00:01", **EXERCISE},
+    {"_userId": "user_a", "time_string": "2025-02-11 20:00:00", "created_timestamp": "2025-02-11 20:00:01", **{**EXERCISE, "duration": "28800"}},
     # Sleep in seg1 (×1)
     {"_userId": "user_a", "time_string": "2025-01-04 22:00:00", "created_timestamp": "2025-01-04 22:00:01", **SLEEP},
-    # Sleep in seg2 (×1)
+    # Sleep in seg2 (×2). The 20:00 activation's stated 28800 s (8 h) is
+    # gap-truncated to 7200 s by the 22:00 activation that follows it.
+    {"_userId": "user_a", "time_string": "2025-01-16 20:00:00", "created_timestamp": "2025-01-16 20:00:01", **SLEEP},
     {"_userId": "user_a", "time_string": "2025-01-16 22:00:00", "created_timestamp": "2025-01-16 22:00:01", **SLEEP},
     # Outside segments — excluded (Feb 12 is past seg3 end Feb 11)
     {"_userId": "user_a", "time_string": "2025-02-12 10:00:00", "created_timestamp": "2025-02-12 10:00:01", **EXERCISE},
@@ -149,22 +162,23 @@ try:
 
     result = read_test_output(spark, OUTPUT_TABLE)
 
-    # 1. 8 rows: 6 Exercise (2 seg1 + 2 seg2 + 2 seg3) + 2 Sleep (1 seg1 + 1 seg2);
+    # 1. 11 rows: 8 Exercise (3 seg1 + 2 seg2 + 3 seg3) + 3 Sleep (1 seg1 + 2 seg2);
     #    outside-segments and null-preset excluded.
-    assert_row_count(result, 8, "overrides within transition segments")
+    assert_row_count(result, 11, "overrides within transition segments")
 
     # 2. Exercise: valid for both seg2 and seg3 pairings (≥2 each in seg1, seg2, seg3).
     exercise = result[result["overridePreset"] == "Exercise"]
-    assert len(exercise) == 6, f"expected 6 Exercise rows, got {len(exercise)}"
+    assert len(exercise) == 8, f"expected 8 Exercise rows, got {len(exercise)}"
     assert all(exercise["is_valid_name_only_seg2"]), "Exercise should be valid_name_only_seg2"
     assert all(exercise["is_valid_name_only_seg3"]), "Exercise should be valid_name_only_seg3"
     assert all(exercise["is_valid_full_seg2"]), "Exercise should be valid_full_seg2"
     assert all(exercise["is_valid_full_seg3"]), "Exercise should be valid_full_seg3"
     print("PASS: Exercise preset valid for both seg2 and seg3 pairings")
 
-    # 3. Sleep: 1 in seg1 + 1 in seg2 + 0 in seg3 → invalid for both pairings.
+    # 3. Sleep: 1 in seg1 + 2 in seg2 + 0 in seg3 → invalid for both pairings
+    #    (name-only validity needs ≥2 in seg1 as well).
     sleep = result[result["overridePreset"] == "Sleep"]
-    assert len(sleep) == 2, f"expected 2 Sleep rows, got {len(sleep)}"
+    assert len(sleep) == 3, f"expected 3 Sleep rows, got {len(sleep)}"
     assert not any(sleep["is_valid_name_only_seg2"]), "Sleep should be invalid (seg2)"
     assert not any(sleep["is_valid_name_only_seg3"]), "Sleep should be invalid (seg3)"
     print("PASS: Sleep preset invalid for both pairings")
@@ -176,7 +190,7 @@ try:
     assert all(seg1["dosing_mode"] == "temp_basal"), "seg1 dosing_mode should be temp_basal"
     assert all(seg2["dosing_mode"] == "autobolus"), "seg2 dosing_mode should be autobolus"
     assert all(seg3["dosing_mode"] == "autobolus"), "seg3 dosing_mode should be autobolus"
-    assert len(seg3) == 2, f"expected 2 seg3 rows, got {len(seg3)}"
+    assert len(seg3) == 3, f"expected 3 seg3 rows, got {len(seg3)}"
     print("PASS: correct dosing_mode per segment (seg1 / seg2 / seg3)")
 
     # 5. bg_target values converted to mg/dL (deterministic mmol → mg/dL conversion).
@@ -208,6 +222,42 @@ try:
     )
     assert not bool(jan19["is_starting_glucose_in_range"]), "Jan 19 should be out-of-range (NULL)"
     print("PASS: starting_glucose + is_starting_glucose_in_range correctly attached")
+
+    # 7. stated_duration carries the as-programmed value; duration is the
+    #    effective (gap-truncated) value. Jan 16 20:00 Sleep states 28800 s but
+    #    is cut to 7200 s by the 22:00 activation; untruncated rows are equal.
+    jan16_20 = by_time[pd.Timestamp(2025, 1, 16, 20, 0)]
+    assert float(jan16_20["stated_duration"]) == 28800.0, (
+        f"Jan 16 20:00 stated_duration: {jan16_20['stated_duration']}"
+    )
+    assert float(jan16_20["duration"]) == 7200.0, (
+        f"Jan 16 20:00 effective duration: {jan16_20['duration']}"
+    )
+    assert float(jan3["stated_duration"]) == 3600.0, (
+        f"Jan 3 stated_duration: {jan3['stated_duration']}"
+    )
+    assert float(jan3["duration"]) == 3600.0, f"Jan 3 duration: {jan3['duration']}"
+    print("PASS: stated_duration preserved; effective duration gap-truncated")
+
+    # 8. NULL programmed duration: stated stays NULL, but effective falls back
+    #    (LEAST skips NULLs) — here to the seg1-end clip, Jan 15 00:00 −
+    #    Jan 7 10:00 = 655200 s (the next override, Jan 16 20:00, is after the
+    #    clip point, so the clip wins).
+    jan7 = by_time[pd.Timestamp(2025, 1, 7, 10, 0)]
+    assert pd.isna(jan7["stated_duration"]), (
+        f"Jan 7 stated_duration should be NULL, got {jan7['stated_duration']}"
+    )
+    assert float(jan7["duration"]) == 655200.0, f"Jan 7 duration: {jan7['duration']}"
+    print("PASS: NULL programmed duration → effective falls back to segment clip")
+
+    # 9. Segment-end clip with stated preserved: Feb 11 20:00 states 28800 s but
+    #    seg3 ends Feb 11 → effective = Feb 12 00:00 − Feb 11 20:00 = 14400 s.
+    feb11 = by_time[pd.Timestamp(2025, 2, 11, 20, 0)]
+    assert float(feb11["stated_duration"]) == 28800.0, (
+        f"Feb 11 stated_duration: {feb11['stated_duration']}"
+    )
+    assert float(feb11["duration"]) == 14400.0, f"Feb 11 duration: {feb11['duration']}"
+    print("PASS: segment-end clip cuts effective duration, stated preserved")
 
     print("\nAll tests passed.")
 

@@ -1,8 +1,12 @@
 """Run every FDA RWD integration test in sequence.
 
-Each test uses `run_pipeline.session()` so passing tests share the pipeline
-output (the `_all_terminal_tables_exist` short-circuit kicks in) and failing
-tests teardown the test tables so the next test rebuilds cleanly.
+Each test uses `run_pipeline.session()` so tests share the persisted pipeline
+output (the `_all_terminal_tables_exist` short-circuit kicks in). Test tables
+persist across runs — failures included; there is NO automatic teardown. Call
+`run_pipeline.teardown(spark)` (or `production_runs/teardown_boxes.py
+--test-catalog`) when you need a clean rebuild, e.g. after a staging schema
+change — the existence-only guard cannot detect one (deliberate: the
+auto-rebuild schema sentinel was backed out 2026-07-30, see project_history).
 
 Run on Databricks:
     from testing.integration import run_all_tests
@@ -28,6 +32,7 @@ TESTS = [
     "test_analysis_8_6.py",
     "test_analysis_8_7.py",
     "test_analysis_8_8.py",
+    "test_analysis_ir_1.py",
 ]
 
 

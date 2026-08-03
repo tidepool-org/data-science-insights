@@ -74,9 +74,17 @@ def run(
       WHERE rn = 1
     ),
 
-    -- Truncate stated duration to the gap until the next override for the same user.
-    -- If the user starts another override before this one's stated duration elapses,
-    -- the effective duration is the gap; otherwise the stated duration stands.
+    -- Split the source duration into two columns:
+    --   stated_duration — the duration as the user programmed it, untouched.
+    --   duration        — the effective duration: starting a new override ends
+    --                     the current one, so this is capped at the gap to the
+    --                     user's next override (no next override → the stated
+    --                     value stands). A later CTE also clips it to the end
+    --                     of the segment window.
+    -- NULL programmed duration (indefinite override, or unparseable) stays NULL
+    -- in stated_duration only: LEAST skips NULLs, so `duration` falls back to
+    -- the gap here (and to the segment-end clip downstream) and is never NULL —
+    -- an indefinite override reads as "ran until the next override / window end".
     overrides AS (
       SELECT
         _userId,
@@ -88,6 +96,7 @@ def run(
         bg_target_high,
         carbRatioScaleFactor,
         insulinSensitivityScaleFactor,
+        duration AS stated_duration,
         LEAST(
           duration,
           COALESCE(
@@ -112,6 +121,7 @@ def run(
         o.bg_target_high,
         o.carbRatioScaleFactor,
         o.insulinSensitivityScaleFactor,
+        o.stated_duration,
 
         -- Clip the override's duration to the end of its tagged segment.
         -- Combined with the gap-to-next truncation upstream, this bounds
@@ -253,6 +263,7 @@ def run(
       o.carbRatioScaleFactor,
       o.insulinSensitivityScaleFactor,
       o.duration,
+      o.stated_duration,
       o.tb_to_ab_seg1_start,
       o.tb_to_ab_seg1_end,
       o.tb_to_ab_seg2_start,

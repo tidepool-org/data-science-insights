@@ -11,7 +11,12 @@ autobolus phases of a TB→AB transition.
 Inclusion (applied by utils.data_loading.load_override_endpoints +
 aggregate_override_endpoints):
 - Cohort: Loop version below MAX_LOOP_VERSION_INT (or, if version unknown,
-  segment ending before MAX_SEG2_END_DATE)
+  segment ending before MAX_SEG2_END_DATE). ⚠ The Table 8.2a / Figure 8.2b
+  path (load_activations) applies the shared VERSION_WHERE only — no age
+  gate — while the 8.2b/8.2c endpoint path (load_override_endpoints) uses
+  the full COHORT_WHERE including age ≥ 6. Deliberate: the reported 8.2a
+  numbers are kept stable and the deviation is flagged in the report
+  (2026-07-30; report_editor_note.md §0e).
 - No guardrail violations on the rank-1 transition segment
 - is_starting_glucose_in_range = TRUE (CBG within 30 min before activation
   is between STARTING_GLUCOSE_LOW and STARTING_GLUCOSE_HIGH)
@@ -49,7 +54,7 @@ from utils.constants import (
     STARTING_GLUCOSE_LOW, STARTING_GLUCOSE_HIGH,
 )
 from utils.data_loading import (
-    MAX_LOOP_VERSION_INT, MAX_SEG2_END_DATE,
+    VERSION_WHERE,
     load_override_endpoints, aggregate_override_endpoints, load_type1_user_ids,
 )
 from utils.statistics import compute_paired_statistics, format_p
@@ -77,14 +82,6 @@ ENDPOINTS = [
     ("Mean glucose (mg/dL)",              "mean_glucose_seg1",  "mean_glucose_seg2",  "mg/dL"),
     ("Coefficient of variation (%)",      "cv_seg1",            "cv_seg2",            "%"),
 ]
-
-_COHORT_WHERE = (
-    f"(tb_to_ab_max_loop_version_int IS NOT NULL "
-    f" AND tb_to_ab_max_loop_version_int < {MAX_LOOP_VERSION_INT}) "
-    f"OR (tb_to_ab_max_loop_version_int IS NULL "
-    f" AND tb_to_ab_seg2_end < DATE '{MAX_SEG2_END_DATE}')"
-)
-
 
 def _safe_filename(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name)
@@ -124,11 +121,11 @@ def build_datasets(
 
 def load_activations(spark, suffix: str = "") -> pd.DataFrame:
     """
-    Per-activation rows from `overrides_by_segment` with cohort + guardrail +
+    Per-activation rows from `overrides_by_segment` with cohort (version-only —
+    see module docstring re the deliberate age-gate omission) + guardrail +
     starting-glucose + type-1 diagnosis filters applied. Used by Table 8.2a
     (counts and hours) and Figure 8.2b (glucose traces). The type-1 gate is the
-    same one `load_override_endpoints` applies, so Table 8.2a describes the same
-    cohort as the 8.2b / 8.2c endpoint tables. The two `is_valid_name_only_seg{2,3}`
+    same one `load_override_endpoints` applies. The two `is_valid_name_only_seg{2,3}`
     flags are kept on each row so downstream code can filter for the
     appropriate segment-pair.
 
@@ -137,7 +134,10 @@ def load_activations(spark, suffix: str = "") -> pd.DataFrame:
     cohort = (
         spark.table(f"dev.fda_510k_rwd.valid_transition_segments{suffix}")
         .where("segment_rank = 1")
-        .where(_COHORT_WHERE)
+        # VERSION_WHERE, not COHORT_WHERE: the age ≥ 6 term is deliberately NOT
+        # applied on this path so the reported Table 8.2a / Figure 8.2b numbers
+        # stay stable; the deviation is flagged in the report (2026-07-30).
+        .where(VERSION_WHERE)
         .select("_userId", "tb_to_ab_seg1_start")
     )
 
