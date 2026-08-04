@@ -55,6 +55,33 @@ Planned but not implemented (no test currently needs them): 07, 10, 11, 17, 18.
 | `int_user_22` | Adopt-and-discontinue, M 30y/8y dx | 30 days of 100% AB then 30 days of TB events only (no smb); adopts day 2; final 28-day AB% = 0% → discontinued event in KM curve. | 8-7 (event) |
 | `int_user_23` | Insufficient followup, F 30y/5y dx | 35 days of 100% AB; adopts day 2 but follow-up = 33 days < 56 → dropped by min_followup gate. | 8-7 (cohort filter check) |
 
+## IR-1002 guardrail-group cohort
+
+All seven run 28 autobolus days (10 automated boluses/day, clearing the ≥3
+AB-day threshold) with full-coverage CBG, starting `IR1002_START = 2024-09-02`
+in a window disjoint from every other fixture window. The length is pinned from
+both sides: ≥28 days so they anchor a candidate 28-day window and clear the
+day-coverage gate (test_analysis_6_3a pins both stages exactly against the full
+Loop-user count), and ≤~35 days so they cannot produce a stable-AB segment
+(needs ≥42) or a durability outcome (needs ≥56 follow-up). Being ~all-AB they
+also fail the TB→AB validity box, so they enter no §8 analysis cohort.
+`never_preset` needs no archetype: the existing users above have AB days and no
+overrides in this window.
+
+Guardrail bounds under test: target within [67, 250] mg/dL, insulin needs within
+[15%, 200%]; mitigation = needs > 170% with an effective target lower bound
+< 110 mg/dL.
+
+| _userId | Archetype | What makes it interesting | Expected group |
+|---|---|---|---|
+| `int_user_26` | Compliant preset user, F 34y/9y dx | Two in-guardrail activations (needs 100%, target 100–120) | `compliant` |
+| `int_user_27` | Preset-guardrail violator, M 41y/12y dx | Target low 40 mg/dL — below the 67 mg/dL bound; needs never above the mitigation threshold | `p_only` |
+| `int_user_28` | Mitigation via settings fallback, F 29y/6y dx | Needs 180% with NO preset target, so the effective lower bound comes from the scheduled correction range (100 < 110). The only archetype that exercises `correction_range_history` end-to-end | `m_only` |
+| `int_user_29` | Pre-first-AB-day violator, M 37y/11y dx | A P-violating activation on day 0 — a temp-basal day, before the first eligible AB day — plus a compliant one after. Pins the §7.3 qualifying anchor: the violation is flagged but not qualifying | `compliant` |
+| `int_user_30` | Multiday span over a non-AB day, F 45y/20y dx | Day 5 is a temp-basal day; a compliant activation on day 4 at 20:00 runs 14 h into it → `is_all_days_ab` FALSE, so IR-3 drops it while IR-2 still classifies the user. A same-day activation on day 8 survives | `compliant` |
+| `int_user_31` | Mitigation indeterminate, M 52y/24y dx | Needs 180%, no preset target, and no pumpSettings record at all → unresolvable lower bound; sets `is_m_indeterminate`, not `is_m_violation` | `compliant` (+ `depends_on_indeterminate`) |
+| `int_user_32` | Both bounds violated, F 31y/8y dx | Separate activations: a P-violating target (40 mg/dL) and an M-violating combination (needs 180%, own target low 100). Neither violates both alone, so this pins the union-across-activations rollup | `both` |
+
 ## Filter-coverage matrix
 
 | Filter | Exercised by |
@@ -67,3 +94,6 @@ Planned but not implemented (no test currently needs them): 07, 10, 11, 17, 18.
 | `is_valid_name_only_seg3` (drop from 8-2c primary) | int_user_09 |
 | Min followup for adoption (drop from 8-7) | int_user_23 |
 | JAEB linkage required (drop from 8-6) | int_user_20 |
+| Activation precedes first eligible AB day (not qualifying, IR-1002) | int_user_29 |
+| Multiday activation spans a non-AB day (drop from IR-3) | int_user_30 |
+| Mitigation lower bound unresolvable (indeterminate, IR-1002) | int_user_31 |

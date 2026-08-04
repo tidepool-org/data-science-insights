@@ -61,7 +61,7 @@ def _compute_hypo_events(spark, cbg_df, group_cols, threshold_start=54, threshol
 # Glycemic endpoints (range metrics + hypo events)
 # ---------------------------------------------------------------------------
 
-def compute_glycemic_endpoints(spark, cbg_df, group_cols=None):
+def compute_glycemic_endpoints(spark, cbg_df, group_cols=None, hypo_group_cols=None):
     """
     Compute glycemic endpoints (TIR, TBR, TAR, CV, mean glucose) and
     hypoglycemic event counts per group.
@@ -73,9 +73,18 @@ def compute_glycemic_endpoints(spark, cbg_df, group_cols=None):
         Must contain `cbg_mg_dl`, `cbg_timestamp`, and all group_cols.
     group_cols : list of str, default ['_userId', 'segment']
         Columns to group by.
+    hypo_group_cols : list of str, optional
+        When given, hypo events are DETECTED within these (finer) groups and
+        then summed to group_cols — consecutive-reading runs cannot span the
+        boundary between the finer groups. Must be a superset of group_cols.
+        Used by mode=ab_days for within-day detection over pooled
+        non-contiguous days (PLN IR-1002 §7.4); default = group_cols
+        (detection at the output grain, the pre-existing behavior).
     """
     if group_cols is None:
         group_cols = ["_userId", "segment"]
+    if hypo_group_cols is None:
+        hypo_group_cols = group_cols
 
     group_clause = ", ".join(group_cols)
 
@@ -98,7 +107,11 @@ def compute_glycemic_endpoints(spark, cbg_df, group_cols=None):
     ;
     """)
 
-    hypo_events = _compute_hypo_events(spark, cbg_df, group_cols)
+    hypo_events = _compute_hypo_events(spark, cbg_df, hypo_group_cols)
+    if hypo_group_cols != group_cols:
+        hypo_events = hypo_events.groupBy(*group_cols).agg(
+            F.sum("hypo_events").cast("int").alias("hypo_events")
+        )
 
     return range_endpoints.join(hypo_events, on=group_cols, how="left").withColumn(
         "hypo_events", F.coalesce(F.col("hypo_events"), F.lit(0))
@@ -141,6 +154,16 @@ MODE_CONFIG = {
         "default_output_table": f"{CATALOG}.glycemic_endpoints_stable_autobolus",
         "group_cols": ["_userId", "segment"],
     },
+    "ab_days": {
+        "default_input_table": f"{CATALOG}.ab_day_cbg",
+        "default_output_table": f"{CATALOG}.glycemic_endpoints_ab_days",
+        # One pooled row per user over all outcome-eligible AB days (PLN
+        # IR-1002 §7.4). Hypo events are detected per (user, day) so
+        # consecutive-reading runs never span the gap between non-adjacent
+        # pooled days, then summed per user.
+        "group_cols": ["_userId"],
+        "hypo_group_cols": ["_userId", "day"],
+    },
 }
 
 
@@ -153,7 +176,12 @@ def run(spark, mode="transition", input_table=None, output_table=None):
     output_table = output_table or cfg["default_output_table"]
 
     cbg_df = spark.table(input_table)
-    endpoints = compute_glycemic_endpoints(spark, cbg_df, group_cols=cfg["group_cols"])
+    endpoints = compute_glycemic_endpoints(
+        spark,
+        cbg_df,
+        group_cols=cfg["group_cols"],
+        hypo_group_cols=cfg.get("hypo_group_cols"),
+    )
     endpoints.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
 
 

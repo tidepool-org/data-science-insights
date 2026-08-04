@@ -36,6 +36,18 @@ WINDOW_END = date(2024, 2, 11)
 STABLE_START = date(2024, 6, 1)
 DURABILITY_ADOPT_DAY = date(2024, 6, 15)
 
+# IR-1002 (guardrail-group) window: 28 days, disjoint from every other window.
+# The length is pinned from both sides. At least 28 days so these users anchor
+# a candidate 28-day window and clear the day-coverage gate — test_analysis_6_3a
+# pins those two funnel stages EXACTLY against the full Loop-user count, so a
+# shorter window silently breaks the §6.3 cohort-flow test. At most ~35 days so
+# they still cannot produce a stable-AB segment (needs a fully-AB 14-day window
+# starting ≥28 days after first AB, i.e. ≥42 days) or a durability outcome
+# (needs ≥56 days follow-up). Being ~all-AB, they also fail the TB→AB validity
+# box (seg1 must be <30% AB), so they enter no §8 analysis cohort.
+IR1002_START = date(2024, 9, 2)
+IR1002_DAYS = 28
+
 DEFAULT_VERSION = "3.2.0"
 MMOL_PER_MGDL = 1.0 / 18.018
 TZ_OFFSET_MIN = -300  # UTC-5 (EST); single TZ for all synthetic users
@@ -68,6 +80,7 @@ BDDP_COLUMNS = [
     "bgTarget",
     "duration",
     "basalSchedules",
+    "activeSchedule",
     "bgTargets",
     "insulinSensitivities",
     "insulinSensitivity",
@@ -104,6 +117,7 @@ BDDP_SCHEMA = (
     "`bgTarget` string, "
     "`duration` string, "
     "`basalSchedules` string, "
+    "`activeSchedule` string, "
     "`bgTargets` string, "
     "`insulinSensitivities` string, "
     "`insulinSensitivity` string, "
@@ -256,6 +270,7 @@ def _pump_settings_row(
     user_id,
     setup_day=SEG1_START,
     bg_target_high_mgdl=120.0,
+    bg_target_low_mgdl=100.0,
     isf_mgdl_per_u=50.0,
     cir_g_per_u=15.0,
     basal_u_per_hr=0.5,
@@ -280,9 +295,10 @@ def _pump_settings_row(
         basalSchedules=json.dumps({
             "Default": schedule_entry(rate=basal_u_per_hr),
         }),
+        activeSchedule="Default",
         bgTargets=json.dumps({
             "Default": schedule_entry(
-                low=100.0 / 18.018,
+                low=bg_target_low_mgdl / 18.018,
                 high=bg_target_high_mgdl / 18.018,
             ),
         }),
@@ -308,6 +324,16 @@ def _override_row(
     user_id, when, preset, br_sf=1.0, cr_isf_sf=1.0,
     target_low_mgdl=100.0, target_high_mgdl=120.0, duration_seconds=3600,
 ):
+    """One override activation. `target_low_mgdl=None` emits a preset with NO
+    own target range (the IR-1002 mitigation-fallback case, where the effective
+    lower bound comes from the scheduled correction range);
+    `duration_seconds=None` emits an indefinite override."""
+    bg_target = None
+    if target_low_mgdl is not None and target_high_mgdl is not None:
+        bg_target = json.dumps({
+            "low": target_low_mgdl / 18.018,
+            "high": target_high_mgdl / 18.018,
+        })
     return _row(
         _userId=user_id,
         time_string=_iso(when),
@@ -315,11 +341,8 @@ def _override_row(
         basalRateScaleFactor=br_sf,
         carbRatioScaleFactor=cr_isf_sf,
         insulinSensitivityScaleFactor=cr_isf_sf,
-        bgTarget=json.dumps({
-            "low": target_low_mgdl / 18.018,
-            "high": target_high_mgdl / 18.018,
-        }),
-        duration=str(duration_seconds),
+        bgTarget=bg_target,
+        duration=None if duration_seconds is None else str(duration_seconds),
     )
 
 
@@ -771,6 +794,133 @@ def _archetype_day_undercoverage(user_id="int_user_25"):
 
 
 # ---------------------------------------------------------------------------
+# IR-1002 archetypes (guardrail groups; PLN IR-1002 §7.2/§7.3)
+# ---------------------------------------------------------------------------
+#
+# Each user runs IR1002_DAYS days of autobolus days (10 automated boluses/day,
+# clearing the >=3 AB-day threshold) with full-coverage CBG, inside the short
+# IR1002 window. Overrides are placed to land the user in one guardrail group.
+# Guardrail bounds under test: target within [67, 250] mg/dL, insulin needs
+# within [15%, 200%]; mitigation = needs > 170% with an effective target lower
+# bound < 110 mg/dL.
+
+
+def _ir1002_day_rows(user_id, n_days=IR1002_DAYS, tb_day_idxs=(), start=IR1002_START):
+    """Full-coverage CBG plus dosing events for the IR-1002 window. Day indices
+    in `tb_day_idxs` emit temp-basal days (NOT eligible AB days) — used to break
+    a multiday override's span and to precede a user's first AB day."""
+    rows = []
+    for i in range(n_days):
+        day = start + timedelta(days=i)
+        rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(100.0)))
+        if i in tb_day_idxs:
+            rows.extend(_temp_basal_day_rows(user_id, day, n_events=10))
+        else:
+            rows.extend(_autobolus_day_rows(user_id, day, n_events=10))
+    return rows
+
+
+def _ir1002_override(user_id, day_idx, hour=10, start=IR1002_START, **kwargs):
+    day = start + timedelta(days=day_idx)
+    return _override_row(
+        user_id,
+        when=datetime(day.year, day.month, day.day, hour, 0, 0),
+        **kwargs,
+    )
+
+
+def _archetype_ir1002_compliant(user_id="int_user_26"):
+    """Two in-guardrail activations (needs 100%, target 100–120) → `compliant`."""
+    rows = [_pump_settings_row(user_id, setup_day=IR1002_START)]
+    rows.extend(_ir1002_day_rows(user_id))
+    for i in (2, 5):
+        rows.append(_ir1002_override(user_id, i, preset="Compliant"))
+    return rows
+
+
+def _archetype_ir1002_p_violator(user_id="int_user_27"):
+    """Target low 40 mg/dL — below the 67 mg/dL preset guardrail; needs in
+    bounds and never above the mitigation threshold → `p_only`."""
+    rows = [_pump_settings_row(user_id, setup_day=IR1002_START)]
+    rows.extend(_ir1002_day_rows(user_id))
+    rows.append(_ir1002_override(
+        user_id, 3, preset="LowTarget", target_low_mgdl=40.0, target_high_mgdl=120.0,
+    ))
+    return rows
+
+
+def _archetype_ir1002_m_fallback(user_id="int_user_28"):
+    """Needs 180% with NO preset target, so the effective lower bound comes from
+    the scheduled correction range (100 < 110 mg/dL) → `m_only` via the
+    settings fallback — the path that needs correction_range_history."""
+    rows = [_pump_settings_row(
+        user_id, setup_day=IR1002_START, bg_target_low_mgdl=100.0,
+    )]
+    rows.extend(_ir1002_day_rows(user_id))
+    rows.append(_ir1002_override(
+        user_id, 4, preset="HighNeeds", br_sf=1.8, cr_isf_sf=round(1 / 1.8, 4),
+        target_low_mgdl=None, target_high_mgdl=None,
+    ))
+    return rows
+
+
+def _archetype_ir1002_pre_first_ab(user_id="int_user_29"):
+    """A P-violating activation on day 0 — a temp-basal day, BEFORE the user's
+    first eligible AB day — plus a compliant one after. The violation is not
+    qualifying (PLN §7.3 anchor), so the user is `compliant`."""
+    rows = [_pump_settings_row(user_id, setup_day=IR1002_START)]
+    rows.extend(_ir1002_day_rows(user_id, tb_day_idxs=(0,)))
+    rows.append(_ir1002_override(
+        user_id, 0, preset="PreAB", target_low_mgdl=40.0, target_high_mgdl=120.0,
+    ))
+    rows.append(_ir1002_override(user_id, 4, preset="Compliant"))
+    return rows
+
+
+def _archetype_ir1002_multiday_span(user_id="int_user_30"):
+    """A compliant activation on day 4 running 14 h into day 5, which is a
+    temp-basal day — so `is_all_days_ab` is FALSE and IR-3 drops the activation
+    while IR-2 still classifies the user (`compliant`). A same-day activation on
+    day 8 stays in IR-3's set."""
+    rows = [_pump_settings_row(user_id, setup_day=IR1002_START)]
+    rows.extend(_ir1002_day_rows(user_id, tb_day_idxs=(5,)))
+    rows.append(_ir1002_override(
+        user_id, 4, hour=20, preset="Overnight", duration_seconds=14 * 3600,
+    ))
+    rows.append(_ir1002_override(user_id, 8, preset="Compliant"))
+    return rows
+
+
+def _archetype_ir1002_indeterminate(user_id="int_user_31"):
+    """Needs 180%, no preset target, and NO pumpSettings record at all — the
+    effective lower bound is unresolvable → `is_m_indeterminate`. The user lands
+    in `compliant` with depends_on_indeterminate TRUE."""
+    rows = _ir1002_day_rows(user_id)
+    rows.append(_ir1002_override(
+        user_id, 3, preset="HighNeedsNoSettings", br_sf=1.8,
+        cr_isf_sf=round(1 / 1.8, 4), target_low_mgdl=None, target_high_mgdl=None,
+    ))
+    return rows
+
+
+def _archetype_ir1002_both(user_id="int_user_32"):
+    """Two separate violations — a P-violating target (40 mg/dL) on day 2 and an
+    M-violating combination (needs 180% with its own target low 100 < 110) on
+    day 6 → `both`. Neither activation violates both bounds by itself, so this
+    also exercises the union-across-activations rollup."""
+    rows = [_pump_settings_row(user_id, setup_day=IR1002_START)]
+    rows.extend(_ir1002_day_rows(user_id))
+    rows.append(_ir1002_override(
+        user_id, 2, preset="LowTarget", target_low_mgdl=40.0, target_high_mgdl=120.0,
+    ))
+    rows.append(_ir1002_override(
+        user_id, 6, preset="HighNeeds", br_sf=1.8, cr_isf_sf=round(1 / 1.8, 4),
+        target_low_mgdl=100.0, target_high_mgdl=130.0,
+    ))
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Top-level fixture composition
 # ---------------------------------------------------------------------------
 
@@ -799,6 +949,16 @@ ARCHETYPES = {
     "int_user_23": _archetype_insufficient_followup,
     "int_user_24": _archetype_carb_outlier,
     "int_user_25": _archetype_day_undercoverage,
+    # IR-1002 guardrail groups (PLN IR-1002). Short, disjoint window — see
+    # IR1002_START. never_preset is covered by the existing archetypes above,
+    # which have AB days and no overrides in that window.
+    "int_user_26": _archetype_ir1002_compliant,
+    "int_user_27": _archetype_ir1002_p_violator,
+    "int_user_28": _archetype_ir1002_m_fallback,
+    "int_user_29": _archetype_ir1002_pre_first_ab,
+    "int_user_30": _archetype_ir1002_multiday_span,
+    "int_user_31": _archetype_ir1002_indeterminate,
+    "int_user_32": _archetype_ir1002_both,
     # TODO: int_user_07, 10, 11, 17, 18 — see archetypes.md for the full catalog.
 }
 
@@ -851,6 +1011,15 @@ _DEMOGRAPHICS = {
     "int_user_23": {"gender": "F", "age_years": 30, "yld_years": 5},
     "int_user_24": {"gender": "M", "age_years": 30, "yld_years": 5},
     "int_user_25": {"gender": "F", "age_years": 33, "yld_years": 7},
+    # IR-1002 guardrail-group archetypes — all adults, so the age gate never
+    # binds and group membership is decided purely by preset configuration.
+    "int_user_26": {"gender": "F", "age_years": 34, "yld_years": 9},
+    "int_user_27": {"gender": "M", "age_years": 41, "yld_years": 12},
+    "int_user_28": {"gender": "F", "age_years": 29, "yld_years": 6},
+    "int_user_29": {"gender": "M", "age_years": 37, "yld_years": 11},
+    "int_user_30": {"gender": "F", "age_years": 45, "yld_years": 20},
+    "int_user_31": {"gender": "M", "age_years": 52, "yld_years": 24},
+    "int_user_32": {"gender": "F", "age_years": 31, "yld_years": 8},
 }
 
 

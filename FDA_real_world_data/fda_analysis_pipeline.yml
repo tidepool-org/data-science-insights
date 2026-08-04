@@ -175,6 +175,53 @@ resources:
           spark_python_task:
             python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-8_carbohydrate_consumption_consistency.py
           environment_key: Default
+        # IR-1002 (PLN IR-1002): dataset-wide guardrail-group pipeline. Depends
+        # only on the phase-1 base tables — no transition/stable segments. The
+        # IR-2 / IR-3 analyses are run-file driven (like IR-1) and stay out of
+        # this job.
+        - task_key: Export_Overrides_All
+          depends_on:
+            - task_key: Export_Loop_Recommendations
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_overrides_all.py
+          environment_key: Default
+        - task_key: Export_Correction_Range_History
+          depends_on:
+            - task_key: Export_Loop_Recommendations
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_correction_range_history.py
+          environment_key: Default
+        # user_diagnosis_type is built out-of-band (box-independent; no task in
+        # this job, same as the §8 analyses that read it).
+        - task_key: Export_AB_Day_Cohort
+          depends_on:
+            - task_key: Export_CBG_From_Loop
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_ab_day_cohort.py
+          environment_key: Default
+        - task_key: Export_Override_Guardrail_Flags
+          depends_on:
+            - task_key: Export_Overrides_All
+            - task_key: Export_Correction_Range_History
+            - task_key: Export_AB_Day_Cohort
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_override_guardrail_flags.py
+          environment_key: Default
+        - task_key: Export_CBG_From_AB_Days
+          depends_on:
+            - task_key: Export_AB_Day_Cohort
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_cbg_from_ab_days.py
+          environment_key: Default
+        - task_key: Compute_Glycemic_Endpoints_AB_Days
+          depends_on:
+            - task_key: Export_CBG_From_AB_Days
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/compute_glycemic_endpoints.py
+            parameters:
+              - --mode
+              - ab_days
+          environment_key: Default
       queue:
         enabled: true
       environments:

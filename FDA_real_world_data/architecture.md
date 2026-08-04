@@ -1,6 +1,10 @@
 # FDA Real World Data — Architecture
 
-## Current state (as of 2026-08-03)
+## Current state (as of 2026-08-04)
+
+**IR-1002 — guardrail-group analyses (PLN IR-1002)**: a **dataset-wide, box-independent** pipeline that classifies every eligible Loop user against the to-be-marketed Tidepool Loop 2.0 preset bounds and characterizes preset use on autobolus days. Volunteered in support of the interactive review — *not* a response to a specific FDA question. Two guardrails: **P** (preset guardrail — target within [67, 250] mg/dL, insulin needs within [15%, 200%]) and **M** (high-insulin-needs mitigation — needs > 170% with an effective target lower bound < 110 mg/dL, taken from the preset's own target when it has one, else from the scheduled correction range). Users land in one of five groups — `never_preset` / `compliant` / `p_only` / `m_only` / `both` — over **qualifying** activations (version/date-eligible AND on/after the user's first eligible AB day). Six staging steps (`export_overrides_all`, `export_correction_range_history`, `export_ab_day_cohort`, `export_override_guardrail_flags`, `export_cbg_from_ab_days`, `compute_glycemic_endpoints --mode ab_days`) feed `analysis_ir-2` (outcomes by group) and `analysis_ir-3` (preset characterization on AB days). Day gates: ≥3 automated boluses, per-day Loop version (falling back to the date rule when unparseable), age ≥ 6 on the day, and — for IR-2 outcome days only — ≥70% CGM coverage. **Production counts (2026-08-04):** 2,483 Loop users → 2,193 type-1 → 1,577 with ≥1 eligible AB day → 1,552 outcome-eligible; groups 1,039 / 326 / 98 / 72 / 42; 106,030 qualifying activations, 1 indeterminate. Table-formatting machinery is shared with IR-1 via `analysis/utils/preset_characterization.py`.
+
+## Previously (as of 2026-08-03)
 
 **FDA interactive-review response (presets)**: `analysis/analysis_ir-1_preset_characterization.py` characterizes every preset activation by an eligible transition user — parameter distributions (mean/SD/min–max/median[IQR]) by period at activation + distinct-config grains (Table IR-1a), activation-level effective + programmed durations (IR-1b), per-user frequency/exposure zero-filled over the full cohort (IR-1c) and among preset users only (IR-1d), per-preset-name breakdown with small-cell flag (IR-1e), and data checks (CR≡ISF tie, basal reciprocal linkage, 8.1-cohort preset exposure) (IR-1f). Descriptive only — 8-3/8-4 cohort gates, no validity/starting-glucose filters; keyed on `segment`, all three periods. Registered in the variant driver; run per build (`""` / `_box080` / `_box090`), **defaulting to `_box080`** (the report primary) on a bare Run-file. Staging now also preserves the as-programmed `stated_duration` on `overrides_by_segment` (re-stage all builds before quoting programmed durations; production + `_box080` re-staged 2026-08-03, `_box090` still outstanding). The Table 8.2a / Fig 8.2b cohort predicate is single-sourced as `VERSION_WHERE` and **deliberately omits the age ≥ 6 gate** (flag-don't-fix decision 2026-07-30 — reported numbers stay stable, deviation disclosed in the report; see report_editor_note.md §0e). `production_runs/run_all_boxes.py` is the one-click driver: rebuild + analyze all three builds (`_box080` primary → production `""` → `_box090`) in sequence.
 
@@ -34,7 +38,12 @@ FDA_real_world_data/
 │   ├── export_cbg_from_overrides.py             — Filter CBG by preset override periods
 │   ├── export_carbohydrates_from_transitions.py — Extract food entries in transition segments; dedupes BDDP re-ingests via latest `created_timestamp`; carries `tb_to_ab_seg1_start` + `segment_rank` (per-segment attribution, matching CBG exporter)
 │   ├── export_overrides_from_transitions.py     — Extract + validate preset override events; emits effective `duration` (min of stated, gap-to-next, segment-end) plus as-programmed `stated_duration`
-│   ├── compute_glycemic_endpoints.py            — Compute TIR/TBR/TAR/CV/hypo events
+│   ├── export_overrides_all.py                  — IR-1002: dataset-wide preset activations (no segment join); effective duration = min(stated, gap-to-next, end-of-data); emits end_time/end_day, has_own_target, is_version_eligible
+│   ├── export_correction_range_history.py       — IR-1002: scheduled correction-range history as (user, settings record, slot) validity intervals; schedule chosen by the record's `activeSchedule`; schedule-less records neither emit rows nor terminate the prior schedule
+│   ├── export_ab_day_cohort.py                  — IR-1002: one row per (type-1 user, day) with every day gate as a flag (is_ab_day at ≥3 boluses, version, age, coverage, is_eligible_ab_day, is_outcome_day) + per-user first_eligible_ab_day
+│   ├── export_override_guardrail_flags.py       — IR-1002: per-activation P/M/indeterminate + qualifying + all-days-AB flags, and the five-group user rollup (override_guardrail_flags + user_guardrail_groups). Mitigation fallback resolves driver-side via schedule-slot intersection
+│   ├── export_cbg_from_ab_days.py               — IR-1002: plausible CBG on outcome-eligible AB days
+│   ├── compute_glycemic_endpoints.py            — Compute TIR/TBR/TAR/CV/hypo events; optional `hypo_group_cols` detects hypo events in finer groups then sums (mode=ab_days uses per-day detection over user-pooled readings)
 │   └── export_user_diagnosis_type.py            — Build user_diagnosis_type: per-user diabetes diagnosis from prod patients + seagull_profiles, JAEB cohort → type1 override; FDA Loop-user universe (loop_recommendations)
 │
 ├── analysis/
@@ -47,9 +56,12 @@ FDA_real_world_data/
 │   ├── analysis_8-6_*.py  — Socioeconomic subgroup analysis (stable AB cohort). Two modes: `--mode export` (Databricks) writes `glycemic_endpoints_by_jaeb_id.csv` for the partner team; `--mode figures` (local, pure pandas/matplotlib) reads the partner's returned summary CSV (median/Q1/Q3 of TIR, TBR, hypoEventRate14Day across Race/Ethnicity, Income, Education, Insurance, helpStartLoop) and renders figures 8.6a/b/c via `ax.bxp()` with whiskers collapsed to the IQR
 │   ├── analysis_8-7_*.py  — Autobolus adoption durability. `--mode default` (Databricks): Table 8.7a + Figures 8.7a (stacked bar), 8.7b (KM retention curve) and 8.7c (per-user trajectories), plus `autobolus_durability_by_jaeb_id.csv` for the partner team. `--mode figures` (local): reads the partner's per-subgroup CSV (N, NumDiscontinued, PropDiscontinued, Barnard's-test RD + 99% Bonferroni CI + p-value, across the same five subgroups as 8-6) and renders Figure 8.7d — one panel per subgroup, two boxes per panel via `ax.bxp()` with whiskers collapsed to the per-level 95% Clopper-Pearson CI on the proportion
 │   ├── analysis_8-8_*.py  — Carbohydrate consumption consistency
+│   ├── analysis_ir-2_guardrail_group_outcomes.py — IR-1002 Analysis 1: glycemic outcomes on AB days by guardrail group (Tables IR-2a cohort flow + group counts, IR-2b endpoint stack × 5 groups, IR-2c data checks; Figures IR-2a stacked ranges, IR-2b/2c 4×1 violin panels). Descriptive only; box-independent, no suffix
+│   ├── analysis_ir-3_preset_characterization_ab_days.py — IR-1002 Analysis 2: preset characterization on AB days, stratified by activation-level guardrail status (Tables IR-3a parameter distributions × 2 grains, IR-3b durations, IR-3c/3d per-user usage per 14 eligible AB days, IR-3f data checks; IR-3e per-preset-name deferred). Activation set = qualifying AND every spanned day an eligible AB day. Reports ONE collapsed "overall insulin needs (%)" row — the CR/ISF factors are reciprocals of the basal factor, so three parallel rows would invert two of them
 │   ├── analysis_ir-1_preset_characterization.py — FDA interactive-review response: descriptive preset characterization (Tables IR-1a parameter distributions by period × grain, IR-1b activation durations, IR-1c per-user usage zero-filled over the full cohort, IR-1d per-user usage among preset users only, IR-1e per-preset-name breakdown [free-text names — screen before external use], IR-1f data checks); 8-3/8-4 cohort gates, no validity/starting-glucose filters
 │   ├── plot_stable_ab_sample_size.py — CONSORT chart, sample size heatmap, AB% distribution
 │   └── utils/
+│       ├── preset_characterization.py — Shared IR table machinery (extracted from IR-1 2026-08-03): dist_row, per_user_usage (optional `norm_days` rate scaling), usage_rows (`basis_label`), prepare_activations, derive_insulin_needs (basal = f, CR = ISF = 1/f → one needs quantity), parameter_distribution_rows / duration_rows (optional `parameters`, `stratum_col`), preset_name_rows, linkage_checks
 │       ├── constants.py    — Font sizes, color schemes, STARTING_GLUCOSE_LOW/HIGH (70/180) shared across 8-2 and 8-3
 │       ├── data_loading.py — load_transition_endpoints() with per-segment coverage + guardrail filtering, cohort filter (`COHORT_WHERE` = MAX_LOOP_VERSION_INT / MAX_SEG2_END_DATE + age ≥ MIN_AGE), and best-surviving-segment selection per user. `COHORT_WHERE` is the single source of truth for the transition-cohort predicate. The **type-1 diagnosis gate** lives here too: `load_type1_user_ids()` (pandas set) + `TYPE1_SEGMENT_WHERE` (SQL predicate) read the box-independent `user_diagnosis_type` lookup (strict `diagnosis_type = 'type1'`); load_transition_endpoints (which adds a "Type 1 diabetes" funnel stage), load_override_endpoints, and analysis_8-7's load_durability all filter through it. `load_allowed_transition_segments(spark, suffix)` bundles cohort + guardrail + type-1 into the eligible-segment set that analysis_8-3 / 8-4 now call (replacing their duplicated SQL). load_override_endpoints() returns per-activation rows from glycemic_endpoints_override after cohort + guardrail + starting-glucose filters; aggregate_override_endpoints(activations, ab_segment, grain) collapses to (user, preset_name) primary or (user, preset, params) sensitivity grain, computes hypo rate as total events / total exposure hours, and pivots to wide TB-vs-AB form. Both loaders take `suffix=""` to read parallel `{suffix}` source tables (used by the run_transition_variant driver). load_transition_endpoints also takes `funnel=None` — a list that, when supplied, accumulates a user/segment-count snapshot after each filter step (the analysis-side stages of Table 6.3a)
 │       └── statistics.py   — Paired t-test, Wilcoxon, ANOVA, Tukey, Dunn's, p-value formatting; shapiro + wilcoxon short-circuit to NaN when input has <2 distinct values (avoids scipy zero-range warnings)
@@ -128,6 +140,17 @@ Phase 3B: Stable AB Analyses
 
 Phase 4: Adoption
   autobolus_event_times → Analysis 8-7
+
+Phase 3C: IR-1002 dataset-wide guardrail analyses (box-independent; needs only Phase 1)
+  export_overrides_all            → overrides_all
+  export_correction_range_history → correction_range_history
+  export_ab_day_cohort            → ab_day_cohort   (type-1 × AB × version × age × coverage flags)
+    → export_override_guardrail_flags → override_guardrail_flags + user_guardrail_groups
+    → export_cbg_from_ab_days         → ab_day_cbg
+       → compute_glycemic_endpoints (mode=ab_days; per-user pooling, per-day hypo detection)
+          → glycemic_endpoints_ab_days
+             → Analysis IR-2 (outcomes by guardrail group)
+  override_guardrail_flags + ab_day_cohort → Analysis IR-3 (preset characterization on AB days)
 ```
 
 ## Tables
@@ -167,6 +190,14 @@ User-activated parameter adjustments (basal scale factor, BG targets, carb ratio
 
 ### Guardrails
 Pump settings validated against FDA limits. Check functions per setting type (`check_basal`, `check_bg_targets`, `check_insulin_sensitivity`, etc.). Users with `violation_count > 0` excluded from analyses.
+
+### Preset guardrails and guardrail groups (IR-1002)
+A *different* notion from the pump-settings guardrails above: these bound what a **preset** may contain in the to-be-marketed system, and are evaluated per activation, never used to exclude anyone.
+- **P (preset guardrail)** — the preset's own target outside [67, 250] mg/dL, or insulin needs outside [15%, 200%].
+- **M (high-insulin-needs mitigation)** — needs > 170% while the *effective* target lower bound is < 110 mg/dL at any point during the activation. The effective bound is the preset's own target low when it specifies one, else the scheduled correction range from `correction_range_history` (validity interval × time-of-day slot intersection, slots recurring daily with the last wrapping past midnight). No coverage at all → **indeterminate**, which is counted and disclosed but never sets M.
+- **Insulin needs** = the basal-rate scale factor. Loop's single "overall insulin needs" dial writes basal = f and CR = ISF = 1/f, so the CR/ISF factors are *reciprocals* — IR-3 reports one collapsed needs quantity rather than three parallel rows (two of which would read inverted).
+- **Qualifying activation** — version/date-eligible AND on/after the user's first eligible AB day. User-level flags are computed over qualifying activations only; **dosing-mode-agnostic** (the bounds constrain configuration regardless of delivery strategy), unlike IR-3's activation set which additionally requires every spanned day to be an eligible AB day.
+- **Guardrail group** — one per user: `never_preset` / `compliant` / `p_only` / `m_only` / `both`, plus `depends_on_indeterminate`.
 
 ### CBG Processing
 5-minute bucketing → deduplicate per bucket (keep latest) → plausibility filter [38–500 mg/dL] → mmol→mg/dL conversion (×18.018).
@@ -211,6 +242,13 @@ Pump settings validated against FDA limits. Check functions per setting type (`c
 | TIR/TBR/TAR/hypo computation | `compute_glycemic_endpoints.py` |
 | Override extraction + validity | `export_overrides_from_transitions.py` |
 | Preset characterization (FDA interactive review) | `analysis/analysis_ir-1_preset_characterization.py` |
+| Guardrail-group classification (P/M flags + 5 groups) | `data_staging/export_override_guardrail_flags.py` |
+| IR-1002 day gates (AB / version / age / coverage) | `data_staging/export_ab_day_cohort.py` |
+| Scheduled correction-range history (mitigation fallback) | `data_staging/export_correction_range_history.py` |
+| Outcomes on AB days by guardrail group | `analysis/analysis_ir-2_guardrail_group_outcomes.py` |
+| Preset characterization on AB days | `analysis/analysis_ir-3_preset_characterization_ab_days.py` |
+| Shared IR table/format helpers | `analysis/utils/preset_characterization.py` |
+| Guardrail-group recon counts (Phase 0) | `exploratory/guardrail_group_counts.sql` |
 | One-click all-box rebuild + analyze | `production_runs/run_all_boxes.py` |
 | One-click box/test-catalog teardown | `production_runs/teardown_boxes.py` |
 | Carb extraction | `export_carbohydrates_from_transitions.py` |

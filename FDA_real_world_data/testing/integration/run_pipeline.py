@@ -4,6 +4,16 @@
 exist, it returns the table-name dict without re-running. Pass `force=True`
 to wipe and rebuild.
 
+STALE-FIXTURE GOTCHA (bit on 2026-08-04): editing `build_synthetic_bddp.py`
+and calling `run(spark, force=True)` in an already-running notebook rebuilds
+from the CACHED module — this module binds it via `from . import
+build_synthetic_bddp` at import time, so `sys.modules` serves the old code and
+the rebuild silently reproduces the old fixture. `force=True` cannot fix this;
+it drops the tables and rewrites them from stale code. Check the row count in
+the "Wrote N BDDP rows" line — if it hasn't moved, run
+`dbutils.library.restartPython()` and re-import (or reload
+`build_synthetic_bddp` THEN `run_pipeline`, in that order).
+
 DAG order (mirrors `fda_analysis_pipeline.yml`):
 
     bddp -> loop_recommendations
@@ -18,6 +28,10 @@ DAG order (mirrors `fda_analysis_pipeline.yml`):
             -> cbg_from_overrides -> compute_glycemic_endpoints (override)
          -> segments_within_guardrails (transition)
          -> segments_within_guardrails (stable)
+         -> overrides_all             \\
+         -> correction_range_history   ) -> override_guardrail_flags
+         -> ab_day_cohort             /     (+ user_guardrail_groups)
+            -> cbg_from_ab_days -> compute_glycemic_endpoints (ab_days)
 """
 
 import os
@@ -59,6 +73,14 @@ TABLES = {
     "glycemic_endpoints_override": f"{P}glycemic_endpoints_override",
     "valid_transition_guardrails": f"{P}valid_transition_guardrails",
     "valid_stable_guardrails": f"{P}valid_stable_guardrails",
+    # IR-1002 (guardrail groups + AB-day characterization)
+    "overrides_all": f"{P}overrides_all",
+    "correction_range_history": f"{P}correction_range_history",
+    "ab_day_cohort": f"{P}ab_day_cohort",
+    "override_guardrail_flags": f"{P}override_guardrail_flags",
+    "user_guardrail_groups": f"{P}user_guardrail_groups",
+    "ab_day_cbg": f"{P}ab_day_cbg",
+    "glycemic_endpoints_ab_days": f"{P}glycemic_endpoints_ab_days",
 }
 
 # When all of these exist, run() short-circuits. user_diagnosis_type is included
@@ -75,6 +97,10 @@ TERMINAL_TABLES = (
     "valid_transition_carbs",
     "autobolus_event_times",
     "user_diagnosis_type",
+    # IR-1002 terminals; their absence also forces the one-time rebuild that
+    # picks up the new archetypes and the activeSchedule fixture column.
+    "user_guardrail_groups",
+    "glycemic_endpoints_ab_days",
 )
 
 
@@ -151,6 +177,11 @@ def run(spark, force=False):
     import export_overrides_from_transitions  # type: ignore # noqa: E402
     import export_cbg_from_overrides  # type: ignore # noqa: E402
     import export_segments_within_guardrails  # type: ignore # noqa: E402
+    import export_overrides_all  # type: ignore # noqa: E402
+    import export_correction_range_history  # type: ignore # noqa: E402
+    import export_ab_day_cohort  # type: ignore # noqa: E402
+    import export_override_guardrail_flags  # type: ignore # noqa: E402
+    import export_cbg_from_ab_days  # type: ignore # noqa: E402
 
     # ── Step 1: fixtures ──────────────────────────────────────────────────
     print("[integration.run_pipeline] building synthetic BDDP fixture...")
@@ -292,6 +323,55 @@ def run(spark, force=False):
         output_table=TABLES["valid_stable_guardrails"],
     )
 
+    # ── Step 7: IR-1002 dataset-wide guardrail pipeline ───────────────────
+    # Independent of the transition/stable subtrees: needs only the phase-1
+    # base tables (loop_recommendations, loop_cbg, user_diagnosis_type).
+    print("[integration.run_pipeline] export_overrides_all...")
+    export_overrides_all.run(
+        spark,
+        output_table=TABLES["overrides_all"],
+        bddp_table=TABLES["bddp"],
+        loop_recommendations_table=TABLES["loop_recommendations"],
+    )
+    print("[integration.run_pipeline] export_correction_range_history...")
+    export_correction_range_history.run(
+        spark,
+        output_table=TABLES["correction_range_history"],
+        bddp_table=TABLES["bddp"],
+    )
+    print("[integration.run_pipeline] export_ab_day_cohort...")
+    export_ab_day_cohort.run(
+        spark,
+        output_table=TABLES["ab_day_cohort"],
+        loop_recommendations_table=TABLES["loop_recommendations"],
+        loop_cbg_table=TABLES["loop_cbg"],
+        user_dates_table=TABLES["user_dates"],
+        diagnosis_table=TABLES["user_diagnosis_type"],
+    )
+    print("[integration.run_pipeline] export_override_guardrail_flags...")
+    export_override_guardrail_flags.run(
+        spark,
+        flags_table=TABLES["override_guardrail_flags"],
+        groups_table=TABLES["user_guardrail_groups"],
+        overrides_table=TABLES["overrides_all"],
+        correction_range_table=TABLES["correction_range_history"],
+        ab_day_cohort_table=TABLES["ab_day_cohort"],
+    )
+    print("[integration.run_pipeline] export_cbg_from_ab_days...")
+    export_cbg_from_ab_days.run(
+        spark,
+        output_table=TABLES["ab_day_cbg"],
+        loop_cbg_table=TABLES["loop_cbg"],
+        ab_day_cohort_table=TABLES["ab_day_cohort"],
+    )
+    print("[integration.run_pipeline] compute_glycemic_endpoints (ab_days)...")
+    compute_glycemic_endpoints.run(
+        spark,
+        mode="ab_days",
+        input_table=TABLES["ab_day_cbg"],
+        output_table=TABLES["glycemic_endpoints_ab_days"],
+    )
+
     print("[integration.run_pipeline] pipeline complete")
     return TABLES
 
@@ -336,6 +416,13 @@ PROD_TO_TEST = {
     "dev.fda_510k_rwd.valid_transition_guardrails": TABLES["valid_transition_guardrails"],
     "dev.fda_510k_rwd.valid_stable_guardrails": TABLES["valid_stable_guardrails"],
     "dev.fda_510k_rwd.user_diagnosis_type": TABLES["user_diagnosis_type"],
+    "dev.fda_510k_rwd.overrides_all": TABLES["overrides_all"],
+    "dev.fda_510k_rwd.correction_range_history": TABLES["correction_range_history"],
+    "dev.fda_510k_rwd.ab_day_cohort": TABLES["ab_day_cohort"],
+    "dev.fda_510k_rwd.override_guardrail_flags": TABLES["override_guardrail_flags"],
+    "dev.fda_510k_rwd.user_guardrail_groups": TABLES["user_guardrail_groups"],
+    "dev.fda_510k_rwd.ab_day_cbg": TABLES["ab_day_cbg"],
+    "dev.fda_510k_rwd.glycemic_endpoints_ab_days": TABLES["glycemic_endpoints_ab_days"],
     "dev.default.bddp_sample_all_2": TABLES["bddp"],
     "dev.default.bddp_user_dates": TABLES["user_dates"],
     "dev.default.user_gender": TABLES["user_gender"],

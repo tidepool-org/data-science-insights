@@ -33,6 +33,8 @@ TESTS = [
     "test_analysis_8_7.py",
     "test_analysis_8_8.py",
     "test_analysis_ir_1.py",
+    "test_analysis_ir_2.py",
+    "test_analysis_ir_3.py",
 ]
 
 

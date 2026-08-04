@@ -73,13 +73,24 @@ letter doesn't appear twice:
 
 import os
 
-import numpy as np
 import pandas as pd
 
 from utils.data_loading import (
     CATALOG,
     load_allowed_transition_segments,
     load_transition_endpoints,
+)
+from utils.preset_characterization import (
+    CONFIG_KEY as _CONFIG_KEY,
+    S_PER_HOUR,
+    SMALL_CELL_USERS,
+    duration_rows,
+    linkage_checks,
+    parameter_distribution_rows,
+    pct as _pct,
+    per_user_usage as _per_user_usage,
+    prepare_activations,
+    usage_rows as _usage_rows,
 )
 
 OUTPUT_DIR = "outputs/analysis_ir_1"
@@ -89,44 +100,12 @@ OUTPUT_DIR = "outputs/analysis_ir_1"
 # other supplement build). The variant driver always passes suffix explicitly.
 DEFAULT_SUFFIX = "_box080"
 
-S_PER_HOUR = 3_600  # override durations are stored in seconds
-
 # (segment value, display label) — report each period separately.
 PERIODS = [
     ("tb_to_ab_seg1", "Temp basal period"),
     ("tb_to_ab_seg2", "Initial autobolus period (days 0–14)"),
     ("tb_to_ab_seg3", "Second autobolus period (days 14–28)"),
 ]
-
-# (display label, column, decimal places). gtm is derived in load/prepare.
-PARAMETERS = [
-    ("Basal rate scale factor",           "basalRateScaleFactor",          3),
-    ("Carb ratio scale factor",           "carbRatioScaleFactor",          3),
-    ("Insulin sensitivity scale factor",  "insulinSensitivityScaleFactor", 3),
-    ("Glucose target low (mg/dL)",        "bg_target_low",                 1),
-    ("Glucose target high (mg/dL)",       "bg_target_high",                1),
-    ("Glucose target midpoint (mg/dL)",   "gtm",                           1),
-]
-
-_PARAM_COLS = [
-    "basalRateScaleFactor", "carbRatioScaleFactor",
-    "insulinSensitivityScaleFactor", "bg_target_low", "bg_target_high",
-]
-
-# Distinct-configuration identity: user + preset name + exact parameter set
-# (mirrors the staging full-config key; NaNs compare equal in drop_duplicates).
-_CONFIG_KEY = ["_userId", "preset_name"] + _PARAM_COLS
-
-UNNAMED_PRESET = "(unnamed)"
-
-SMALL_CELL_USERS = 5  # flag preset-name rows with fewer users than this
-
-# Table IR-1f comparison tolerances. The CR↔ISF tie is exact in the source
-# (one UI dial writes both), so the tie check is tight; the basal-linkage
-# checks tolerate rounding in how Loop derives the stored factors.
-CRISF_TIE_RTOL = 1e-6
-CRISF_TIE_ATOL = 1e-6
-BASAL_LINKAGE_RTOL = 1e-3
 
 
 # =============================================================================
@@ -155,19 +134,11 @@ def load_data(spark, suffix: str = ""):
         .toPandas()
     )
 
-    numeric_cols = _PARAM_COLS + ["duration"]
-    if "stated_duration" in overrides.columns:
-        numeric_cols.append("stated_duration")
-    else:
+    if "stated_duration" not in overrides.columns:
         print("  Warning: stated_duration not in overrides_by_segment — "
               "re-run export_overrides_from_transitions to populate it; "
               "programmed-duration rows will be empty")
-        overrides["stated_duration"] = np.nan
-    for col in numeric_cols:
-        overrides[col] = pd.to_numeric(overrides[col], errors="coerce")
-
-    overrides["gtm"] = (overrides["bg_target_low"] + overrides["bg_target_high"]) / 2.0
-    overrides["preset_name"] = overrides["overridePreset"].fillna(UNNAMED_PRESET)
+    overrides = prepare_activations(overrides)
 
     # Final 8.1 cohort (adds CGM coverage + paired halves on top of the gates
     # above) — used only for the Table IR-1f preset-exposure check.
@@ -181,55 +152,19 @@ def load_data(spark, suffix: str = ""):
 
 
 # =============================================================================
-# Shared distribution helpers
-# =============================================================================
-
-def _fmt(v, dp: int) -> str:
-    return "—" if pd.isna(v) else f"{v:.{dp}f}"
-
-
-def _dist_row(values: pd.Series, n_users: int, dp: int) -> dict:
-    """Mean ± SD, min–max, median [IQR] for one parameter/outcome cell."""
-    values = values.dropna()
-    n = len(values)
-    if n == 0:
-        return {
-            "N": 0, "N users": n_users, "Mean ± SD": "—",
-            "Min–Max": "—", "Median [IQR]": "—",
-        }
-    sd = values.std(ddof=1) if n > 1 else np.nan
-    return {
-        "N": n,
-        "N users": n_users,
-        "Mean ± SD": f"{_fmt(values.mean(), dp)} ± {_fmt(sd, dp)}",
-        "Min–Max": f"{_fmt(values.min(), dp)}–{_fmt(values.max(), dp)}",
-        "Median [IQR]": (
-            f"{_fmt(values.median(), dp)} "
-            f"[{_fmt(values.quantile(0.25), dp)}, {_fmt(values.quantile(0.75), dp)}]"
-        ),
-    }
-
-
-# =============================================================================
 # Table IR-1a — parameter distributions by period × grain
 # =============================================================================
 
+def _period_strata(overrides: pd.DataFrame):
+    """(mask, label) per period — the stratification the shared table builders
+    take."""
+    return [(overrides["segment"] == seg, label) for seg, label in PERIODS]
+
+
 def create_table_ir1a(overrides: pd.DataFrame) -> pd.DataFrame:
-    rows = []
-    for grain in ("activation", "distinct configuration"):
-        for seg, period_label in PERIODS:
-            in_period = overrides[overrides["segment"] == seg]
-            if grain == "distinct configuration":
-                in_period = in_period.drop_duplicates(subset=_CONFIG_KEY)
-            for param_label, col, dp in PARAMETERS:
-                n_users = in_period.loc[in_period[col].notna(), "_userId"].nunique()
-                rows.append({
-                    "Grain": grain,
-                    "Period": period_label,
-                    "Parameter": param_label,
-                    **_dist_row(in_period[col], n_users, dp),
-                })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(
+        parameter_distribution_rows(overrides, _period_strata(overrides))
+    )
 
 
 # =============================================================================
@@ -238,65 +173,12 @@ def create_table_ir1a(overrides: pd.DataFrame) -> pd.DataFrame:
 
 def create_table_ir1b(overrides: pd.DataFrame) -> pd.DataFrame:
     """Activation-level duration distributions by period, in hours."""
-    duration_rows = [
-        ("Effective duration (hours)",  "duration"),
-        ("Programmed duration (hours)", "stated_duration"),
-    ]
-    rows = []
-    for seg, period_label in PERIODS:
-        in_period = overrides[overrides["segment"] == seg]
-        for label, col in duration_rows:
-            hours = in_period[col] / S_PER_HOUR
-            n_users = in_period.loc[in_period[col].notna(), "_userId"].nunique()
-            rows.append({
-                "Period": period_label,
-                "Outcome": label,
-                **_dist_row(hours, n_users, 1),
-            })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(duration_rows(overrides, _period_strata(overrides)))
 
 
 # =============================================================================
 # Tables IR-1c / IR-1d — per-user frequency and preset time
 # =============================================================================
-
-def _per_user_usage(in_period: pd.DataFrame) -> pd.DataFrame:
-    """One row per user with ≥1 activation in the window: activation count,
-    total effective hours, and the count of duration-bearing activations."""
-    return (
-        in_period.groupby("_userId")
-        .agg(
-            n_activations=("_userId", "size"),
-            total_hours=("duration", lambda s: s.sum() / S_PER_HOUR),
-            n_with_duration=("duration", "count"),
-        )
-    )
-
-
-def _usage_rows(per_user: pd.DataFrame, period_label: str) -> list:
-    """The three per-user outcome rows shared by Tables IR-1c and IR-1d.
-
-    Mean duration per activation is restricted to users with ≥1
-    duration-bearing activation in the period (0 ÷ 0 is undefined).
-    """
-    n_users = len(per_user)
-    with_dur = per_user["n_with_duration"] > 0
-    mean_dur = (
-        per_user.loc[with_dur, "total_hours"]
-        / per_user.loc[with_dur, "n_with_duration"]
-    )
-    return [
-        {"Period": period_label,
-         "Outcome": "Preset activations per user (n/14 days)",
-         **_dist_row(per_user["n_activations"], n_users, 1)},
-        {"Period": period_label,
-         "Outcome": "Total preset time per user (hours/14 days)",
-         **_dist_row(per_user["total_hours"], n_users, 1)},
-        {"Period": period_label,
-         "Outcome": "Mean duration per activation (hours)",
-         **_dist_row(mean_dur, len(mean_dur), 1)},
-    ]
-
 
 def create_table_ir1c(
     overrides: pd.DataFrame, cohort_users: pd.DataFrame
@@ -404,30 +286,10 @@ def create_table_ir1f(
     overrides: pd.DataFrame, cohort_users: pd.DataFrame, users_81: set
 ) -> pd.DataFrame:
     """Empirical checks backing the response prose."""
-    crsf = overrides["carbRatioScaleFactor"]
-    issf = overrides["insulinSensitivityScaleFactor"]
-    brsf = overrides["basalRateScaleFactor"]
-
-    both_ci = crsf.notna() & issf.notna()
-    ci_equal = np.isclose(
-        crsf[both_ci], issf[both_ci], rtol=CRISF_TIE_RTOL, atol=CRISF_TIE_ATOL
-    )
-
-    # Is the basal factor tied to the carb-ratio factor? In Loop, one "overall
-    # insulin needs" multiplier f sets basal = f and CR = ISF = 1/f; test both
-    # directions. Only the CR factor is compared here — its tie to ISF is the
-    # separate check above.
-    both_bc = brsf.notna() & crsf.notna() & (brsf > 0)
-    bc_reciprocal = np.isclose(
-        crsf[both_bc], 1.0 / brsf[both_bc], rtol=BASAL_LINKAGE_RTOL
-    )
-    bc_equal = np.isclose(crsf[both_bc], brsf[both_bc], rtol=BASAL_LINKAGE_RTOL)
+    checks = linkage_checks(overrides)
 
     preset_users = set(overrides["_userId"])
     n_cohort = cohort_users["_userId"].nunique()
-
-    def _pct(k, n):
-        return f"{k} ({100 * k / n:.1f}%)" if n else "0"
 
     rows = [
         ("Activations characterized (all periods)", str(len(overrides))),
@@ -436,14 +298,15 @@ def create_table_ir1f(
         ("Analysis 8.1 final cohort N", str(len(users_81))),
         ("8.1-cohort users with ≥1 activation in their rank-1 transition window",
             _pct(len(preset_users & users_81), len(users_81))),
-        ("Activations with CR and ISF factors both present", str(int(both_ci.sum()))),
-        ("… where CR factor = ISF factor", _pct(int(ci_equal.sum()), int(both_ci.sum()))),
+        ("Activations with CR and ISF factors both present", str(checks["n_both_ci"])),
+        ("… where CR factor = ISF factor",
+            _pct(checks["n_ci_equal"], checks["n_both_ci"])),
         ("Activations with basal and carb-ratio factors both present (basal > 0)",
-            str(int(both_bc.sum()))),
+            str(checks["n_both_bc"])),
         ("… where carb-ratio factor = 1 / basal factor",
-            _pct(int(bc_reciprocal.sum()), int(both_bc.sum()))),
+            _pct(checks["n_bc_reciprocal"], checks["n_both_bc"])),
         ("… where carb-ratio factor = basal factor",
-            _pct(int(bc_equal.sum()), int(both_bc.sum()))),
+            _pct(checks["n_bc_equal"], checks["n_both_bc"])),
         ("Activations with NULL programmed duration "
          "(effective falls back to gap / segment-end bound)",
             str(int(overrides["stated_duration"].isna().sum()))),
