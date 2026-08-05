@@ -69,7 +69,7 @@ FDA_real_world_data/
 │       └── statistics.py   — Paired t-test, Wilcoxon, ANOVA, Tukey, Dunn's, p-value formatting; shapiro + wilcoxon short-circuit to NaN when input has <2 distinct values (avoids scipy zero-range warnings)
 │
 ├── testing/
-│   ├── run_all_tests.py           — Recursive glob (**/test_*.py), runpy each as __main__; compact live output: one colored bar per test streamed as it finishes, grouped by folder, per-test stdout captured/hidden, failed-tests recap at the end (VERBOSE=1 / --verbose streams full output). Suite is pytest-free — see Tests note below
+│   ├── run_all_tests.py           — Recursive glob (**/test_*.py), runpy each as __main__; compact live output: one colored bar per test streamed as it finishes, grouped by folder, per-test stdout captured/hidden, failed-tests recap at the end (VERBOSE=1 / --verbose streams full output; --only / ONLY env var filters to tests whose relative path contains a given substring, comma-separated for several — execution stays serial). Suite is pytest-free — see Tests note below
 │   ├── staging_test_helpers.py    — setup_test_table(), read_test_output(), assert_row_count(), make_loop_recs()
 │   ├── create_test_loop_data.py   — Synthetic loop data generator
 │   ├── data_staging/              — Paired tests for every data_staging/ script (13 files)

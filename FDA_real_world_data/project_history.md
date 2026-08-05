@@ -4,6 +4,23 @@ A running log of significant changes to the FDA 510(k) RWD pipeline. Most recent
 
 ---
 
+## 2026-08-05: guardrail-flags test gaps closed (adversarial-review follow-up)
+
+The two findings left open by the 2026-08-04 review are now pinned in `test_export_override_guardrail_flags.py` (five new fixture users, 15 → 20):
+
+- **P via the insulin-needs bounds alone** — u16 (needs 2.5, high side) and u17 (needs 0.10, low side) both carry compliant targets, so only the needs branch of the P predicate can flag them; previously every P fixture violated on target range, and a regression that dropped the needs branch would have passed the suite. u16 additionally pins that high needs with an own-target low ≥ 110 is *not* M.
+- **The 110 mg/dL mitigation boundary (strict `<`), pinned in both implementations** — u18 (own-target low exactly 110 → not M) / u19 (109.9 → M) exercise the SQL-side comparison; u20 (no own target, all-day schedule slot at exactly 110) exercises the driver-side hot-slot computation and must resolve compliant, not indeterminate.
+
+Driver-side boundary behavior verified offline against `_fallback_m_status` (110.0 → compliant, 109.9 → M); the full test still needs a Databricks run. It is prod-table-independent (`_test_gf_*` tables only), so it can run while the production pipeline is in flight.
+
+Also fixed while confirming the suite: `test_export_loop_recommendations` failed with "expected 6 rows, got 7" — a **stale total-row-count assertion**, not a staging bug. The 2026-08-04 HK-dedup fixture added Day 11 (`user_d`, duplicate-upload dedup), a legitimately surviving 7th user-day, and the per-day dedup assertions landed without bumping the top-of-file count. Bumped 6 → 7 (same class as the IR-3 stale-label failure).
+
+**`run_all_tests.py` gained an `--only` substring filter** (`--only loop_recommendations,guardrail_flags` on the command line, or env var `ONLY=...` for Databricks Run-file, which passes no argv) so a targeted re-run — like confirming today's two edited tests — doesn't require the whole suite. Filtering only; execution stays serial. Exits non-zero when nothing matches.
+
+**Commit:** _not yet committed_
+
+---
+
 ## 2026-08-05: validity-box namespaces flipped — the unsuffixed build IS the report primary; pipeline is turnkey
 
 The unsuffixed namespace held the **0.70** build while the report primary lived in `_box080`, so a bare run of any analysis — or of the whole job — produced a build nobody used, and IR-1 needed a special-case `DEFAULT_SUFFIX = "_box080"` to compensate. Flipped:
@@ -38,7 +55,7 @@ Multi-agent adversarial review (independent finders → two-lens refutation → 
 - **Test-harness leak**: `run_pipeline` now passes the fixture BDDP table to the guardrail-flags step — the new tz lookup would otherwise silently read production BDDP during integration tests.
 - `exploratory/violation_consistency.sql` (new): per-user always/sometimes/never violation-consistency counts behind the review's group-stability question.
 
-Remaining credible-but-unverified findings (tracked in Pending): no fixture exercises the insulin-needs branch of P, and the 110 mg/dL mitigation threshold is not pinned by a boundary test.
+Remaining credible-but-unverified findings (tracked in Pending): no fixture exercises the insulin-needs branch of P, and the 110 mg/dL mitigation threshold is not pinned by a boundary test. *Closed 2026-08-05 — see the follow-up entry above.*
 
 **Commit:** _not yet committed_
 
@@ -1006,7 +1023,7 @@ _Update this section as work continues._
 
 - **HealthKit counts de-duplicated at source (2026-08-04) — RPT-1001 numbers will move**: `export_loop_recommendations.py`'s `hk_autobolus_days` / `hk_temp_basal_days` used a bare `COUNT(*)` over raw BDDP rows while the dosingDecision counterpart used `COUNT(DISTINCT b_time_string)`; since BDDP re-ingests uploads, duplicates could inflate the HealthKit side and manufacture dosing days wherever `GREATEST(dd, hk)` is applied. Found by adversarial review 2026-08-04, **fixed at source** (both CTEs now `COUNT(DISTINCT time_string)`) rather than worked around, so IR-1002 and RPT-1001 keep one definition of an autobolus day; the interim `hk_dedup` CTE in `export_ab_day_cohort.py` has been removed. **Every downstream table must be re-staged** — `valid_transition_segments`, `stable_autobolus_segments`, `autobolus_durability`/`event_times`, and all §8 analyses — and RPT-1001's reported counts may shift where duplicate HealthKit rows previously padded a day to threshold. Quantify the delta on re-run before re-issuing RPT-1001.
 - **IR-1002 (updated 2026-08-05)**: integration suite ran 2026-08-05 (11/12; the one failure was a stale test label, fixed — re-run `test_analysis_ir_3.py` to confirm green). IR-1/IR-2/IR-3 are now tasks in `fda_analysis_pipeline.yml`. Still open: **full production re-run** of the whole job (HK dedup + tz fix + namespace flip all change staged tables), then re-render the Quarto report from fresh CSVs; resolve the **glucose target low = 600.1 mg/dL** outlier in IR-3a (footnote vs. exclusion; check whether it inflates the P-only stratum); PLN §8.2 still lists Table 8.2e (per-preset-name), which IR-3 defers — mark deferred in the PLN or generate after free-text screening; fill the four `[TO CONFIRM]` tool versions in the report
-- **Guardrail-flags test coverage (adversarial review 2026-08-04, unresolved)**: two credible findings remain open — no fixture activation violates P via the **insulin-needs bounds** (all current P cases violate on target range, so a regression in the needs branch would pass), and the **110 mg/dL** mitigation lower-bound threshold has no boundary test (a fixture at exactly 110 / just below would pin it). Add both to `test_export_override_guardrail_flags.py`
+- **Guardrail-flags test coverage (adversarial review 2026-08-04)**: fixtures landed 2026-08-05 (u16–u20 — needs-only P on both sides, 110 mg/dL boundary in both the SQL own-target and driver-side fallback implementations; driver side verified offline). Remaining: sync the Workspace and confirm the two edited tests green on Databricks — `run_all_tests.py --only loop_recommendations,guardrail_flags` (or `ONLY=` env var) runs just the pair; both touch only `_test_*` tables, so they're safe while the production pipeline is in flight
 - **Namespace-flip cleanup (2026-08-05)**: before or with the next full run — delete the stale unsuffixed `outputs/` folders (they hold 0.70 results; the same names now mean 0.80) and drop the redundant `_box080` tables (`teardown_boxes.py --suffixes _box080`) and `outputs/*_box080/` folders; update RPT-1001 provenance language ("box080 primary" → "the production build")
 - **LADA contingency (2026-08-04)**: the strict type-1 gate is correct and stays; 52 LADA-resolved users are excluded by design (21 with preset use), and exactly 1 LADA-labelled user sits inside the cohort via the JAEB→type1 override. Plan held in reserve (`IR-1002_LADA_inclusion_plan_2026-08-04.md`): **do not** pre-specify a sensitivity in the PLN; if FDA asks, add `is_lada` to `user_diagnosis_type` + a default-off `--include-lada` on `export_ab_day_cohort`, re-run the chain into `_lada`-suffixed tables and report cohort-level with/without. Never publish LADA-stratified group cells (<5 users)
 - **IR-1 interactive-review response (2026-07-30, updated 2026-08-05)**: regenerate all builds on Databricks — delete older-vintage lettered CSVs from existing `outputs/analysis_ir_1*` dirs by hand, then the turnkey pipeline job or `production_runs/run_all_boxes.py` (the 2026-08-05 namespace flip supersedes the earlier per-build re-staging status — everything re-stages); screen Table IR-1e's free-text preset names for identifying content / small cells before anything leaves the analysis environment; finish the response draft in `reports/`; the "other configurable settings in Tidepool Loop 2.0" sub-question routes to product/regulatory — not answerable from this repo

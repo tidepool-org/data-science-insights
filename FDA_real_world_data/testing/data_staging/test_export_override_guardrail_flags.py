@@ -1,8 +1,12 @@
 """
 Unit test for export_override_guardrail_flags.py.
 
-Tests: P-flag bounds (target + needs, missing params not violations), own-target
-M, the settings-fallback M (time-of-day hit, time-of-day miss, midnight-wrapping
+Tests: P-flag bounds (target + needs — including needs-only violations on both
+sides with compliant targets, so a regression in the needs branch can't hide
+behind the target branch — missing params not violations), the 110 mg/dL
+mitigation lower-bound boundary (strict '<': own-target at exactly 110 vs just
+below, and a fallback slot at exactly 110 — the SQL and driver-side
+implementations of the same constant), own-target M, the settings-fallback M (time-of-day hit, time-of-day miss, midnight-wrapping
 slot, >= 24 h window, partial-coverage resolution, zero-coverage indeterminate),
 the first-AB-day qualifying anchor, the version gate on qualifying, the
 all-spanned-days-AB flag (multiday span over a non-AB day), the user rollup
@@ -135,6 +139,23 @@ overrides_rows = [
     # a fractional-second settings valid_from mixed among the whole-second ones
     # -> same hit as u3 -> m_only. Pins the production parse regression.
     ov("u13", datetime(2024, 1, 5, 5, 0, 0, 800000), 7_200, 1.8),
+    # u16/u17: P via the INSULIN-NEEDS bounds alone — targets are compliant, so
+    # only the needs branch of the P predicate can flag them.
+    #   u16: needs 2.5 > 2.0 (high side); own low 120 >= 110 also pins that
+    #        high needs with a compliant own target is NOT M -> p_only.
+    #   u17: needs 0.10 < 0.15 (low side) -> p_only.
+    ov("u16", datetime(2024, 1, 5, 10, 0), 3_600, 2.5, low=120.0, high=140.0),
+    ov("u17", datetime(2024, 1, 5, 10, 0), 3_600, 0.10, low=100.0, high=120.0),
+    # u18/u19: the 110 mg/dL mitigation boundary on the OWN-TARGET path — the
+    # rule is a strict '<' on the effective lower bound.
+    #   u18: needs 1.8, own low exactly 110.0 -> NOT M -> compliant.
+    #   u19: needs 1.8, own low 109.9 -> M -> m_only.
+    ov("u18", datetime(2024, 1, 5, 10, 0), 3_600, 1.8, low=110.0, high=130.0),
+    ov("u19", datetime(2024, 1, 5, 10, 0), 3_600, 1.8, low=109.9, high=130.0),
+    # u20: the same 110 boundary on the FALLBACK path (driver-side constant):
+    # needs 1.8, no own target, all-day slot at exactly 110.0 -> not a hot
+    # slot -> covered, no hit -> compliant (NOT indeterminate).
+    ov("u20", datetime(2024, 1, 5, 10, 0), 3_600, 1.8),
 ]
 
 corrections_rows = [
@@ -160,6 +181,9 @@ corrections_rows = [
     {"_userId": "u14", "valid_from": datetime(2024, 1, 1), "valid_to": None, "slot_start_seconds": 21_600, "target_low_mgdl": 120.0},
     {"_userId": "u15", "valid_from": datetime(2024, 1, 1), "valid_to": None, "slot_start_seconds": 0, "target_low_mgdl": 100.0},
     {"_userId": "u15", "valid_from": datetime(2024, 1, 1), "valid_to": None, "slot_start_seconds": 21_600, "target_low_mgdl": 120.0},
+    # u20: single all-day slot at exactly the 110.0 mitigation LB — must NOT
+    # count as a hot slot (strict '<').
+    {"_userId": "u20", "valid_from": datetime(2024, 1, 1), "valid_to": None, "slot_start_seconds": 0, "target_low_mgdl": 110.0},
 ]
 
 # BDDP rows supplying the per-user UTC offset. Denver = UTC-6.
@@ -189,6 +213,11 @@ cohort_rows = [
     cohort("u13", date(2024, 1, 5)),
     cohort("u14", date(2024, 1, 6)),
     cohort("u15", date(2024, 1, 5)),
+    cohort("u16", date(2024, 1, 5)),
+    cohort("u17", date(2024, 1, 5)),
+    cohort("u18", date(2024, 1, 5)),
+    cohort("u19", date(2024, 1, 5)),
+    cohort("u20", date(2024, 1, 5)),
 ]
 
 EXPECTED_GROUPS = {
@@ -207,6 +236,11 @@ EXPECTED_GROUPS = {
     "u13": "m_only",
     "u14": "compliant",   # 22:00 local -> safe slot; UTC-naive check would say m_only
     "u15": "m_only",     # 02:00 local -> hot slot; UTC-naive check would say compliant
+    "u16": "p_only",     # needs 2.5 > 2.0 — P via the needs branch alone
+    "u17": "p_only",     # needs 0.10 < 0.15 — P via the needs branch alone
+    "u18": "compliant",  # own-target low == 110 — strict '<' must not flag M
+    "u19": "m_only",     # own-target low 109.9 — just below the mitigation LB
+    "u20": "compliant",  # fallback slot low == 110 — not hot, covered -> no hit
 }
 
 # --- Run test ---
@@ -245,12 +279,47 @@ try:
     )
     print("PASS: P flag bounds; missing params are not violations")
 
+    # 2b. P via the insulin-needs bounds ALONE: u16 (needs 2.5, high side) and
+    #     u17 (needs 0.10, low side) both carry compliant targets, so a
+    #     regression that drops the needs branch of the P predicate would pass
+    #     every target-range fixture and fail only here.
+    u16_row = by_key[("u16", pd.Timestamp(2024, 1, 5, 10, 0))]
+    u17_row = by_key[("u17", pd.Timestamp(2024, 1, 5, 10, 0))]
+    assert bool(u16_row["is_p_violation"]), (
+        "needs 2.5 > 2.0 must violate P even with a compliant target"
+    )
+    assert bool(u17_row["is_p_violation"]), (
+        "needs 0.10 < 0.15 must violate P even with a compliant target"
+    )
+    assert not bool(u16_row["is_m_violation"]), (
+        "needs 2.5 with own-target low 120 >= 110: high needs alone is not M"
+    )
+    print("PASS: P flag via insulin-needs bounds alone (both sides)")
+
     # 3. Own-target M: u1's needs-1.8/low-100 activation and u8's second
     #    activation flag M; u2 (needs 0.5) does not.
     assert bool(by_key[("u1", pd.Timestamp(2024, 1, 5, 10, 0))]["is_m_violation"])
     assert bool(by_key[("u8", pd.Timestamp(2024, 1, 6, 10, 0))]["is_m_violation"])
     assert not bool(by_key[("u2", pd.Timestamp(2024, 1, 5, 10, 0))]["is_m_violation"])
     print("PASS: own-target mitigation flag")
+
+    # 3b. The 110 mg/dL mitigation lower bound is a STRICT '<', implemented
+    #     twice — in SQL for own-target decisions and in the driver-side
+    #     fallback's hot-slot computation. Pin both at the boundary.
+    u18_row = by_key[("u18", pd.Timestamp(2024, 1, 5, 10, 0))]
+    u19_row = by_key[("u19", pd.Timestamp(2024, 1, 5, 10, 0))]
+    u20_row = by_key[("u20", pd.Timestamp(2024, 1, 5, 10, 0))]
+    assert not bool(u18_row["is_m_violation"]), (
+        "own-target low == 110 must not flag M (strict <)"
+    )
+    assert bool(u19_row["is_m_violation"]), (
+        "own-target low 109.9 (just below the LB) must flag M"
+    )
+    assert not bool(u20_row["is_m_violation"]) and not bool(u20_row["is_m_indeterminate"]), (
+        "fallback slot low == 110 is not a hot slot (strict <); covered with "
+        "no hit must resolve compliant, not indeterminate"
+    )
+    print("PASS: mitigation 110 mg/dL boundary (own-target SQL + fallback slots)")
 
     # 4. Fallback M: time-of-day hit (u3), time-of-day miss (u4), midnight-wrap
     #    hit (u10), >= 24 h window hit (u11), partial-coverage no-hit (u12).
@@ -306,7 +375,7 @@ try:
     assert bool(by_key[("u1", pd.Timestamp(2024, 1, 7, 10, 0))]["is_all_days_ab"])
     print("PASS: all-spanned-days-AB flag")
 
-    # 8. User rollup: all 12 cohort users present (u7 zero-filled), groups as
+    # 8. User rollup: all 20 cohort users present (u7 zero-filled), groups as
     #    expected, depends_on_indeterminate only for u5, qualifying counts.
     assert_row_count(groups, len(EXPECTED_GROUPS), "user_guardrail_groups rows")
     actual_groups = {r["_userId"]: r["guardrail_group"] for _, r in groups.iterrows()}

@@ -13,6 +13,13 @@ any of three ways:
   - set env var  VERBOSE=1, or
   - pass  --verbose  /  -v  on the command line.
 
+To run a subset, filter by substring of the test's relative path (comma-separate
+for several); execution stays serial either way:
+  - pass  --only loop_recommendations,guardrail_flags  on the command line, or
+  - set env var  ONLY=loop_recommendations  (handy for Databricks Run-file,
+    which passes no argv: set os.environ["ONLY"] in a driver cell, then runpy
+    this file).
+
 Run on Databricks.
 """
 
@@ -31,6 +38,21 @@ sys.path.insert(0, test_dir)
 VERBOSE = False
 VERBOSE = VERBOSE or os.environ.get("VERBOSE", "") not in ("", "0", "false", "False")
 VERBOSE = VERBOSE or any(a in ("-v", "--verbose") for a in sys.argv[1:])
+
+
+def _parse_only():
+    """Substring filters from  --only a,b  /  --only=a,b  / env var ONLY=a,b."""
+    raw = [os.environ.get("ONLY", "")]
+    argv = sys.argv[1:]
+    for i, a in enumerate(argv):
+        if a == "--only" and i + 1 < len(argv):
+            raw.append(argv[i + 1])
+        elif a.startswith("--only="):
+            raw.append(a[len("--only="):])
+    return [s for chunk in raw for s in chunk.split(",") if s]
+
+
+ONLY = _parse_only()
 
 # ANSI styling (rendered in Databricks notebook output / terminals).
 GREEN, RED, DIM, BOLD, RESET = "\033[92m", "\033[91m", "\033[2m", "\033[1m", "\033[0m"
@@ -56,6 +78,16 @@ def emit(s="", end="\n"):
 
 
 test_files = sorted(glob.glob(os.path.join(test_dir, "**", "test_*.py"), recursive=True))
+
+if ONLY:
+    test_files = [
+        f for f in test_files
+        if any(s in os.path.relpath(f, test_dir) for s in ONLY)
+    ]
+    emit(f"{DIM}--only {','.join(ONLY)}  →  {len(test_files)} test(s){RESET}")
+    if not test_files:
+        emit(f"{RED}{BOLD}No tests match.{RESET}")
+        sys.exit(1)
 
 # Precompute (file, group, name) + per-group totals so the live group header can
 # show its size before any of its tests have run.

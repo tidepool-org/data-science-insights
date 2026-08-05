@@ -161,8 +161,8 @@ try:
     run(spark, input_table=INPUT_TABLE, output_table=OUTPUT_TABLE)
     result = read_test_output(spark, OUTPUT_TABLE)
 
-    # 1. 6 user-days survive: days 1, 2, 3, 4, 9, 10. Days 5, 6, 7, 8 drop out entirely.
-    assert_row_count(result, 6, "total user-days")
+    # 1. 7 user-days survive: days 1, 2, 3, 4, 9, 10, 11. Days 5, 6, 7, 8 drop out entirely.
+    assert_row_count(result, 7, "total user-days")
 
     # 2. Per-day counts — NaN means NULL for that side
     by_day = {
