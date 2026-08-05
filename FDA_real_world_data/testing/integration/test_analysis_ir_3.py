@@ -125,8 +125,14 @@ try:
         # IR-3c is zero-filled over every cohort user, so its denominator is at
         # least the number of users contributing activations.
         table_ir3c = result["table_ir3c"]
-        any_use = table_ir3c[table_ir3c["Outcome"] == "Users with any preset use, n (%)"]
-        assert not any_use.empty, "IR-3c missing the any-preset-use row"
+        # Label deliberately says "contributing activations to this analysis",
+        # not "any preset use" — the IR-3 activation set additionally requires
+        # every day of the activation to be AB (see create_table_ir3c).
+        any_use = table_ir3c[
+            table_ir3c["Outcome"]
+            == "Users contributing activations to this analysis, n (%)"
+        ]
+        assert not any_use.empty, "IR-3c missing the users-contributing row"
         n_cohort = int(any_use["N"].iloc[0])
         assert n_cohort >= activations["_userId"].nunique() > 0, (
             n_cohort, activations["_userId"].nunique()

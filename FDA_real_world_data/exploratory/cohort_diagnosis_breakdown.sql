@@ -7,19 +7,19 @@
 --
 -- Each cohort view mirrors the membership predicate of the corresponding §8
 -- analysis loader:
---   transition  → §8-1/2/3/4/5/8  (glycemic_endpoints_transition_box080: COHORT_WHERE
+--   transition  → §8-1/2/3/4/5/8  (glycemic_endpoints_transition: COHORT_WHERE
 --                 + guardrails + both-half CGM coverage ≥2822) — 0.80-box variant
 --   stable      → §8-6            (glycemic_endpoints_stable_autobolus with
 --                 cbg_count ≥ 2822, age-eligible)    — box-independent
 --   durability  → §8-7            (autobolus_durability qualified flags)
 --                                                     — box-independent
 --
--- This file targets the 0.80-box transition variant (valid_transition_segments_box080,
--- valid_transition_guardrails_box080, glycemic_endpoints_transition_box080, built by
+-- This file targets the 0.80-box transition variant (valid_transition_segments,
+-- valid_transition_guardrails, glycemic_endpoints_transition, built by
 -- exploratory/run_transition_variant.py).
--- Stable and durability are box-independent (no _box080 tables) and are unchanged;
+-- Stable and durability are box-independent (no  tables) and are unchanged;
 -- user_diagnosis_type is box-independent too. To revert the transition cohort to
--- production (0.70 box), drop the _box080 suffix on the two tables below.
+-- production (0.70 box), add a _box070 / _box090 suffix on the two tables below.
 --
 -- Databricks only. pct is computed over the FULL cohort, so the '(not in
 -- diagnosis table)' / '(no diagnosis resolved)' buckets are included in the
@@ -36,7 +36,7 @@
 CREATE OR REPLACE TEMP VIEW cohort_transition AS
 WITH allowed AS (                  -- cohort gate (COHORT_WHERE) on segments
   SELECT _userId, tb_to_ab_seg1_start
-  FROM dev.fda_510k_rwd.valid_transition_segments_box080
+  FROM dev.fda_510k_rwd.valid_transition_segments
   WHERE ((tb_to_ab_max_loop_version_int IS NOT NULL
           AND tb_to_ab_max_loop_version_int < 3004000)
       OR (tb_to_ab_max_loop_version_int IS NULL
@@ -45,13 +45,13 @@ WITH allowed AS (                  -- cohort gate (COHORT_WHERE) on segments
 ),
 bad_segments AS (                  -- segments with any pump-settings guardrail violation
   SELECT _userId, CAST(segment_start AS DATE) AS tb_to_ab_seg1_start
-  FROM dev.fda_510k_rwd.valid_transition_guardrails_box080
+  FROM dev.fda_510k_rwd.valid_transition_guardrails
   GROUP BY _userId, CAST(segment_start AS DATE)
   HAVING SUM(COALESCE(TRY_CAST(violation_count AS DOUBLE), 0)) > 0
 ),
 covered_halves AS (                -- per-half rows passing coverage, in cohort, not guardrail-bad
   SELECT e._userId, e.tb_to_ab_seg1_start, e.segment
-  FROM dev.fda_510k_rwd.glycemic_endpoints_transition_box080 e
+  FROM dev.fda_510k_rwd.glycemic_endpoints_transition e
   JOIN allowed a
     ON e._userId = a._userId
    AND e.tb_to_ab_seg1_start = a.tb_to_ab_seg1_start

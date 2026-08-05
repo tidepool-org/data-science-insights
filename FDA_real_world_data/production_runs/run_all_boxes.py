@@ -49,8 +49,8 @@ import run_transition_variant as variant  # noqa: E402
 # and named by the high threshold. Report primary runs first so a mid-run
 # failure still leaves the primary build complete.
 BOX_CONFIGS = [
-    ("_box080", 0.20, 0.80),   # report primary
-    ("",        0.30, 0.70),   # production build — rebuilds prod tables in place
+    ("",        0.20, 0.80),   # report primary — the unsuffixed production build
+    ("_box070", 0.30, 0.70),   # §12 supplement
     ("_box090", 0.10, 0.90),   # §12 supplement
 ]
 

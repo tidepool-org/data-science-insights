@@ -95,10 +95,10 @@ from utils.preset_characterization import (
 
 OUTPUT_DIR = "outputs/analysis_ir_1"
 
-# box080 is the report's primary build, so a bare Run-file analyzes it by
-# default. Pass --suffix "" for the production 0.70 build (or _box090 for the
-# other supplement build). The variant driver always passes suffix explicitly.
-DEFAULT_SUFFIX = "_box080"
+# The unsuffixed production build IS the report primary (0.80 box) as of
+# 2026-08-05, so a bare Run-file analyzes it — same default as every other
+# analysis. Pass --suffix _box070 / _box090 for the sensitivity builds.
+DEFAULT_SUFFIX = ""
 
 # (segment value, display label) — report each period separately.
 PERIODS = [
@@ -389,7 +389,7 @@ if __name__ == "__main__":
 
     _parser = argparse.ArgumentParser()
     _parser.add_argument("--suffix", default=DEFAULT_SUFFIX,
-                         help="source-table suffix (default _box080, the report-primary "
-                              "build); use '' for the production 0.70 build")
+                         help="source-table suffix (default '' = the report-primary "
+                              "0.80 build); use _box070 / _box090 for sensitivity builds")
     _args, _ = _parser.parse_known_args()
     run_in_databricks(spark, suffix=_args.suffix)  # type: ignore[name-defined]

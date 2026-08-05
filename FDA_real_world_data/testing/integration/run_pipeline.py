@@ -356,6 +356,9 @@ def run(spark, force=False):
         overrides_table=TABLES["overrides_all"],
         correction_range_table=TABLES["correction_range_history"],
         ab_day_cohort_table=TABLES["ab_day_cohort"],
+        # Supplies the per-user timezoneOffset for the mitigation fallback's
+        # local-clock intersection; without this it would read production BDDP.
+        bddp_table=TABLES["bddp"],
     )
     print("[integration.run_pipeline] export_cbg_from_ab_days...")
     export_cbg_from_ab_days.run(

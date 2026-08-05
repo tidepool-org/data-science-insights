@@ -1,10 +1,10 @@
 -- =============================================================================
--- Diagnosis type for the FDA transition-analysis cohort (0.80-box / _box080)
+-- Diagnosis type for the FDA transition-analysis cohort (0.80-box / )
 -- =============================================================================
 -- Attaches prod.default.patients.diagnosisType to the TB→AB transition cohort
 -- (the §8-1/2/3/4/5/8 analysis users) by joining patients.userId = _userId.
 --
--- Cohort = valid_transition_segments_box080 passing COHORT_WHERE (Loop version
+-- Cohort = valid_transition_segments passing COHORT_WHERE (Loop version
 -- < 3.4.0, or unknown version & seg2 ends < 2024-07-13; age ≥ 6 or DOB unknown),
 -- minus any segment with a guardrail violation. Same predicate as the §8 loaders,
 -- reading the 0.80-box variant tables built by exploratory/run_transition_variant.py.
@@ -15,10 +15,10 @@
 
 CREATE OR REPLACE TEMP VIEW cohort_users AS
 SELECT DISTINCT s._userId
-FROM dev.fda_510k_rwd.valid_transition_segments_box080 s
+FROM dev.fda_510k_rwd.valid_transition_segments s
 LEFT ANTI JOIN (
   SELECT _userId, CAST(segment_start AS DATE) AS tb_to_ab_seg1_start
-  FROM dev.fda_510k_rwd.valid_transition_guardrails_box080
+  FROM dev.fda_510k_rwd.valid_transition_guardrails
   GROUP BY _userId, CAST(segment_start AS DATE)
   HAVING SUM(COALESCE(TRY_CAST(violation_count AS DOUBLE), 0)) > 0
 ) g

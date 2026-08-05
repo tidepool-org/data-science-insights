@@ -37,7 +37,7 @@ def test_default_drops_variant_namespaces_only():
     teardown_boxes.run(spark)
     expected = [
         f"DROP TABLE IF EXISTS {teardown_boxes.CATALOG}.{name}{suffix}"
-        for suffix in ("_box080", "_box090")
+        for suffix in ("_box070", "_box090")
         for name in teardown_boxes.BOX_TABLES
     ]
     assert spark.statements == expected, spark.statements

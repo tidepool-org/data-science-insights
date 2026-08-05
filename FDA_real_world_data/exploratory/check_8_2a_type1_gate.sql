@@ -7,7 +7,7 @@
 -- cohort in SQL and joins it to user_diagnosis_type to show how many of its
 -- users are non-type1 / unresolved / absent (i.e. how many the gate would drop).
 --
--- Build: _box080 (the report's primary build). For production drop "_box080".
+-- Build:  (the report's primary build). For production drop "".
 -- Cohort logic mirrors load_activations + create_table_8_2a in
 -- analysis/analysis_8-2_glycemic_outcomes_during_preset_activation.py:
 --   * segment_rank = 1
@@ -20,7 +20,7 @@
 
 WITH cohort AS (
     SELECT _userId, tb_to_ab_seg1_start
-    FROM dev.fda_510k_rwd.valid_transition_segments_box080
+    FROM dev.fda_510k_rwd.valid_transition_segments
     WHERE segment_rank = 1
       AND ((tb_to_ab_max_loop_version_int IS NOT NULL
             AND tb_to_ab_max_loop_version_int < 3004000)
@@ -29,7 +29,7 @@ WITH cohort AS (
 ),
 bad_segments AS (
     SELECT _userId, CAST(segment_start AS DATE) AS tb_to_ab_seg1_start
-    FROM dev.fda_510k_rwd.valid_transition_guardrails_box080
+    FROM dev.fda_510k_rwd.valid_transition_guardrails
     GROUP BY _userId, CAST(segment_start AS DATE)
     HAVING SUM(COALESCE(TRY_CAST(violation_count AS DOUBLE), 0)) > 0
 ),
@@ -42,7 +42,7 @@ clean_cohort AS (
 ),
 activations AS (
     SELECT o._userId, o.segment
-    FROM dev.fda_510k_rwd.overrides_by_segment_box080 o
+    FROM dev.fda_510k_rwd.overrides_by_segment o
     JOIN clean_cohort c
       ON o._userId = c._userId
      AND o.tb_to_ab_seg1_start = c.tb_to_ab_seg1_start
@@ -72,7 +72,7 @@ LEFT JOIN dev.fda_510k_rwd.user_diagnosis_type d
 -- Re-run this block on its own (re-declaring the same CTEs) to list offenders.
 WITH cohort AS (
     SELECT _userId, tb_to_ab_seg1_start
-    FROM dev.fda_510k_rwd.valid_transition_segments_box080
+    FROM dev.fda_510k_rwd.valid_transition_segments
     WHERE segment_rank = 1
       AND ((tb_to_ab_max_loop_version_int IS NOT NULL
             AND tb_to_ab_max_loop_version_int < 3004000)
@@ -81,7 +81,7 @@ WITH cohort AS (
 ),
 bad_segments AS (
     SELECT _userId, CAST(segment_start AS DATE) AS tb_to_ab_seg1_start
-    FROM dev.fda_510k_rwd.valid_transition_guardrails_box080
+    FROM dev.fda_510k_rwd.valid_transition_guardrails
     GROUP BY _userId, CAST(segment_start AS DATE)
     HAVING SUM(COALESCE(TRY_CAST(violation_count AS DOUBLE), 0)) > 0
 ),
@@ -93,7 +93,7 @@ clean_cohort AS (
 ),
 activations AS (
     SELECT o._userId, o.segment
-    FROM dev.fda_510k_rwd.overrides_by_segment_box080 o
+    FROM dev.fda_510k_rwd.overrides_by_segment o
     JOIN clean_cohort c
       ON o._userId = c._userId AND o.tb_to_ab_seg1_start = c.tb_to_ab_seg1_start
     WHERE o.is_starting_glucose_in_range = TRUE

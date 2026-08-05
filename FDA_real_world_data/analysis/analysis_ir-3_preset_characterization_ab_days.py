@@ -197,7 +197,11 @@ def create_table_ir3c(activations: pd.DataFrame, norm_days: pd.Series) -> pd.Dat
     })
     rows.append({
         "Scope": "Full cohort (zero-filled)",
-        "Outcome": "Users with any preset use, n (%)",
+        # NOT "any preset use": the activation set additionally requires every
+        # spanned day to be an eligible AB day (§7.5), so users whose every
+        # qualifying activation crossed a non-AB day are zero-filled here and
+        # counted as non-users of presets in this table.
+        "Outcome": "Users contributing activations to this analysis, n (%)",
         "N": n_cohort, "N users": n_cohort,
         "Mean ± SD": f"{n_any} ({100 * n_any / n_cohort:.1f}%)" if n_cohort else "—",
         "Min–Max": "—", "Median [IQR]": "—",
@@ -243,12 +247,15 @@ def create_table_ir3f(activations, qualifying, norm_days) -> pd.DataFrame:
         ("Both (P and M) activations", pct(int(status_counts.get("both", 0)), n_set)),
         ("Indeterminate mitigation status: activations, n",
             str(int(activations["is_m_indeterminate"].sum()))),
-        ("Activations with CR and ISF factors both present", str(checks["n_both_ci"])),
-        ("… where CR factor = ISF factor",
+        ("Activations that adjust insulin needs "
+         "(carb-ratio and insulin-sensitivity both recorded)",
+            str(checks["n_both_ci"])),
+        ("… where the carb-ratio and insulin-sensitivity factors are equal",
             pct(checks["n_ci_equal"], checks["n_both_ci"])),
-        ("Activations with basal and carb-ratio factors both present (basal > 0)",
+        ("Activations that adjust insulin needs "
+         "(basal and carb-ratio both recorded)",
             str(checks["n_both_bc"])),
-        ("… where carb-ratio factor = 1 / basal factor",
+        ("… where the carb-ratio factor is the reciprocal of the basal factor",
             pct(checks["n_bc_reciprocal"], checks["n_both_bc"])),
         ("Indefinite overrides (no programmed duration), n",
             str(int(activations["stated_duration"].isna().sum()))),

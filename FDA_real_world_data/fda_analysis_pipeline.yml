@@ -1,3 +1,34 @@
+# =============================================================================
+# FDA RWD pipeline — full turnkey re-run, in dependency order.
+#
+# Running this job end to end reproduces every submission artifact. Databricks
+# derives the execution order from each task's depends_on, so the phases below
+# describe what the DAG already enforces; they are a reading aid, not a
+# schedule.
+#
+#   Phase 1  Base tables      Export_Loop_Recommendations -> Export_CBG_From_Loop
+#                             Everything downstream reads these, so a change
+#                             here (e.g. the 2026-08-05 HealthKit de-dup) means
+#                             the whole job must re-run.
+#   Phase 2  Primary build    The UNSUFFIXED transition subtree IS the report
+#                             primary (symmetric 0.80 box) as of 2026-08-05.
+#                             Stable-AB and durability subtrees are
+#                             box-independent and build alongside it.
+#   Phase 3  Analyses         6-3a, 8-1..8-8, IR-1 on the primary build.
+#   Phase 4  IR-1002          Dataset-wide guardrail pipeline + IR-2 / IR-3.
+#                             Box-independent; needs only Phase 1.
+#   Phase 5  Sensitivity      _box070 and _box090 builds. Each task rebuilds its
+#                             own suffixed subtree and runs its own analyses via
+#                             run_transition_variant, writing to outputs/*{suffix}/.
+#                             The two are independent siblings and may run
+#                             alongside Phase 3/4 — they share no data with the
+#                             primary analyses and write to disjoint namespaces,
+#                             so a variant failure cannot affect a primary
+#                             artifact (or the other variant).
+#
+# NOT in this job (deliberately): user_diagnosis_type (built out-of-band; reads
+# prod.default.patients) and analysis 8-6 (JAEB partner-CSV handoff).
+# =============================================================================
 resources:
   jobs:
     FDA_Pipeline:
@@ -221,6 +252,83 @@ resources:
             parameters:
               - --mode
               - ab_days
+          environment_key: Default
+        # Interactive-review analyses, all on the unsuffixed primary build. As
+        # of the 2026-08-05 namespace flip IR-1 defaults to that build like every
+        # other analysis, so none of the three needs a suffix parameter; the
+        # variant builds run their own copy of IR-1 in Phase 5.
+        - task_key: Analysis_IR-1
+          depends_on:
+            - task_key: Export_Overrides_From_Transition
+            - task_key: Compute_Glycemic_Endpoints_Transitions
+            - task_key: Export_Transition_within_Guardrails
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_ir-1_preset_characterization.py
+          environment_key: Default
+        - task_key: Analysis_IR-2
+          depends_on:
+            - task_key: Compute_Glycemic_Endpoints_AB_Days
+            - task_key: Export_Override_Guardrail_Flags
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_ir-2_guardrail_group_outcomes.py
+          environment_key: Default
+        - task_key: Analysis_IR-3
+          depends_on:
+            - task_key: Export_Override_Guardrail_Flags
+            - task_key: Export_AB_Day_Cohort
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_ir-3_preset_characterization_ab_days.py
+          environment_key: Default
+        # ── Phase 5: sensitivity builds ──────────────────────────────────────
+        # Each rebuilds its own suffixed transition subtree ("branch from the
+        # box": everything above valid_transition_segments is box-independent
+        # and REUSED from the primary) and runs the §6.3 flow + 8-1/2/3/4/5/7/8
+        # + IR-1 into outputs/*{suffix}/. Equivalent to
+        # production_runs/run_all_boxes.py --only _box070,_box090.
+        #
+        # Dependencies are the tables the variant actually reads:
+        #   Export_CBG_From_Loop        — loop_cbg (and loop_recommendations
+        #                                 transitively) feed the suffixed subtree
+        #   Export_Autobolus_*          — the variant also runs 8-7, which is
+        #                                 box-independent and reads the PRODUCTION
+        #                                 durability tables; without these edges a
+        #                                 variant could publish 8-7 outputs built
+        #                                 on stale durability data
+        # It deliberately does NOT depend on the primary analyses — it reads none
+        # of their outputs, and running concurrently with them is safe because the
+        # two write to disjoint namespaces (outputs/*{suffix}/ and {table}{suffix}).
+        - task_key: Variant_Box070
+          depends_on:
+            - task_key: Export_CBG_From_Loop
+            - task_key: Export_Autobolus_Durability
+            - task_key: Export_Autobolus_Event_Times
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/exploratory/run_transition_variant.py
+            parameters:
+              - --suffix
+              - _box070
+              - --autobolus-low
+              - "0.30"
+              - --autobolus-high
+              - "0.70"
+          environment_key: Default
+        # A sibling of Variant_Box070, not a successor: the two builds share no
+        # data and either can fail without implicating the other. Concurrency is
+        # left to the job queue and cluster autoscaling.
+        - task_key: Variant_Box090
+          depends_on:
+            - task_key: Export_CBG_From_Loop
+            - task_key: Export_Autobolus_Durability
+            - task_key: Export_Autobolus_Event_Times
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/exploratory/run_transition_variant.py
+            parameters:
+              - --suffix
+              - _box090
+              - --autobolus-low
+              - "0.10"
+              - --autobolus-high
+              - "0.90"
           environment_key: Default
       queue:
         enabled: true

@@ -9,7 +9,7 @@
 --   restricted to confirmed type-1 users (FDA Loop indication).
 -- Mirrors load_data() in analysis/analysis_8-4_preset_activation_duration.py,
 -- which routes through load_allowed_transition_segments (the same type-1 gate).
--- Swap the bare table names for *_box080 to read the 0.80-box cohort.
+-- Swap the bare table names for *_box070 / *_box090 to read the 0.80-box cohort.
 --
 -- NOTE (2026-06-25): the type-1 diagnosis gate was added below to match the
 -- gated Table 8.4a. The previously-documented PRE-gate headline counts
@@ -91,17 +91,17 @@ ORDER BY n_activations DESC;
 
 
 -- =============================================================================
--- 0.80-box cohort (_box080): same logic against the parallel variant tables
+-- 0.80-box cohort (): same logic against the parallel variant tables
 -- built by exploratory/run_transition_variant.py. Run this section instead of
 -- (or alongside) the production section above to compare boxes.
 -- =============================================================================
 
-CREATE OR REPLACE TEMP VIEW cohort_segments_box080 AS
+CREATE OR REPLACE TEMP VIEW cohort_segments AS
 SELECT s._userId, s.tb_to_ab_seg1_start
-FROM dev.fda_510k_rwd.valid_transition_segments_box080 s
+FROM dev.fda_510k_rwd.valid_transition_segments s
 LEFT ANTI JOIN (
   SELECT _userId, CAST(segment_start AS DATE) AS tb_to_ab_seg1_start
-  FROM dev.fda_510k_rwd.valid_transition_guardrails_box080
+  FROM dev.fda_510k_rwd.valid_transition_guardrails
   GROUP BY _userId, CAST(segment_start AS DATE)
   HAVING SUM(COALESCE(TRY_CAST(violation_count AS DOUBLE), 0)) > 0
 ) g
@@ -119,10 +119,10 @@ WHERE ((s.tb_to_ab_max_loop_version_int IS NOT NULL
     WHERE diagnosis_type = 'type1'
   );
 
-CREATE OR REPLACE TEMP VIEW cohort_overrides_box080 AS
+CREATE OR REPLACE TEMP VIEW cohort_overrides AS
 SELECT o._userId, o.dosing_mode, o.segment, o.overridePreset, o.duration
-FROM dev.fda_510k_rwd.overrides_by_segment_box080 o
-JOIN cohort_segments_box080 a
+FROM dev.fda_510k_rwd.overrides_by_segment o
+JOIN cohort_segments a
   ON o._userId = a._userId
  AND o.tb_to_ab_seg1_start = a.tb_to_ab_seg1_start
 WHERE o.segment IN ('tb_to_ab_seg1', 'tb_to_ab_seg2');
@@ -135,13 +135,13 @@ SELECT
   COUNT(DISTINCT _userId)               AS n_users,
   ROUND(SUM(duration)  / 3600.0, 1)     AS total_hours_all_users,
   ROUND(AVG(duration)  / 3600.0, 2)     AS mean_hours_per_activation_pooled
-FROM cohort_overrides_box080
+FROM cohort_overrides
 GROUP BY dosing_mode
 ORDER BY dosing_mode;
 
 -- 2) Cohort denominator and paired N ------------------------------------------
 SELECT
-  (SELECT COUNT(DISTINCT _userId) FROM cohort_segments_box080)  AS cohort_users,
+  (SELECT COUNT(DISTINCT _userId) FROM cohort_segments)  AS cohort_users,
   COUNT(*)                                                      AS users_with_any_preset,
   SUM(CASE WHEN has_tb = 1 AND has_ab = 1 THEN 1 ELSE 0 END)    AS users_with_presets_both_segments,
   SUM(CASE WHEN has_ab = 1 THEN 1 ELSE 0 END)                  AS users_with_any_ab_preset
@@ -149,7 +149,7 @@ FROM (
   SELECT _userId,
          MAX(CASE WHEN dosing_mode = 'temp_basal' THEN 1 ELSE 0 END) AS has_tb,
          MAX(CASE WHEN dosing_mode = 'autobolus'  THEN 1 ELSE 0 END) AS has_ab
-  FROM cohort_overrides_box080
+  FROM cohort_overrides
   GROUP BY _userId
 ) u;
 
@@ -160,6 +160,6 @@ SELECT
   COUNT(*)                          AS n_activations,
   COUNT(DISTINCT _userId)           AS n_users,
   ROUND(SUM(duration) / 3600.0, 1)  AS total_hours
-FROM cohort_overrides_box080
+FROM cohort_overrides
 GROUP BY COALESCE(overridePreset, '(custom / no preset name)'), dosing_mode
 ORDER BY n_activations DESC;

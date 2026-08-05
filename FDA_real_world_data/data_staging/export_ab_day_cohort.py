@@ -96,6 +96,8 @@ def run(
       SELECT
         t._userId,
         t.day,
+        -- Both counts are de-duplicated on the delivery timestamp upstream in
+        -- export_loop_recommendations.py (the HealthKit side since 2026-08-04).
         GREATEST(COALESCE(t.dd_autobolus_count, 0),
                  COALESCE(t.hk_autobolus_count, 0)) >= {min_autobolus_count}
           AS is_ab_day,

@@ -43,8 +43,8 @@ def test_runs_every_box_in_order():
     def check(calls):
         run_all_boxes.run(spark=object())
         assert calls == [
-            ("_box080", 0.20, 0.80, True),
-            ("",        0.30, 0.70, True),
+            ("",        0.20, 0.80, True),   # report primary, unsuffixed
+            ("_box070", 0.30, 0.70, True),
             ("_box090", 0.10, 0.90, True),
         ], calls
     _with_recorder(check)
@@ -52,10 +52,11 @@ def test_runs_every_box_in_order():
 
 
 def test_box_configs_match_variant_defaults():
-    # The _box080 row must stay in lockstep with run_transition_variant's
-    # defaults, and the production row with the staging-script defaults.
+    # The primary (unsuffixed) row must stay in lockstep with BOTH the variant
+    # driver's defaults and the staging-script defaults — since 2026-08-05 all
+    # three describe the same 0.80 box, so a drift in any one of them fails here.
     by_suffix = {s: (lo, hi) for s, lo, hi in run_all_boxes.BOX_CONFIGS}
-    assert by_suffix["_box080"] == (
+    assert by_suffix[""] == (
         run_transition_variant.DEFAULT_AUTOBOLUS_LOW,
         run_transition_variant.DEFAULT_AUTOBOLUS_HIGH,
     )
@@ -63,6 +64,9 @@ def test_box_configs_match_variant_defaults():
         DEFAULT_AUTOBOLUS_LOW, DEFAULT_AUTOBOLUS_HIGH,
     )
     assert by_suffix[""] == (DEFAULT_AUTOBOLUS_LOW, DEFAULT_AUTOBOLUS_HIGH)
+    assert run_transition_variant.DEFAULT_SUFFIX == "", (
+        "the variant driver must default to the unsuffixed primary build"
+    )
     print("PASS: test_box_configs_match_variant_defaults")
 
 
@@ -70,7 +74,7 @@ def test_only_subset_and_skip_analysis():
     def check(calls):
         run_all_boxes.run(spark=object(), run_analysis=False, only=["_box090", ""])
         assert calls == [
-            ("",        0.30, 0.70, False),
+            ("",        0.20, 0.80, False),
             ("_box090", 0.10, 0.90, False),
         ], calls
     _with_recorder(check)

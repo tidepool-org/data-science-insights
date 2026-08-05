@@ -131,6 +131,28 @@ TEST_ROWS = [
         origin=hk_origin("3.4.0"), payload=AUTO_PAYLOAD),
     row("user_c", "2025-01-24 15:00:00", "bolus", subType="smb",
         origin=hk_origin("3.4.0"), payload=AUTO_PAYLOAD),
+
+    # --- Day 11 (2025-01-25, user_d): DUPLICATE HealthKit uploads ---
+    # BDDP re-ingests uploads, so one physical bolus can appear as several
+    # identical rows. Two distinct deliveries here (08:00, 09:00) with the
+    # 08:00 one duplicated three times: the HK count must be 2, not 4. Counting
+    # raw rows let duplicates manufacture autobolus days wherever downstream
+    # code takes GREATEST(dd, hk) (adversarial review, 2026-08-04).
+    row("user_d", "2025-01-25 08:00:00", "bolus", subType="smb",
+        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
+    row("user_d", "2025-01-25 08:00:00", "bolus", subType="smb",
+        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
+    row("user_d", "2025-01-25 08:00:00", "bolus", subType="smb",
+        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
+    row("user_d", "2025-01-25 09:00:00", "bolus", subType="smb",
+        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
+    # Same shape on the temp-basal side: 2 distinct deliveries, one duplicated.
+    row("user_d", "2025-01-25 10:00:00", "basal",
+        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
+    row("user_d", "2025-01-25 10:00:00", "basal",
+        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
+    row("user_d", "2025-01-25 11:00:00", "basal",
+        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
 ]
 
 
@@ -202,6 +224,20 @@ try:
         f"expected loop_version=3.10.1, got {user_b_row['loop_version']}"
     )
     print("PASS: loop_version uses numeric max within DD source (3.10.1 > 3.2.0)")
+
+    # 5. HealthKit counts de-duplicate on the delivery timestamp: user_d's day
+    #    has 4 raw autobolus rows for 2 distinct deliveries, and 3 raw basal
+    #    rows for 2 distinct deliveries.
+    day11 = by_day[("user_d", date(2025, 1, 25))]
+    assert day11[1] == 2, (
+        f"hk_autobolus_count should de-duplicate 4 raw rows to 2 distinct "
+        f"deliveries; got {day11[1]}"
+    )
+    assert day11[3] == 2, (
+        f"hk_temp_basal_count should de-duplicate 3 raw rows to 2 distinct "
+        f"deliveries; got {day11[3]}"
+    )
+    print("PASS: HealthKit counts de-duplicate re-ingested rows")
 
     # 4b. loop_version picks numeric max ACROSS sources (HK 3.4.0 > DD 3.2.0 on day 10).
     user_c_row = result[result["_userId"] == "user_c"].iloc[0]

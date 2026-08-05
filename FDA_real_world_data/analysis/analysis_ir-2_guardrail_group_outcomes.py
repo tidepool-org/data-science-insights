@@ -174,6 +174,17 @@ def load_data(spark):
         .merge(day_counts, on="_userId", how="left")
     )
 
+    # Scope the activations to the ANALYSIS cohort. user_guardrail_groups (and
+    # therefore override_guardrail_flags) is built over every user with >= 1
+    # eligible AB day, while this analysis reports on users who also have >= 1
+    # outcome-eligible day — a slightly smaller set. Without this the
+    # activation-level checks in Table IR-2c would count activations by users
+    # who contribute no outcomes, and their per-cohort percentages would mix a
+    # larger numerator population with the smaller cohort denominator (which is
+    # what made "users with >= 1 qualifying activation" disagree with the group
+    # rows of Table IR-2a).
+    flags = flags[flags["_userId"].isin(set(users["_userId"]))].copy()
+
     # Hypo rates: events per hour of CGM time, and per included AB day. The
     # CGM-hour rate is primary — events are only observable during sensor wear
     # (PLN §7.4).
@@ -303,12 +314,15 @@ def create_table_ir2c(users, groups, flags) -> pd.DataFrame:
         ("Qualifying activations (version-eligible, on/after first AB day)", str(n_qual)),
         ("Users with ≥1 qualifying activation",
             pct(int(qualifying["_userId"].nunique()), len(users))),
-        ("Activations with CR and ISF factors both present", str(checks["n_both_ci"])),
-        ("… where CR factor = ISF factor",
+        ("Activations that adjust insulin needs "
+         "(carb-ratio and insulin-sensitivity both recorded)",
+            str(checks["n_both_ci"])),
+        ("… where the carb-ratio and insulin-sensitivity factors are equal",
             pct(checks["n_ci_equal"], checks["n_both_ci"])),
-        ("Activations with basal and carb-ratio factors both present (basal > 0)",
+        ("Activations that adjust insulin needs "
+         "(basal and carb-ratio both recorded)",
             str(checks["n_both_bc"])),
-        ("… where carb-ratio factor = 1 / basal factor",
+        ("… where the carb-ratio factor is the reciprocal of the basal factor",
             pct(checks["n_bc_reciprocal"], checks["n_both_bc"])),
         ("Preset-guardrail (P) violating activations",
             pct(int(qualifying["is_p_violation"].sum()), n_qual)),

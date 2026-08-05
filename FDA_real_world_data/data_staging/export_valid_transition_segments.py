@@ -23,8 +23,13 @@ CATALOG = "dev.fda_510k_rwd"
 # side > 0.70 (the seg1 floor is 1 - autobolus_low). Override via run() args to
 # materialise a different box into parallel tables — see
 # exploratory/run_transition_variant.py.
-DEFAULT_AUTOBOLUS_LOW = 0.30    # max AB-fraction in seg1 → seg1 TB floor = 1 - low
-DEFAULT_AUTOBOLUS_HIGH = 0.70   # min AB-fraction required in seg2
+# The DEFAULT box is the report primary (symmetric 0.80). Changed from
+# 0.30/0.70 on 2026-08-05: the unsuffixed namespace previously held the 0.70
+# build while the report primary lived in _box080, so a bare run of the
+# pipeline produced a build nobody used. The 0.70 sensitivity case is now the
+# explicit `_box070` variant (production_runs/run_all_boxes.py).
+DEFAULT_AUTOBOLUS_LOW = 0.20    # max AB-fraction in seg1 → seg1 TB floor = 1 - low
+DEFAULT_AUTOBOLUS_HIGH = 0.80   # min AB-fraction required in seg2
 DEFAULT_MIN_AUTOBOLUS_COUNT = 3
 
 

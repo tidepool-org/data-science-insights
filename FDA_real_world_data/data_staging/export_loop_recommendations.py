@@ -129,6 +129,7 @@ hk_automated AS (
   SELECT
     _userId,
     type,
+    time_string,
     CAST(LEFT(time_string, 10) AS DATE) AS day,
     get_json_object(origin, '$.version') AS loop_version
   FROM {input_table}
@@ -138,11 +139,21 @@ hk_automated AS (
     AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
 ),
 
+-- COUNT(DISTINCT time_string), not COUNT(*): BDDP re-ingests uploads, so the
+-- same physical delivery can appear as several identical rows. The
+-- dosingDecision method above already de-duplicates on the delivery timestamp
+-- (COUNT(DISTINCT b_time_string)); counting raw rows here let duplicates
+-- inflate the HealthKit side, and every downstream consumer takes
+-- GREATEST(dd, hk) — so duplicates could manufacture autobolus days and pull a
+-- user's first-autobolus day earlier (adversarial review, 2026-08-04).
+-- Two genuinely distinct automated deliveries never share a timestamp: Loop
+-- doses on a ~5-minute cycle, which is the same assumption the dosingDecision
+-- path makes.
 hk_autobolus_days AS (
   SELECT
     _userId,
     day,
-    COUNT(*) AS autobolus_count
+    COUNT(DISTINCT time_string) AS autobolus_count
   FROM hk_automated
   WHERE type = 'bolus'
   GROUP BY
@@ -154,7 +165,7 @@ hk_temp_basal_days AS (
   SELECT
     _userId,
     day,
-    COUNT(*) AS temp_basal_count
+    COUNT(DISTINCT time_string) AS temp_basal_count
   FROM hk_automated
   WHERE type = 'basal'
   GROUP BY

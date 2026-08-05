@@ -55,9 +55,11 @@ import export_overrides_from_transitions
 import export_segments_within_guardrails
 from export_valid_transition_segments import CATALOG, run as build_segments
 
-# Defaults match the box080 sensitivity case (symmetric 0.80 box). All three are
-# CLI-overridable so the same driver runs any box at any namespace.
-DEFAULT_SUFFIX = "_box080"
+# Defaults are the report primary (symmetric 0.80) in the UNSUFFIXED namespace —
+# the same build export_valid_transition_segments.py produces by default, so a
+# bare run of this driver reproduces the primary rather than a variant. All
+# three are CLI-overridable so the same driver runs any box at any namespace.
+DEFAULT_SUFFIX = ""
 DEFAULT_AUTOBOLUS_LOW = 0.20    # seg1 temp-basal floor = 1 - 0.20 = 0.80
 DEFAULT_AUTOBOLUS_HIGH = 0.80   # seg2 autobolus floor = 0.80
 

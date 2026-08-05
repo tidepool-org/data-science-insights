@@ -7,9 +7,12 @@ slot, >= 24 h window, partial-coverage resolution, zero-coverage indeterminate),
 the first-AB-day qualifying anchor, the version gate on qualifying, the
 all-spanned-days-AB flag (multiday span over a non-AB day), the user rollup
 (all five groups, zero-filled never-preset, depends_on_indeterminate,
-n_qualifying counts), and fractional-second timestamps through the driver-side
+n_qualifying counts), fractional-second timestamps through the driver-side
 fallback (mixed whole/fractional strings crashed pandas' Series-level format
-inference in production, 2026-08-03).
+inference in production, 2026-08-03), and CLOCK ALIGNMENT — activation
+timestamps are UTC while schedule slots are keyed to local midnight, so the
+fallback must shift by the user's timezoneOffset before intersecting
+(adversarial review, 2026-08-04; u14/u15 fail in both directions without it).
 
 Run on Databricks.
 """
@@ -45,8 +48,10 @@ CORRECTIONS_TABLE = f"{TEST_SCHEMA}._test_gf_corrections"
 COHORT_TABLE = f"{TEST_SCHEMA}._test_gf_cohort"
 FLAGS_TABLE = f"{TEST_SCHEMA}._test_gf_flags_out"
 GROUPS_TABLE = f"{TEST_SCHEMA}._test_gf_groups_out"
+BDDP_TABLE = f"{TEST_SCHEMA}._test_gf_bddp"
 
-ALL_TABLES = [OVERRIDES_TABLE, CORRECTIONS_TABLE, COHORT_TABLE, FLAGS_TABLE, GROUPS_TABLE]
+ALL_TABLES = [OVERRIDES_TABLE, CORRECTIONS_TABLE, COHORT_TABLE, BDDP_TABLE,
+              FLAGS_TABLE, GROUPS_TABLE]
 
 # --- Test data ---
 
@@ -114,6 +119,18 @@ overrides_rows = [
     # the covered part has no hot slot -> covered, no hit -> compliant (NOT
     # indeterminate).
     ov("u12", datetime(2024, 1, 5, 10, 0), 14_400, 1.8),
+    # u14/u15: CLOCK ALIGNMENT. Activation timestamps are UTC; schedule slots
+    # are keyed to LOCAL midnight, so the fallback must shift by the user's
+    # timezoneOffset before intersecting. Both users are UTC-6 (Denver) with a
+    # hot [00:00, 06:00) local slot at 100 mg/dL and 120 mg/dL after.
+    #   u14: 22:00 LOCAL = 04:00 UTC next day -> true low 120 -> NOT M.
+    #        Comparing the raw UTC time-of-day (04:00) against the local slot
+    #        would land inside the hot span and wrongly flag M.
+    #   u15: 02:00 LOCAL = 08:00 UTC -> true low 100 -> M. The raw UTC
+    #        time-of-day (08:00) misses the hot span and would wrongly clear it
+    #        (and, because coverage exists, would not even be indeterminate).
+    ov("u14", datetime(2024, 1, 6, 4, 0), 3_600, 1.8),
+    ov("u15", datetime(2024, 1, 5, 8, 0), 3_600, 1.8),
     # u13: FRACTIONAL-SECOND activation (05:00:00.8) through the fallback, with
     # a fractional-second settings valid_from mixed among the whole-second ones
     # -> same hit as u3 -> m_only. Pins the production parse regression.
@@ -138,6 +155,17 @@ corrections_rows = [
     # whole-second strings in the driver-side parse.
     {"_userId": "u13", "valid_from": datetime(2024, 1, 1, 0, 0, 0, 500000), "valid_to": None, "slot_start_seconds": 0, "target_low_mgdl": 100.0},
     {"_userId": "u13", "valid_from": datetime(2024, 1, 1, 0, 0, 0, 500000), "valid_to": None, "slot_start_seconds": 21_600, "target_low_mgdl": 120.0},
+    # u14/u15: hot [00:00, 06:00) LOCAL, safe after — the clock-alignment pair.
+    {"_userId": "u14", "valid_from": datetime(2024, 1, 1), "valid_to": None, "slot_start_seconds": 0, "target_low_mgdl": 100.0},
+    {"_userId": "u14", "valid_from": datetime(2024, 1, 1), "valid_to": None, "slot_start_seconds": 21_600, "target_low_mgdl": 120.0},
+    {"_userId": "u15", "valid_from": datetime(2024, 1, 1), "valid_to": None, "slot_start_seconds": 0, "target_low_mgdl": 100.0},
+    {"_userId": "u15", "valid_from": datetime(2024, 1, 1), "valid_to": None, "slot_start_seconds": 21_600, "target_low_mgdl": 120.0},
+]
+
+# BDDP rows supplying the per-user UTC offset. Denver = UTC-6.
+bddp_tz_rows = [
+    {"_userId": "u14", "time_string": "2024-01-01 00:00:00", "timezoneOffset": -360},
+    {"_userId": "u15", "time_string": "2024-01-01 00:00:00", "timezoneOffset": -360},
 ]
 
 cohort_rows = [
@@ -159,6 +187,8 @@ cohort_rows = [
     cohort("u11", date(2024, 1, 5)),
     cohort("u12", date(2024, 1, 5)),
     cohort("u13", date(2024, 1, 5)),
+    cohort("u14", date(2024, 1, 6)),
+    cohort("u15", date(2024, 1, 5)),
 ]
 
 EXPECTED_GROUPS = {
@@ -175,6 +205,8 @@ EXPECTED_GROUPS = {
     "u11": "m_only",
     "u12": "compliant",
     "u13": "m_only",
+    "u14": "compliant",   # 22:00 local -> safe slot; UTC-naive check would say m_only
+    "u15": "m_only",     # 02:00 local -> hot slot; UTC-naive check would say compliant
 }
 
 # --- Run test ---
@@ -182,6 +214,7 @@ try:
     setup_test_table(spark, OVERRIDES_TABLE, overrides_rows)
     setup_test_table(spark, CORRECTIONS_TABLE, corrections_rows)
     setup_test_table(spark, COHORT_TABLE, cohort_rows)
+    setup_test_table(spark, BDDP_TABLE, bddp_tz_rows)
 
     run(
         spark,
@@ -190,6 +223,7 @@ try:
         overrides_table=OVERRIDES_TABLE,
         correction_range_table=CORRECTIONS_TABLE,
         ab_day_cohort_table=COHORT_TABLE,
+        bddp_table=BDDP_TABLE,
     )
 
     flags = read_test_output(spark, FLAGS_TABLE)
@@ -237,6 +271,21 @@ try:
         "fractional-second activation should resolve through the fallback"
     )
     print("PASS: fallback M (hit / miss / wrap / >=24h / partial coverage / fractional seconds)")
+
+    # 4b. CLOCK ALIGNMENT: the time-of-day intersection must run on LOCAL time.
+    #     Both users are UTC-6 with a hot [00:00, 06:00) local slot.
+    u14_row = by_key[("u14", pd.Timestamp(2024, 1, 6, 4, 0))]
+    u15_row = by_key[("u15", pd.Timestamp(2024, 1, 5, 8, 0))]
+    assert not bool(u14_row["is_m_violation"]), (
+        "u14 activates 22:00 LOCAL against a safe 120 mg/dL slot; flagging it M "
+        "means the UTC time-of-day was compared against a local-keyed schedule"
+    )
+    assert bool(u15_row["is_m_violation"]), (
+        "u15 activates 02:00 LOCAL inside the hot 100 mg/dL slot; clearing it "
+        "means the UTC time-of-day was compared against a local-keyed schedule"
+    )
+    assert bool(u14_row["is_tz_offset_known"]) and bool(u15_row["is_tz_offset_known"])
+    print("PASS: fallback time-of-day intersection uses the user's local clock")
 
     # 5. Indeterminate: u5 has needs > 1.7, no own target, no settings records.
     u5_row = by_key[("u5", pd.Timestamp(2024, 1, 5, 10, 0))]

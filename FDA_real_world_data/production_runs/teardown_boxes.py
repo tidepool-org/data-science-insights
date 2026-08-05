@@ -1,7 +1,7 @@
 """One-click teardown for validity-box builds — companion to run_all_boxes.py.
 
 Drops the box-affected staging subtree (run_transition_variant.BOX_TABLES) for
-the VARIANT namespaces only by default — `_box080` and `_box090`. The
+the VARIANT namespaces only by default — `_box070` and `_box090`. The
 production tables (empty suffix) are NEVER dropped unless `--include-prod` is
 passed explicitly; run_all_boxes' production pass uses CREATE OR REPLACE, so
 dropping production first is never required.

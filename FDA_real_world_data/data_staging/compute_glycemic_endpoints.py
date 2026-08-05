@@ -9,12 +9,22 @@ from pyspark.sql.types import StructType, StructField, StringType, IntegerType
 # Hypo event detection
 # ---------------------------------------------------------------------------
 
-def _compute_hypo_events(spark, cbg_df, group_cols, threshold_start=54, threshold_end=70, consec=3):
+def _compute_hypo_events(spark, cbg_df, group_cols, threshold_start=54, threshold_end=70,
+                         consec=3, max_gap_minutes=None):
     """
     Count hypoglycemic events per group using applyInPandas.
 
     An event begins after `consec` consecutive readings < threshold_start (54 mg/dL).
     An event ends after `consec` consecutive readings > threshold_end (70 mg/dL).
+
+    max_gap_minutes: when set, readings separated by more than this are NOT
+    treated as consecutive — the run counters reset and any open event is
+    closed. "Consecutive" otherwise means adjacent rows in timestamp order
+    regardless of elapsed time, so a sensor dropout can join readings hours
+    apart into one run. Left as None (the original behavior) for the
+    transition / stable / override modes so their published results are
+    unchanged; mode=ab_days sets it, because an outcome day only needs 201 of
+    288 samples and can therefore carry gaps of over an hour.
     """
 
     # Infer schema from the actual DataFrame types
@@ -31,7 +41,20 @@ def _compute_hypo_events(spark, cbg_df, group_cols, threshold_start=54, threshol
         streak_below = 0
         streak_above = 0
 
-        for val in pdf["cbg_mg_dl"].astype(float):
+        gap_limit = (
+            pd.Timedelta(minutes=max_gap_minutes)
+            if max_gap_minutes is not None else None
+        )
+        prev_ts = None
+
+        for ts, val in zip(pdf["cbg_timestamp"], pdf["cbg_mg_dl"].astype(float)):
+            if gap_limit is not None and prev_ts is not None and (ts - prev_ts) > gap_limit:
+                # Dropout: the next reading cannot continue a run, and an open
+                # event cannot be assumed to have persisted across the gap.
+                in_event = False
+                streak_below = 0
+                streak_above = 0
+            prev_ts = ts
             if not in_event:
                 if val < threshold_start:
                     streak_below += 1
@@ -61,7 +84,8 @@ def _compute_hypo_events(spark, cbg_df, group_cols, threshold_start=54, threshol
 # Glycemic endpoints (range metrics + hypo events)
 # ---------------------------------------------------------------------------
 
-def compute_glycemic_endpoints(spark, cbg_df, group_cols=None, hypo_group_cols=None):
+def compute_glycemic_endpoints(spark, cbg_df, group_cols=None, hypo_group_cols=None,
+                               hypo_max_gap_minutes=None):
     """
     Compute glycemic endpoints (TIR, TBR, TAR, CV, mean glucose) and
     hypoglycemic event counts per group.
@@ -107,7 +131,9 @@ def compute_glycemic_endpoints(spark, cbg_df, group_cols=None, hypo_group_cols=N
     ;
     """)
 
-    hypo_events = _compute_hypo_events(spark, cbg_df, hypo_group_cols)
+    hypo_events = _compute_hypo_events(
+        spark, cbg_df, hypo_group_cols, max_gap_minutes=hypo_max_gap_minutes
+    )
     if hypo_group_cols != group_cols:
         hypo_events = hypo_events.groupBy(*group_cols).agg(
             F.sum("hypo_events").cast("int").alias("hypo_events")
@@ -163,6 +189,10 @@ MODE_CONFIG = {
         # pooled days, then summed per user.
         "group_cols": ["_userId"],
         "hypo_group_cols": ["_userId", "day"],
+        # An outcome day needs only 201 of 288 samples, so a day can carry
+        # dropouts of over an hour; readings either side of one are not
+        # "consecutive" for event detection.
+        "hypo_max_gap_minutes": 15,
     },
 }
 
@@ -181,6 +211,7 @@ def run(spark, mode="transition", input_table=None, output_table=None):
         cbg_df,
         group_cols=cfg["group_cols"],
         hypo_group_cols=cfg.get("hypo_group_cols"),
+        hypo_max_gap_minutes=cfg.get("hypo_max_gap_minutes"),
     )
     endpoints.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
 

@@ -11,7 +11,7 @@
 --   before 2024-07-13 = Loop 3.4.0 release date; age ≥ 6 or DOB unknown)
 --   + no guardrail violation + confirmed type-1 diagnosis.
 -- Mirrors load_allowed_transition_segments in analysis/utils/data_loading.py.
--- Swap the bare table names for *_box080 to read the 0.80-box build.
+-- Swap the bare table names for *_box070 / *_box090 to read the 0.80-box build.
 --
 -- NOTE: this spans every ELIGIBLE rank-irrelevant segment in the cohort; the
 -- final one-segment-per-user analysis cohort is a subset with the same or a

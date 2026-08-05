@@ -70,6 +70,9 @@ _FALLBACK_SCHEMA = T.StructType([
     T.StructField("override_time_str", T.StringType()),
     T.StructField("is_m_fallback", T.BooleanType()),
     T.StructField("is_m_indeterminate", T.BooleanType()),
+    # FALSE when the user has no timezoneOffset anywhere in BDDP, so the
+    # time-of-day intersection ran on an assumed UTC offset of 0.
+    T.StructField("tz_offset_known", T.BooleanType()),
 ])
 
 
@@ -101,14 +104,28 @@ def _window_hits_span(window_tod_start, window_seconds, span_start, span_end):
     return False
 
 
-def _fallback_m_status(start, duration_seconds, records):
+def _fallback_m_status(start, duration_seconds, records, tz_offset_minutes=0):
     """Resolve the mitigation fallback for one activation.
 
-    start: pd.Timestamp; records: [(valid_from, valid_to_or_None, hot_spans)]
-    for the user, SORTED by valid_from, with hot_spans precomputed once per
-    record ([(span_start, span_end)] for slots whose low < the mitigation LB).
-    Returns (is_m_fallback, is_m_indeterminate)."""
+    start: pd.Timestamp (UTC, as BDDP stores it); records:
+    [(valid_from, valid_to_or_None, hot_spans)] for the user, SORTED by
+    valid_from, with hot_spans precomputed once per record
+    ([(span_start, span_end)] for slots whose low < the mitigation LB).
+    Returns (is_m_fallback, is_m_indeterminate).
+
+    CLOCKS — the two inputs are keyed differently and must be reconciled:
+    activation timestamps are UTC (`time_string` is ISO-8601 ending in 'Z'),
+    while `slot_start_seconds` counts from the user's LOCAL midnight. The
+    interval overlap below is UTC-vs-UTC and needs no shift, but the
+    time-of-day projection does: without it a user's schedule is effectively
+    rotated by their UTC offset (up to +/-12 h), producing both false
+    positives and false negatives on every sub-24h decision. `timezoneOffset`
+    is minutes from UTC (e.g. -300 for EST), so local = UTC + offset. This
+    mirrors the shift simulation/export/export_single_user_day.py already
+    applies for the same reason.
+    """
     eval_end = start + pd.Timedelta(seconds=max(int(duration_seconds), 1))
+    tz_shift = pd.Timedelta(minutes=int(tz_offset_minutes or 0))
     covered = False
     for valid_from, valid_to, hot in records:
         if valid_from >= eval_end:
@@ -125,16 +142,25 @@ def _fallback_m_status(start, duration_seconds, records):
         overlap_seconds = (overlap_end - overlap_start).total_seconds()
         if overlap_seconds >= SECONDS_PER_DAY:
             return True, False
-        tod = (overlap_start - overlap_start.normalize()).total_seconds()
+        local_start = overlap_start + tz_shift
+        tod = (local_start - local_start.normalize()).total_seconds()
         if any(_window_hits_span(tod, overlap_seconds, s, e) for s, e in hot):
             return True, False
     return False, (not covered)
 
 
-def _resolve_fallback(spark, overrides_table, correction_range_table):
+def _resolve_fallback(spark, overrides_table, correction_range_table, bddp_table):
     """Compute (is_m_fallback, is_m_indeterminate) for every activation with
     needs > threshold and no own target; register as temp view
-    ir1002_m_fallback keyed on (_userId, override_time_str)."""
+    ir1002_m_fallback keyed on (_userId, override_time_str).
+
+    Also resolves each affected user's UTC offset so the time-of-day
+    intersection runs on the same clock as the schedule (see
+    _fallback_m_status). BDDP populates `timezoneOffset` inconsistently, so
+    the latest non-NULL value per user is used; users with none anywhere fall
+    back to 0 (UTC) and are counted in `ir1002_m_fallback.tz_offset_known`
+    so the analysis can report how many decisions rest on an assumed offset.
+    """
     activations = spark.sql(f"""
         --begin-sql
         SELECT
@@ -166,6 +192,32 @@ def _resolve_fallback(spark, overrides_table, correction_range_table):
         )
         ;
     """).toPandas()
+
+    # Latest non-NULL timezoneOffset per affected user (minutes from UTC).
+    # Mirrors the per-user offset CTE in
+    # simulation/export/export_single_user_day.py.
+    tz = spark.sql(f"""
+        --begin-sql
+        SELECT
+          _userId,
+          MAX_BY(timezoneOffset, TRY_CAST(time_string AS TIMESTAMP)) AS tz_offset_min
+        FROM {bddp_table}
+        WHERE timezoneOffset IS NOT NULL
+          AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
+          AND _userId IN (
+            SELECT DISTINCT _userId
+            FROM {overrides_table}
+            WHERE basalRateScaleFactor IS NOT NULL
+              AND basalRateScaleFactor > {MITIGATION_NEEDS_THRESHOLD}
+              AND bg_target_low IS NULL
+          )
+        GROUP BY _userId
+        ;
+    """).toPandas()
+    tz_by_user = {
+        u: int(o) for u, o in zip(tz["_userId"], tz["tz_offset_min"])
+        if not pd.isna(o)
+    }
 
     # Per-user settings records, built in ONE pass over the sorted rows (Loop
     # users upload settings constantly — hundreds of records per user — so
@@ -209,12 +261,14 @@ def _resolve_fallback(spark, overrides_table, correction_range_table):
     for user_id, time_str, duration in activations[
         ["_userId", "override_time_str", "duration"]
     ].itertuples(index=False, name=None):
+        tz_known = user_id in tz_by_user
         is_m, indet = _fallback_m_status(
             pd.to_datetime(time_str),
             0 if pd.isna(duration) else int(duration),
             records_by_user.get(user_id, []),
+            tz_offset_minutes=tz_by_user.get(user_id, 0),
         )
-        rows.append((user_id, time_str, is_m, indet))
+        rows.append((user_id, time_str, is_m, indet, tz_known))
 
     spark.createDataFrame(rows, schema=_FALLBACK_SCHEMA).createOrReplaceTempView(
         "ir1002_m_fallback"
@@ -228,8 +282,9 @@ def run(
     overrides_table=f"{CATALOG}.overrides_all",
     correction_range_table=f"{CATALOG}.correction_range_history",
     ab_day_cohort_table=f"{CATALOG}.ab_day_cohort",
+    bddp_table="dev.default.bddp_sample_all_2",
 ):
-    _resolve_fallback(spark, overrides_table, correction_range_table)
+    _resolve_fallback(spark, overrides_table, correction_range_table, bddp_table)
 
     spark.sql(f"""
     --begin-sql
@@ -315,7 +370,15 @@ def run(
        AND u.first_eligible_ab_day IS NOT NULL
        AND b.override_day >= u.first_eligible_ab_day) AS is_qualifying,
       (s.n_ab_days_in_span = DATEDIFF(b.end_day, b.override_day) + 1)
-        AS is_all_days_ab
+        AS is_all_days_ab,
+      -- TRUE for own-target decisions (no schedule lookup needed) and for
+      -- fallback decisions where the user's UTC offset was known; FALSE when
+      -- the time-of-day intersection ran on an assumed offset of 0.
+      CASE
+        WHEN b.needs_exceeds_mitigation AND NOT b.has_own_target
+          THEN COALESCE(f.tz_offset_known, FALSE)
+        ELSE TRUE
+      END AS is_tz_offset_known
     FROM base b
     LEFT JOIN user_first_ab u
       ON b._userId = u._userId
