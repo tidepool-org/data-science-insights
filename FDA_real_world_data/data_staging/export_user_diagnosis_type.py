@@ -7,6 +7,11 @@ diagnosis type pulled from two profile sources and a JAEB override:
 - diagnosis_patients : prod.default.patients.diagnosisType   (flat column)
 - diagnosis_seagull  : prod.default.seagull_profiles.diagnosisType (flat column)
 - is_jaeb            : user is in the JAEB cohort
+- is_lada            : the raw labels resolve to a LADA value (same
+                       patients-then-seagull precedence, evaluated BEFORE the
+                       JAEB override so JAEB-routed LADA users are flagged too).
+                       Contingency tracking only — nothing in the primary
+                       pipeline reads it (IR-1002_LADA_inclusion_plan_2026-08-04)
 - diagnosis_type     : resolved value — JAEB members are 'type1' by definition;
                        otherwise prefer the patients value, then seagull.
 
@@ -29,6 +34,10 @@ JAEB_DIAGNOSIS = "type1"
 
 # User-id column on prod.default.seagull_profile (flat-schema assumption).
 SEAGULL_USERID_COL = "userid"
+
+# Raw-label pattern identifying LADA diagnoses (matches the exploratory /
+# contingency-plan queries).
+LADA_PATTERN = "%lada%"
 
 
 def run(
@@ -89,6 +98,14 @@ def run(
       p.diagnosis_patients,
       s.diagnosis_seagull,
       CASE WHEN jb._userId IS NOT NULL THEN TRUE ELSE FALSE END AS is_jaeb,
+      -- LADA per the raw labels, same precedence as diagnosis_type but
+      -- evaluated before the JAEB override (so JAEB-routed LADA users are
+      -- flagged too). No consumer in the primary pipeline reads this.
+      COALESCE(
+        LOWER(COALESCE(p.diagnosis_patients, s.diagnosis_seagull))
+          LIKE '{LADA_PATTERN}',
+        FALSE
+      ) AS is_lada,
       -- Resolved diagnosis: JAEB members are type1 by definition; otherwise
       -- prefer the patients value, then fall back to seagull.
       CASE

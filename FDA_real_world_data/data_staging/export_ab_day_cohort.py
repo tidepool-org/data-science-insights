@@ -26,6 +26,12 @@ from one table:
 Days are the pipeline-wide convention (the verbatim date prefix of the raw
 time_string, via loop_recommendations upstream and DATE(cbg_timestamp) here).
 Restricted to confirmed type-1 users (the user_diagnosis_type lookup).
+
+LADA contingency (IR-1002_LADA_inclusion_plan_2026-08-04.md): `include_lada`
+(default False) widens the diagnosis gate to `type1 OR is_lada` and adds an
+`is_lada` column to the output. It exists only for an on-demand `_lada`
+parallel-namespace build if FDA asks about LADA representation — never set it
+on the primary table. Off, the gate and output are identical to today's.
 """
 
 import argparse
@@ -62,7 +68,17 @@ def run(
     diagnosis_table=f"{CATALOG}.user_diagnosis_type",
     min_autobolus_count=DEFAULT_MIN_AUTOBOLUS_COUNT,
     min_daily_cbg_count=MIN_DAILY_CBG_COUNT,
+    include_lada=False,
 ):
+    if include_lada:
+        diagnosis_where = "diagnosis_type = 'type1' OR is_lada"
+        lada_col = ",\n      dx.is_lada"
+        lada_join = f"LEFT JOIN {diagnosis_table} dx ON eligible._userId = dx._userId"
+    else:
+        diagnosis_where = "diagnosis_type = 'type1'"
+        lada_col = ""
+        lada_join = ""
+
     spark.sql(f"""
     --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
@@ -78,7 +94,7 @@ def run(
         r.version_int
       FROM {loop_recommendations_table} r
       WHERE r._userId IN (
-        SELECT _userId FROM {diagnosis_table} WHERE diagnosis_type = 'type1'
+        SELECT _userId FROM {diagnosis_table} WHERE {diagnosis_where}
       )
     ),
 
@@ -131,11 +147,12 @@ def run(
     )
 
     SELECT
-      *,
+      eligible.*,
       (is_eligible_ab_day AND is_coverage_ok) AS is_outcome_day,
       MIN(CASE WHEN is_eligible_ab_day THEN day END)
-        OVER (PARTITION BY _userId) AS first_eligible_ab_day
+        OVER (PARTITION BY eligible._userId) AS first_eligible_ab_day{lada_col}
     FROM eligible
+    {lada_join}
     ;
     """)
 
@@ -146,6 +163,12 @@ if __name__ == "__main__":
     _parser = argparse.ArgumentParser()
     _parser.add_argument("--output_table", default=f"{CATALOG}.ab_day_cohort")
     _parser.add_argument("--min_autobolus_count", type=int, default=DEFAULT_MIN_AUTOBOLUS_COUNT)
+    _parser.add_argument("--include_lada", action="store_true")
     _args, _ = _parser.parse_known_args()
 
-    run(spark, output_table=_args.output_table, min_autobolus_count=_args.min_autobolus_count)
+    run(
+        spark,
+        output_table=_args.output_table,
+        min_autobolus_count=_args.min_autobolus_count,
+        include_lada=_args.include_lada,
+    )
