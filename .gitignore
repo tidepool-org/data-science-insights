@@ -117,5 +117,7 @@ FDA_real_world_data/analysis/outputs/analysis_8_7/figure_8_7d_subgroup_discontin
 no_meal_announcement/outputs/
 no_meal_announcement/analysis/outputs/*
 !no_meal_announcement/analysis/outputs/.gitkeep
+# device_data_curation: generated outputs (user-level data / regenerable — never commit)
+device_data_curation/outputs/
 CLAUDE.md
 .claude/settings.json
