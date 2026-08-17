@@ -49,7 +49,8 @@ behavior_model/
 │   ├── plot_traces.py                  # trace plots: latency hist, latency-vs-ΔBG, diurnal,
 │   │                                   #   weekly drift, two-clock day trace
 │   ├── plot_stage_a.py                 # Stage A plots: train/holdout split + sim overlay,
-│   │                                   #   holdout diurnal real-vs-sim
+│   │                                   #   holdout diurnal real-vs-sim, holdout decision trace
+│   │                                   #   (real vs simulated events on the same glucose)
 │   ├── test_behavior_model_mvp.py      # direct-call test runner (no pytest) + synthetic generator
 │   ├── p0_timestamp_verification.sql   # Databricks read-only queries (results stay off-repo)
 │   └── outputs/                        # per-user Stage A outputs + results writeup (git-ignored)

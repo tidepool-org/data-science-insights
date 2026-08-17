@@ -148,9 +148,20 @@ refutation-first agents running mutations in the conda env): 9 findings, 6 confi
   selection gate / derive-with-caveat).
 
 - Stage A visualizations added (`plot_stage_a.py`: train/holdout split with simulated-rate
-  overlay; holdout diurnal real-vs-sim) and a full results writeup with numbers at
+  overlay; holdout diurnal real-vs-sim; `08_holdout_trace` — a 48 h holdout window with
+  real and simulated decisions in parallel lanes on the same real CGM, the Stage A
+  approximation made visible; this is the format the eventual expert-discrimination test
+  will use) and a full results writeup with numbers at
   `exploratory/outputs/behavior_traces/stage_a_results.md` (git-ignored, lives with the
-  data per the no-stats-in-repo policy). Qualitative verdicts: rates in the right
+  data per the no-stats-in-repo policy).
+- Trace-level observations from the holdout decision view: simulated event *timing*
+  clusters at the right meal hours (several sim entries land nearly on top of real
+  ones), but the correction hazard is under-responsive to glucose at trace level — in
+  the inspected window the model watched the same rise the user corrected against and
+  didn't correct (consistent with the null ablation and missing IOB); and unconditioned
+  empirical mark draws occasionally place the user's own rare very-large gram values at
+  implausible moments (mark pools are conditioned only on the meal-window flag — finer
+  conditioning is the sanctioned fix before anything parametric). Qualitative verdicts: rates in the right
   neighborhood with drift-driven overshoot; diurnal structure roughly right except
   over-produced overnight corrections; self-excitation ablation null (visibility-floor
   interaction with real sub-20-min cascade gaps); two clean behavioral phenotypes
