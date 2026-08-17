@@ -119,3 +119,8 @@ no_meal_announcement/analysis/outputs/*
 !no_meal_announcement/analysis/outputs/.gitkeep
 CLAUDE.md
 .claude/settings.json
+
+# behavior_model: local trace snapshots + generated outputs (user-level data — never commit)
+behavior_model/data/
+behavior_model/exploratory/outputs/
+behavior_model/data_staging/exports/
