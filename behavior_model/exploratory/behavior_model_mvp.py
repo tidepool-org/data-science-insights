@@ -60,6 +60,10 @@ NAN_MARK_WARN_FRAC = 0.25  # simulated correction marks allowed to be NaN before
 EVENT_TYPES = ("is_carb_entry", "is_correction")
 SELF_EXCITATION_FEATURES = ["mins_since_correction", "n_corrections_2h"]
 
+DEFAULT_SPLIT = "interleaved_weeks"
+CYCLE_WEEKS = 4  # interleaved split: repeating cycle; the trailing
+                 # (1 - train_frac) share of each cycle is holdout
+
 FEATURES = [
     "cgm_filled",
     "cgm_missing",
@@ -129,6 +133,14 @@ def label_events(df):
     df["is_carb_entry"] = has_carb
     df["is_correction"] = df["bolus_u"].notna() & ~carb_nearby
     df["is_meal_bolus"] = df["bolus_u"].notna() & carb_nearby
+    # bolus-within-window flag per tick, computed here on the full contiguous
+    # frame so downstream consumers (fit_meal_bolus_rate) stay correct on a
+    # non-contiguous training subset -- no rolling across split seams
+    df["bolus_nearby"] = (
+        df["bolus_u"].notna()
+        .rolling(2 * ASSOCIATION_TICKS + 1, center=True, min_periods=1)
+        .max().astype(bool)
+    )
     df["announce_latency_min"] = (
         (df["carb_entry_time"] - df["carb_meal_time"]).dt.total_seconds() / 60.0
     )
@@ -189,11 +201,17 @@ class CorrectionHistory:
         return popped
 
 
-def seeded_history(train):
-    """History pre-loaded with the training period's real corrections, so the
-    first holdout hours are not simulated under falsely quiet history."""
+def seeded_history(df, upto=None):
+    """History pre-loaded with the REAL corrections before positional index
+    `upto` (all rows if None), so a simulated block starts under the user's
+    true recent history rather than falsely quiet history. Positions are
+    full-frame positional indices -- the same space simulate_behavior's
+    start_index lives in, so df must be the full labeled frame."""
     hist = CorrectionHistory()
-    for i in np.flatnonzero(train["is_correction"].to_numpy()):
+    flags = df["is_correction"].to_numpy()
+    if upto is not None:
+        flags = flags[:upto]
+    for i in np.flatnonzero(flags):
         hist.record(int(i))
     return hist
 
@@ -231,6 +249,55 @@ def add_features(df, cgm_fill_value=None):
     df["mins_since_correction"] = mins
     df["n_corrections_2h"] = counts
     return df
+
+
+# --------------------------------------------------------------------------
+# Train/holdout split
+# --------------------------------------------------------------------------
+
+def split_masks(df, split=DEFAULT_SPLIT, train_frac=0.75):
+    """Boolean holdout mask + JSON-able split config.
+
+    "interleaved_weeks": record-relative weeks assigned in a repeating
+    CYCLE_WEEKS cycle whose trailing (1 - train_frac) share is holdout
+    (3 train : 1 holdout at the 0.75 default). Both sets then sample every
+    behavioral era, so slow engagement drift hits them equally and the rate
+    comparison tests the model rather than the user's non-stationarity. This
+    is an interpolation test by design -- do not report it as forecasting.
+
+    "chronological": train on the first train_frac of the record. The naive
+    split; kept for regime comparisons and degenerate-case tests.
+    """
+    n = len(df)
+    if split == "chronological":
+        cut = int(n * train_frac)
+        mask = np.zeros(n, dtype=bool)
+        mask[cut:] = True
+        return mask, {"type": split, "train_frac": train_frac}
+    if split == "interleaved_weeks":
+        week = ((df["timestamp"] - df["timestamp"].iloc[0]).dt.days // 7).to_numpy()
+        mask = (week % CYCLE_WEEKS) >= CYCLE_WEEKS * train_frac
+        return mask, {"type": split, "train_frac": train_frac,
+                      "cycle_weeks": CYCLE_WEEKS}
+    raise ValueError(f"unknown split: {split!r}")
+
+
+def holdout_blocks(mask):
+    """Contiguous True runs of the holdout mask, as positional [start, end)."""
+    idx = np.flatnonzero(mask)
+    if len(idx) == 0:
+        return []
+    breaks = np.flatnonzero(np.diff(idx) > 1)
+    starts = np.concatenate([[idx[0]], idx[breaks + 1]])
+    ends = np.concatenate([idx[breaks], [idx[-1]]]) + 1
+    return list(zip(starts.tolist(), ends.tolist()))
+
+
+def block_spans(df, blocks):
+    """Timestamp spans [start, end) per block; end is exclusive."""
+    return [(df["timestamp"].iloc[s],
+             df["timestamp"].iloc[e - 1] + pd.Timedelta(minutes=TICK_MINUTES))
+            for s, e in blocks]
 
 
 # --------------------------------------------------------------------------
@@ -281,17 +348,13 @@ def _hazard(model, x):
 
 
 def fit_meal_bolus_rate(df):
-    """P(bolus | carb entry), using the same +/- association window that
-    `label_events` uses to pair boluses with entries."""
+    """P(bolus | carb entry), via the `bolus_nearby` flag label_events
+    computed on the full frame (same +/- association window that pairs
+    boluses with entries)."""
     entries = df["is_carb_entry"]
     if not entries.any():
         return 0.0
-    bolus_nearby = (
-        df["bolus_u"].notna()
-        .rolling(2 * ASSOCIATION_TICKS + 1, center=True, min_periods=1)
-        .max()
-    )
-    return float(bolus_nearby[entries].mean())
+    return float(df.loc[entries, "bolus_nearby"].mean())
 
 
 # --------------------------------------------------------------------------
@@ -420,6 +483,23 @@ def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
     return sim
 
 
+def simulate_blocks(df, blocks, hazards, marks, meal_bolus_p, rng):
+    """Stage A simulation over (possibly non-contiguous) holdout blocks: each
+    block is rolled out separately, seeded with the user's REAL history up to
+    the block start; self-excitation WITHIN a block still comes from
+    simulated events. Scoring is marginal/pooled, so conditioning each block
+    on real pre-block history is the block-wise analog of seeding the single
+    chronological holdout with the training tail."""
+    sims = [
+        simulate_behavior(df.iloc[s:e], hazards, marks, meal_bolus_p, rng,
+                          history=seeded_history(df, upto=s), start_index=s)
+        for s, e in blocks
+    ]
+    if not sims:
+        return pd.DataFrame(columns=SIMULATED_COLUMNS)
+    return pd.concat(sims, ignore_index=True)
+
+
 # --------------------------------------------------------------------------
 # Validation
 # --------------------------------------------------------------------------
@@ -430,13 +510,26 @@ def _gap_minutes(times):
     return np.diff(seconds) / 60.0
 
 
-def compare(real_holdout, simulated, n_days):
-    """The four numbers that decide whether the MVP passes."""
+def block_gap_minutes(times, spans):
+    """Inter-arrival gaps computed within each [start, end) span and pooled.
+    A gap across span boundaries is an artifact of the split (the intervening
+    weeks belong to the other set), not a real inter-event gap -- for the
+    simulation it spans time where the model wasn't even running."""
+    t = pd.to_datetime(times)
+    if not isinstance(t, pd.Series):
+        t = pd.Series(t)
+    gaps = [_gap_minutes(t[(t >= t0) & (t < t1)]) for t0, t1 in spans]
+    return np.concatenate(gaps) if gaps else np.array([])
+
+
+def compare(real_holdout, simulated, n_days, spans):
+    """The four numbers that decide whether the MVP passes; gap metrics are
+    pooled within holdout blocks."""
     real_corr = real_holdout.loc[real_holdout["is_correction"], "timestamp"]
     sim_corr = simulated.loc[simulated["event"] == "correction", "timestamp"]
 
-    real_gaps = _gap_minutes(real_corr)
-    sim_gaps = _gap_minutes(sim_corr)
+    real_gaps = block_gap_minutes(real_corr, spans)
+    sim_gaps = block_gap_minutes(sim_corr, spans)
 
     return pd.DataFrame({
         "metric": [
@@ -491,51 +584,47 @@ def weekly_drift_check(df):
 
 # --------------------------------------------------------------------------
 
-def run_mvp(df, train_frac=0.75, seed=0, ablate=True):
-    """End-to-end Stage A driver. `ablate=True` also refits without the
-    self-excitation features; if the short-gap tail doesn't lengthen, glucose
-    was doing all the work and the cascade terms are decorative."""
+def run_mvp(df, split=DEFAULT_SPLIT, train_frac=0.75, seed=0):
+    """End-to-end Stage A driver: split (drift-aware interleaved weeks by
+    default), fit, one quick-look block-wise simulation, comparison tables.
+    Returns the fitted pieces plus the full labeled frame and the holdout
+    blocks so downstream evaluation can re-simulate. The metric suite
+    (multi-seed replicates, ablation, holdout fit metrics, iteration
+    history) lives in `stage_a_metrics.evaluate`, which consumes this
+    result."""
     rng = np.random.default_rng(seed)
 
     validate_tick_frame(df)
-    split = int(len(df) * train_frac)
     df = label_events(df)
-    df = add_features(df, cgm_fill_value=df["cgm"].iloc[:split].median())
-    train, holdout = df.iloc[:split], df.iloc[split:]
+    mask, split_config = split_masks(df, split=split, train_frac=train_frac)
+    if not mask.any() or mask.all():
+        raise ValueError(
+            f"{split} split left train or holdout empty ({len(df)} ticks)")
+    df = add_features(df, cgm_fill_value=df.loc[~mask, "cgm"].median())
+    train, holdout = df[~mask], df[mask]
+    blocks = holdout_blocks(mask)
+    spans = block_spans(df, blocks)
 
     hazards = fit_hazards(train)
+    reduced = [f for f in FEATURES if f not in SELF_EXCITATION_FEATURES]
     marks = EmpiricalMarks(train)
     meal_bolus_p = fit_meal_bolus_rate(train)
 
-    simulated = simulate_behavior(
-        holdout, hazards, marks, meal_bolus_p, rng,
-        history=seeded_history(train), start_index=split,
-    )
+    simulated = simulate_blocks(df, blocks, hazards, marks, meal_bolus_p, rng)
     n_days = len(holdout) / TICKS_PER_DAY
 
-    result = {
+    return {
+        "frame": df,
+        "train": train,
+        "holdout": holdout,
+        "holdout_blocks": blocks,
+        "split": {**split_config, "n_holdout_blocks": len(blocks)},
         "hazards": hazards,
+        "hazards_ablated": fit_hazards(train, features=reduced),
         "marks": marks,
         "meal_bolus_p": meal_bolus_p,
         "simulated": simulated,
-        "comparison": compare(holdout, simulated, n_days),
+        "comparison": compare(holdout, simulated, n_days, spans),
         "diurnal": diurnal_profile(holdout, simulated, n_days),
         "drift": weekly_drift_check(df),
     }
-
-    if ablate:
-        reduced = [f for f in FEATURES if f not in SELF_EXCITATION_FEATURES]
-        hazards_abl = fit_hazards(train, features=reduced)
-        sim_abl = simulate_behavior(
-            holdout, hazards_abl, marks, meal_bolus_p,
-            np.random.default_rng(seed + 1),
-            history=seeded_history(train), start_index=split,
-        )
-        gaps = _gap_minutes(simulated.loc[simulated["event"] == "correction", "timestamp"])
-        gaps_abl = _gap_minutes(sim_abl.loc[sim_abl["event"] == "correction", "timestamp"])
-        result["ablation_gap_p10"] = {
-            "full": np.percentile(gaps, 10) if len(gaps) else np.nan,
-            "ablated": np.percentile(gaps_abl, 10) if len(gaps_abl) else np.nan,
-        }
-
-    return result

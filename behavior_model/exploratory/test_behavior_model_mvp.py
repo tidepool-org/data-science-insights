@@ -17,18 +17,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from behavior_model_mvp import (
     ASSOCIATION_TICKS,
+    CYCLE_WEEKS,
     EXCITATION_TICKS,
     FEATURES,
     HISTORY_CAP_MINUTES,
     MEAL_WINDOWS,
+    SELF_EXCITATION_FEATURES,
     TICK_MINUTES,
     TICKS_PER_DAY,
     CorrectionHistory,
     EmpiricalMarks,
     add_features,
+    block_gap_minutes,
+    block_spans,
     fit_meal_bolus_rate,
+    holdout_blocks,
     label_events,
     run_mvp,
+    split_masks,
     validate_tick_frame,
 )
 from build_tick_frame import build_user_frame, parse_units
@@ -315,9 +321,19 @@ def test_run_mvp_smoke():
     assert set(res["diurnal"].columns) == {
         "real_corrections", "sim_corrections", "real_carb_entries", "sim_carb_entries"}
     assert len(res["drift"]) > 10
-    assert "full" in res["ablation_gap_p10"] and "ablated" in res["ablation_gap_p10"]
     assert res["simulated"]["timestamp"].is_monotonic_increasing
     assert 0.0 < res["meal_bolus_p"] <= 1.0
+
+    # the pieces the metric suite consumes: the split itself, and an ablated
+    # hazard fit without the self-excitation features
+    assert res["split"]["type"] == "interleaved_weeks"
+    assert len(res["train"]) + len(res["holdout"]) == len(df)
+    blocks = res["holdout_blocks"]
+    assert len(blocks) >= 2, "120 synthetic days must yield several holdout weeks"
+    assert sum(e - s for s, e in blocks) == len(res["holdout"])
+    assert res["split"]["n_holdout_blocks"] == len(blocks)
+    assert set(res["hazards_ablated"]["features"]).isdisjoint(SELF_EXCITATION_FEATURES)
+    assert set(res["hazards"]["features"]) >= set(SELF_EXCITATION_FEATURES)
 
 
 def test_degenerate_training_segment():
@@ -336,11 +352,43 @@ def test_degenerate_training_segment():
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        res = run_mvp(df, seed=0, ablate=False)
+        # chronological on purpose: the scenario is "all corrections fall in
+        # the tail", which interleaving would dissolve
+        res = run_mvp(df, split="chronological", seed=0)
 
     assert res["comparison"] is not None
     assert any("did not fully converge" in str(w.message) for w in caught), \
         "expected the degenerate-fit warning"
+
+
+def test_split_masks_and_block_gaps():
+    """Interleaved-weeks assignment, block extraction, and within-block gap
+    pooling (no artificial gaps across the intervening train weeks)."""
+    df = _blank_frame(TICKS_PER_DAY * 70)  # 10 record-relative weeks
+    mask, cfg = split_masks(df)
+    assert cfg["type"] == "interleaved_weeks" and cfg["cycle_weeks"] == CYCLE_WEEKS
+
+    week = ((df["timestamp"] - df["timestamp"].iloc[0]).dt.days // 7).to_numpy()
+    assert set(week[mask]) == {3, 7}, "holdout must be the last week of each cycle"
+    assert not set(week[~mask]) & {3, 7}
+
+    blocks = holdout_blocks(mask)
+    assert len(blocks) == 2
+    assert sum(e - s for s, e in blocks) == int(mask.sum())
+
+    spans = block_spans(df, blocks)
+    t0 = df["timestamp"].iloc[blocks[0][0]]
+    t1 = df["timestamp"].iloc[blocks[1][0]]
+    # two events in block 1 (30 min apart) + one in block 2: exactly one gap;
+    # the cross-block pair must not contribute one
+    gaps = block_gap_minutes(pd.Series([t0, t0 + pd.Timedelta(minutes=30), t1]),
+                             spans)
+    assert list(gaps) == [30.0]
+
+    mask_c, cfg_c = split_masks(df, split="chronological", train_frac=0.75)
+    assert cfg_c["type"] == "chronological"
+    assert int(mask_c.sum()) == len(df) - int(len(df) * 0.75)
+    assert holdout_blocks(mask_c) == [(int(len(df) * 0.75), len(df))]
 
 
 def test_build_tick_frame_assembly():
@@ -409,6 +457,7 @@ TESTS = [
     test_meal_bolus_rate,
     test_run_mvp_smoke,
     test_degenerate_training_segment,
+    test_split_masks_and_block_gaps,
     test_build_tick_frame_assembly,
 ]
 

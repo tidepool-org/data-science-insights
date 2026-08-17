@@ -37,7 +37,10 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from behavior_model_mvp import TICK_MINUTES, run_mvp, validate_tick_frame
+from behavior_model_mvp import (DEFAULT_SPLIT, TICK_MINUTES, run_mvp,
+                                validate_tick_frame)
+from stage_a_metrics import (BASE_SEED_DEFAULT, HISTORY_FILENAME,
+                             N_SIMS_DEFAULT, append_history, evaluate)
 
 DEFAULT_DATA_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "data", "behavior_traces")
@@ -179,7 +182,8 @@ def load_streams(data_dir):
 
 
 def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
-                only_user=None, run_model=True):
+                only_user=None, run_model=True, label=None,
+                n_sims=N_SIMS_DEFAULT, split=DEFAULT_SPLIT, note=""):
     streams = load_streams(data_dir)
     results = {}
     for uid in streams["users"]["_userId"]:
@@ -202,23 +206,41 @@ def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
             results[uid] = {"frame": frame}
             continue
 
-        res = run_mvp(frame)
+        res = run_mvp(frame, split=split)
+        print(f"\n  split: {res['split']}")
         print("\n  weekly drift (inspect BEFORE trusting the time split):")
         print(res["drift"].to_string())
         print("\n  go/no-go comparison:")
         print(res["comparison"].to_string(index=False))
-        print(f"\n  meal_bolus_p = {res['meal_bolus_p']:.3f}")
-        print(f"  ablation gap p10 (min): full = {res['ablation_gap_p10']['full']:.1f}, "
-              f"ablated = {res['ablation_gap_p10']['ablated']:.1f}")
 
         user_out = os.path.join(out_dir, uid)
         os.makedirs(user_out, exist_ok=True)
+
+        print(f"\n  metric suite ({n_sims} simulation replicates):")
+        metrics = evaluate(res, n_sims=n_sims, verbose=True,
+                           replicates_path=os.path.join(user_out, "replicates.csv"))
+        print(f"\n  sim metrics: mean ± sd over {n_sims} replicates "
+              "(per-replicate values -> replicates.csv):")
+        print(metrics.to_string(index=False,
+                                float_format=lambda v: f"{v:.4g}"))
         res["comparison"].to_csv(os.path.join(user_out, "comparison.csv"), index=False)
         res["diurnal"].to_csv(os.path.join(user_out, "diurnal.csv"))
         res["drift"].to_csv(os.path.join(user_out, "drift.csv"))
         res["simulated"].to_csv(os.path.join(user_out, "simulated_events.csv"), index=False)
+        metrics.to_csv(os.path.join(user_out, "metrics.csv"), index=False)
         print(f"  outputs -> {user_out}/")
-        results[uid] = {"frame": frame, "result": res}
+
+        if label:
+            config = {"split": res["split"],
+                      "features": res["hazards"]["features"],
+                      "n_sims": n_sims, "base_seed": BASE_SEED_DEFAULT}
+            history = append_history(metrics, label, uid, config,
+                                     os.path.join(out_dir, HISTORY_FILENAME),
+                                     note=note)
+            print(f"  recorded as '{label}' in {history}")
+        results[uid] = {"frame": frame, "result": res, "metrics": metrics}
+    if label:
+        print("\nmeta-analysis: python stage_a_metrics.py --report")
     return results
 
 
@@ -229,5 +251,20 @@ if __name__ == "__main__":
     parser.add_argument("--user", default=None, help="only this (hashed) user id")
     parser.add_argument("--no-run", action="store_true",
                         help="build + validate frames only")
+    parser.add_argument("--label", default=None,
+                        help="record this run in the metrics history under "
+                             "this iteration label (omit for throwaway runs)")
+    parser.add_argument("--n-sims", type=int, default=N_SIMS_DEFAULT,
+                        help="simulation replicates per user for the metric suite")
+    parser.add_argument("--split", default=DEFAULT_SPLIT,
+                        choices=["interleaved_weeks", "chronological"],
+                        help="train/holdout split; changing it starts a new "
+                             "comparison regime in the metrics history")
+    parser.add_argument("--note", default="",
+                        help="one-line description of what this iteration "
+                             "changed; recorded with --label and shown in "
+                             "the report + dashboard")
     args = parser.parse_args()
-    run_stage_a(args.data_dir, args.out_dir, args.user, run_model=not args.no_run)
+    run_stage_a(args.data_dir, args.out_dir, args.user,
+                run_model=not args.no_run, label=args.label,
+                n_sims=args.n_sims, split=args.split, note=args.note)

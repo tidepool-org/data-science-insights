@@ -24,12 +24,11 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from behavior_model_mvp import label_events
+from behavior_model_mvp import (block_spans, holdout_blocks, label_events,
+                                split_masks)
 from build_tick_frame import DEFAULT_DATA_DIR, build_user_frame, load_streams
-from plot_traces import (BASELINE, BLUE, GRID, INK, MUT, ORANGE, SEC, SURFACE,
-                         DEFAULT_PLOT_DIR, _fig, _save, _style)
-
-TRAIN_FRAC = 0.75  # must match run_mvp's default
+from plot_traces import (BLUE, GRID, INK, MUT, ORANGE, SEC, SURFACE,
+                         DEFAULT_PLOT_DIR, _save, _style)
 
 
 def _weekly_per_day(times):
@@ -39,8 +38,8 @@ def _weekly_per_day(times):
 
 
 def plot_split(frame, simulated, out_dir):
-    split_time = frame["timestamp"].iloc[int(len(frame) * TRAIN_FRAC)]
-    end_time = frame["timestamp"].iloc[-1]
+    mask, config = split_masks(frame)
+    spans = block_spans(frame, holdout_blocks(mask))
 
     panels = [
         ("corrections", frame.loc[frame["is_correction"], "timestamp"],
@@ -53,29 +52,25 @@ def plot_split(frame, simulated, out_dir):
                              sharex=True, gridspec_kw={"hspace": 0.22})
     for ax, (name, real_times, sim_times) in zip(axes, panels):
         _style(ax)
-        ax.axvspan(split_time, end_time, color="#f0efec", zorder=0)
+        for t0, t1 in spans:
+            ax.axvspan(t0, t1, color="#f0efec", zorder=0)
         real_w = _weekly_per_day(real_times)
         sim_w = _weekly_per_day(sim_times)
         ax.plot(real_w.index, real_w, color=BLUE, linewidth=1.8)
         if len(sim_w):
-            ax.plot(sim_w.index, sim_w, color=ORANGE, linewidth=1.8)
-        ax.axvline(split_time, color=BASELINE, linewidth=1.2)
+            ax.plot(sim_w.index, sim_w, color=ORANGE, linewidth=1.8,
+                    marker="o", markersize=3, linestyle="none")
         ax.set_ylabel(f"{name} / day", color=SEC, fontsize=9)
         ax.text(1.005, real_w.iloc[-1], "real", color=BLUE, fontsize=9,
                 va="center", transform=ax.get_yaxis_transform())
         if len(sim_w):
-            ax.text(1.005, sim_w.iloc[-1], "simulated", color=ORANGE, fontsize=9,
-                    va="bottom", transform=ax.get_yaxis_transform())
+            ax.text(1.005, sim_w.dropna().iloc[-1], "simulated", color=ORANGE,
+                    fontsize=9, va="bottom", transform=ax.get_yaxis_transform())
 
-    axes[0].set_title("Stage A: train / holdout split and simulated rates",
-                      loc="left", color=INK, fontsize=11)
-    mid_train = frame["timestamp"].iloc[int(len(frame) * TRAIN_FRAC / 2)]
-    mid_hold = split_time + (end_time - split_time) / 2
-    axes[0].text(mid_train, 1.02, "train (fit)", transform=axes[0].get_xaxis_transform(),
-                 ha="center", color=MUT, fontsize=8.5)
-    axes[0].text(mid_hold, 1.02, "holdout (simulate + compare)",
-                 transform=axes[0].get_xaxis_transform(), ha="center",
-                 color=MUT, fontsize=8.5)
+    axes[0].set_title(
+        f"Stage A: {config['type']} split — shaded weeks are holdout "
+        "(simulate + compare); fit on the rest", loc="left", color=INK,
+        fontsize=11)
     _save(fig, out_dir, "06_stage_a_split.png")
 
 
@@ -112,17 +107,26 @@ def plot_holdout_trace(frame, simulated, out_dir, hours=48):
     lane, the model's generated events below. Circles = carb entries (grams),
     filled triangles = corrections (units where known), open triangles =
     meal-associated boluses."""
-    split_time = frame["timestamp"].iloc[int(len(frame) * TRAIN_FRAC)]
-    hold = frame[frame["timestamp"] >= split_time]
+    mask, _ = split_masks(frame)
+    spans = block_spans(frame, holdout_blocks(mask))
+    hold = frame[mask]
 
-    # pick a moderately busy holdout day (75th percentile of real event count)
+    # pick a moderately busy holdout day (75th percentile of real event
+    # count) whose whole window fits inside one holdout block, so the
+    # simulated lane covers it end to end
     events_per_day = (hold.loc[hold["is_carb_entry"] | hold["bolus_u"].notna(),
                                "timestamp"].dt.normalize().value_counts())
     if events_per_day.empty:
         return
-    day0 = events_per_day.index[max(0, int(len(events_per_day) * 0.25) - 1)] \
-        if len(events_per_day) > 1 else events_per_day.index[0]
-    day0 = pd.Timestamp(day0)
+    start = max(0, int(len(events_per_day) * 0.25) - 1) \
+        if len(events_per_day) > 1 else 0
+    candidates = list(events_per_day.index[start:]) + list(events_per_day.index[:start])
+    day0 = next(
+        (pd.Timestamp(d) for d in candidates
+         if any(t0 <= pd.Timestamp(d) and
+                pd.Timestamp(d) + pd.Timedelta(hours=hours) <= t1
+                for t0, t1 in spans)),
+        pd.Timestamp(candidates[0]))
     day1 = day0 + pd.Timedelta(hours=hours)
 
     w = frame[(frame["timestamp"] >= day0) & (frame["timestamp"] < day1)]

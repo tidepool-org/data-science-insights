@@ -168,14 +168,76 @@ refutation-first agents running mutations in the conda env): 9 findings, 6 confi
   (retrospective logger vs pre-logger), with reactive announcement visible in the
   latency-vs-ΔBG diagnostic.
 
+## 2026-08-17 — Metric suite + iteration history (pre-iteration harness)
+
+- Before touching the model: `stage_a_metrics.py` fixes the evaluation so every
+  iteration is scored identically and tracked for a meta-analysis. Three tiers:
+  **holdout fit metrics** (one-step-ahead, teacher-forced; per-hazard held-out NLL and
+  skill vs a train-rate constant baseline, rank AUC, calibration slope via logistic
+  recalibration, observed/predicted event-count ratio), **simulation metrics**
+  (free-running rollouts, mean ± sd over seeded replicates so deltas can be judged
+  against Monte Carlo spread; rate ratios, gap median/p10, ablation Δ gap p10, diurnal
+  total-variation distance, overnight correction share, KS mark fidelity, NaN-mark
+  fraction), and **context counts**. Deterministic at a fixed base seed. Replicate
+  testing logs the running mean ± sd of headline metrics as each replicate is added,
+  and dumps per-replicate raw values to `<user>/replicates.csv`, so Monte Carlo
+  convergence (is `n_sims` enough?) is checkable per metric.
+- `run_mvp` now returns the split (train/holdout frames + config) and an ablated hazard
+  fit for the harness to consume; the old single-seed in-driver ablation is gone
+  (superseded by the replicated ablation metric). `build_tick_frame.py --label <name>`
+  records a run into `outputs/behavior_traces/metrics_history.csv` (long format, one
+  row per label×user×metric, with git commit + config JSON; re-recording a label
+  replaces it); `stage_a_metrics.py --report` renders per-user metric×iteration tables
+  and a 12-panel meta figure (`outputs/behavior_traces/meta/`), plus a self-contained
+  HTML dashboard (`stage_a_dashboard.py` → `meta/dashboard.html`: tiered metric table
+  for a selected run + interactive per-metric charts across iterations with ±sd bars,
+  acceptance bands, and real-holdout references; inline data/JS, opens from file://,
+  local-only per the numbers-stay-with-the-data policy). Split config is printed per
+  run because cross-iteration comparisons are like-for-like only within a split regime
+  — the planned drift-aware split starts a new comparison regime.
+- Baseline recorded as `it00_baseline` (naive 75/25 chronological split, both users).
+  New direct-call suite `test_stage_a_metrics.py` (5 tests: metric math on known cases,
+  calibration-slope recovery, evaluate smoke + reproducibility, history
+  append/replace + report round-trip); both suites green.
+
+## 2026-08-17 — it01: drift-aware interleaved-weeks split (new default)
+
+- `split_masks` in `behavior_model_mvp.py`: record-relative weeks assigned in a
+  repeating 4-week cycle, 3 train : 1 holdout (`interleaved_weeks`, now the `run_mvp`
+  default; `chronological` kept behind `--split` for regime comparisons and the
+  degenerate-case test). Rationale: both sets sample every behavioral era, so the
+  engagement drift hits them equally and rate comparisons test the model rather than
+  the user's non-stationarity. Interpolation test by design — not reported as
+  forecasting.
+- Mechanics that follow from a non-contiguous holdout: `simulate_blocks` rolls each
+  holdout block out separately, seeded with the user's real history up to the block
+  start (`seeded_history` now takes the full frame + an `upto` position);
+  `block_gap_minutes` pools inter-arrival gaps within blocks (cross-block gaps are
+  split artifacts — for the sim they span time where the model wasn't running);
+  `label_events` computes `bolus_nearby` on the full contiguous frame so
+  `fit_meal_bolus_rate` has no rolling-window seam artifacts on the interleaved train
+  set. `run_mvp` now returns the full labeled frame + holdout blocks; the split config
+  (type, train_frac, cycle, block count) rides into the metrics history.
+- Iteration notes: `--note "<what changed>"` is recorded with every `--label` run and
+  surfaces in the report listing and the dashboard (selected-run header + a new
+  iteration-log table). Baseline's note backfilled.
+- `plot_stage_a` follows the split module: holdout weeks shaded in the split plot
+  (simulated rates drawn as per-week points, since a connected line across train weeks
+  would be misleading), and the holdout-trace window is chosen to fit inside a single
+  holdout block.
+- Recorded as `it01_interleaved_weeks` (both users, 20 replicates). New comparison
+  regime vs `it00_baseline` — the holdout itself changed. Qualitative outcome in the
+  data-adjacent results writeup; suites 11/11 + 5/5.
+
 ## Pending / In Progress
 
-- Stage A iteration, in order: (1) drift-aware split in `run_mvp` (interleaved weeks or
-  stable segment); (2) bolus-based excitation features (`mins_since_bolus` /
-  `n_boluses_2h` — no label arbitration, no visibility lag); (3) IOB decision for
-  HK-path uploaders (feature drop + missing indicator vs DD-density selection gate vs
-  derive-with-caveat — owner call, each deviates from §6 somewhere); (4) second
-  time-of-day harmonic for night suppression; (5) replicate on a third user (P3).
+- Stage A iteration, in order — each recorded via `build_tick_frame.py --label itNN_…
+  --note "…"` and compared in `stage_a_metrics.py --report`: (1) bolus-based
+  excitation features (`mins_since_bolus` / `n_boluses_2h` — no label arbitration, no
+  visibility lag); (2) IOB decision for HK-path uploaders (feature drop + missing
+  indicator vs DD-density selection gate vs derive-with-caveat — owner call, each
+  deviates from §6 somewhere); (3) second time-of-day harmonic for night suppression;
+  (4) replicate on a third user (P3).
 - Handoff §9 open questions: intended use; which curated cohort (engagement-screening
   bias?); does the physiology simulator support mid-run event injection (Stage B gate).
 - Later: promote the four raw-BDDP extractions (entry-clock carbs, classified boluses,
