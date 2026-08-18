@@ -28,9 +28,12 @@ Assembly conventions:
 """
 
 import argparse
+import io
 import json
 import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import redirect_stdout
 
 import numpy as np
 import pandas as pd
@@ -47,6 +50,7 @@ DEFAULT_DATA_DIR = os.path.join(
 DEFAULT_OUT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "outputs", "behavior_traces")
 TICK = f"{TICK_MINUTES}min"
+JOBS_RESERVED_CORES = 2   # --jobs default: cores minus this, capped below
 
 
 def parse_units(raw):
@@ -181,19 +185,13 @@ def load_streams(data_dir):
     return streams
 
 
-def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
-                only_user=None, run_model=True, label=None,
-                n_sims=N_SIMS_DEFAULT, split=DEFAULT_SPLIT, note=""):
-    streams = load_streams(data_dir)
-    results = {}
-    for uid in streams["users"]["_userId"]:
-        if only_user and uid != only_user:
-            continue
+def _user_report(uid, per_user, out_dir, run_model, n_sims, split, sim_jobs=1):
+    """Build/validate/run/score one user; writes the per-user outputs.
+    Returns (metrics_df|None, config|None, captured_log) -- stdout is
+    captured so parallel workers' logs print atomically, in one block."""
+    buf = io.StringIO()
+    with redirect_stdout(buf):
         print(f"\n=== {uid} ===")
-        per_user = {
-            name: df[df["_userId"] == uid]
-            for name, df in streams.items() if name != "users"
-        }
         frame = build_user_frame(
             per_user["cgm"], per_user["carbs"], per_user["boluses"], per_user["dosing"])
         validate_tick_frame(frame)
@@ -203,8 +201,7 @@ def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
               f"iob coverage {frame['iob'].notna().mean():.1%}")
 
         if not run_model:
-            results[uid] = {"frame": frame}
-            continue
+            return None, None, buf.getvalue()
 
         res = run_mvp(frame, split=split)
         print(f"\n  split: {res['split']}")
@@ -216,8 +213,9 @@ def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
         user_out = os.path.join(out_dir, uid)
         os.makedirs(user_out, exist_ok=True)
 
-        print(f"\n  metric suite ({n_sims} simulation replicates):")
-        metrics = evaluate(res, n_sims=n_sims, verbose=True,
+        print(f"\n  metric suite ({n_sims} simulation replicates"
+              + (f", {sim_jobs} processes" if sim_jobs > 1 else "") + "):")
+        metrics = evaluate(res, n_sims=n_sims, verbose=True, n_jobs=sim_jobs,
                            replicates_path=os.path.join(user_out, "replicates.csv"))
         print(f"\n  sim metrics: mean ± sd over {n_sims} replicates "
               "(per-replicate values -> replicates.csv):")
@@ -230,17 +228,77 @@ def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
         metrics.to_csv(os.path.join(user_out, "metrics.csv"), index=False)
         print(f"  outputs -> {user_out}/")
 
-        if label:
-            config = {"split": res["split"],
-                      "features": res["hazards"]["features"],
-                      "n_sims": n_sims, "base_seed": BASE_SEED_DEFAULT}
-            history = append_history(metrics, label, uid, config,
-                                     os.path.join(out_dir, HISTORY_FILENAME),
-                                     note=note)
-            print(f"  recorded as '{label}' in {history}")
-        results[uid] = {"frame": frame, "result": res, "metrics": metrics}
-    if label:
-        print("\nmeta-analysis: python stage_a_metrics.py --report")
+        config = {"split": res["split"],
+                  "features": res["hazards"]["features"],
+                  "n_sims": n_sims, "base_seed": BASE_SEED_DEFAULT}
+    return metrics, config, buf.getvalue()
+
+
+def default_jobs():
+    return max(1, (os.cpu_count() or 1) - JOBS_RESERVED_CORES)
+
+
+def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
+                only_user=None, run_model=True, label=None,
+                n_sims=N_SIMS_DEFAULT, split=DEFAULT_SPLIT, note="",
+                jobs=None):
+    """Two-level parallelism against a total process budget `jobs`
+    (None -> cores minus JOBS_RESERVED_CORES): users fan out across
+    processes (the natural grain -- saturates any machine once the cohort
+    is at least the core count), and when cores exceed users the leftover
+    budget goes to replicate-level workers inside each user's evaluate
+    (jobs // n_users each). Each worker writes its own per-user outputs;
+    the history file has a single writer (the parent), appended in
+    users.csv order so row order is deterministic regardless of completion
+    order. Seeds are per-replicate, so `jobs` never affects a recorded
+    number."""
+    streams = load_streams(data_dir)
+    uids = [u for u in streams["users"]["_userId"]
+            if not only_user or u == only_user]
+    per_user = {
+        uid: {name: df[df["_userId"] == uid]
+              for name, df in streams.items() if name != "users"}
+        for uid in uids
+    }
+    if jobs is None:
+        jobs = default_jobs()
+    user_workers = max(1, min(jobs, len(uids)))
+    sim_jobs = max(1, jobs // max(1, len(uids)))
+
+    results = {}
+    if user_workers == 1:
+        for uid in uids:
+            metrics, config, log = _user_report(
+                uid, per_user[uid], out_dir, run_model, n_sims, split,
+                sim_jobs=sim_jobs)
+            print(log, end="")
+            results[uid] = {"metrics": metrics, "config": config}
+    else:
+        print(f"running {len(uids)} user(s) across {user_workers} processes"
+              + (f" x {sim_jobs} replicate workers" if sim_jobs > 1 else ""))
+        with ProcessPoolExecutor(max_workers=user_workers) as pool:
+            futures = {
+                pool.submit(_user_report, uid, per_user[uid], out_dir,
+                            run_model, n_sims, split, sim_jobs): uid
+                for uid in uids
+            }
+            for fut in as_completed(futures):
+                uid = futures[fut]
+                try:
+                    metrics, config, log = fut.result()
+                except Exception:
+                    print(f"\n=== {uid} === FAILED")
+                    raise
+                print(log, end="")
+                results[uid] = {"metrics": metrics, "config": config}
+
+    if label and run_model:
+        history_path = os.path.join(out_dir, HISTORY_FILENAME)
+        for uid in uids:  # stable order, single writer
+            append_history(results[uid]["metrics"], label, uid,
+                           results[uid]["config"], history_path, note=note)
+        print(f"\nrecorded {len(uids)} user(s) as '{label}' in {history_path}")
+        print("meta-analysis: python stage_a_metrics.py --report")
     return results
 
 
@@ -264,7 +322,13 @@ if __name__ == "__main__":
                         help="one-line description of what this iteration "
                              "changed; recorded with --label and shown in "
                              "the report + dashboard")
+    parser.add_argument("--jobs", type=int, default=None,
+                        help="total process budget (default: cores minus "
+                             f"{JOBS_RESERVED_CORES}); split across users, "
+                             "leftover goes to per-replicate workers; "
+                             "results are identical at any value")
     args = parser.parse_args()
     run_stage_a(args.data_dir, args.out_dir, args.user,
                 run_model=not args.no_run, label=args.label,
-                n_sims=args.n_sims, split=args.split, note=args.note)
+                n_sims=args.n_sims, split=args.split, note=args.note,
+                jobs=args.jobs)

@@ -1,26 +1,33 @@
 # behavior_model — Architecture
 
-## Current state (as of 2026-08-17)
+## Current state (as of 2026-08-18)
 
-**Stage A has run end-to-end on two real users** (~250k ticks each), and a **metric
-suite + iteration history** (`exploratory/stage_a_metrics.py`) now scores every run on
-a fixed set of metrics so model iterations are compared in a meta-analysis rather than
-anecdotally. Full numbers + verdicts in the (git-ignored, data-adjacent) results
-writeup `exploratory/outputs/behavior_traces/stage_a_results.md`; qualitative summary
-in `project_docs/project_history.md`. Suites 10/10 + 5/5 on synthetic data. P0
-resolved: modern Loop food payloads carry the entry clock
+**Stage A runs on the 20-user cohort** (top-20 span-ranked candidates; the first two
+users keep their pseudonymous ids from the 2-user era), scored by a **metric suite +
+iteration history** (`exploratory/stage_a_metrics.py`) so model iterations are
+compared in a meta-analysis rather than anecdotally. Full numbers + verdicts live in
+the git-ignored outputs (`metrics_history.csv`, `meta/dashboard.html`, per-user
+dirs); qualitative summaries in `project_docs/project_history.md`. Suites 11/11 +
+6/6 on synthetic data. P0 resolved: modern Loop food payloads carry the entry clock
 (`com.loopkit.CarbKit.HKMetadataKey.UserCreatedDate`); user selection targets records
-where every entry carries it, so no timestamp fallbacks are needed.
+where every entry carries it, so no timestamp fallbacks are needed. Cohort-level
+standing facts: the carb-entry hazard replicates across users; corrections are
+systematically under-produced (a covariate problem, per the surrogate floors — not
+base rate); the **whole cohort is HK-path** (per-tick IOB coverage ~0–10%), so the
+IOB decision blocks correction-hazard work.
 
 **Iteration protocol**: `build_tick_frame.py --label <iteration-name> --note "<what
 changed>"` records the run (per user) into `outputs/behavior_traces/metrics_history.csv`;
 `stage_a_metrics.py --report` renders metric×iteration tables, the meta figure, and a
-self-contained HTML dashboard (`meta/dashboard.html` — full metric table for a
-selected run + interactive per-metric charts across iterations; local file only, per
-the numbers-stay-with-the-data policy). Every iteration carries a free-text note
-(shown in the report and the dashboard's iteration log). Recorded so far:
-`it00_baseline` (naive 75/25 chronological split) and `it01_interleaved_weeks`
-(drift-aware split — a **new comparison regime**, since the holdout itself changed).
+self-contained HTML dashboard (`meta/dashboard.html` — tiered metric table for a
+selected run with hover explanations for every metric, across-iterations charts, and
+the iteration log; local file only, per the numbers-stay-with-the-data policy). The
+meta views are **two columns — correction hazard left, carb-entry hazard right — one
+metric family per row** (`KEY_METRIC_PAIRS`; membership is structurally paired), with
+real-holdout references and labeled surrogate floors drawn in the panels. Recorded so
+far: `it00_baseline` (naive 75/25 chronological), `it01_interleaved_weeks`
+(drift-aware split — a **new comparison regime**, the holdout changed), and
+`it02_users20` (20-user cohort, doubles as P3 replication; same regime as it01).
 
 **Drift-aware split (default since 2026-08-17)**: `split_masks` assigns
 record-relative weeks in a repeating 4-week cycle, 3 train : 1 holdout
@@ -32,11 +39,33 @@ block** (`simulate_blocks`), each block seeded with the user's real history up t
 the block start; gap metrics pool within blocks (`block_gap_minutes`) because
 cross-block gaps are split artifacts.
 
-**Next**: (1) decide the excitation-feature redesign — real cascade gaps sit below
-the 20-min visibility floor; bolus-based features (`mins_since_bolus`) avoid the
-label-arbitration lag entirely; (2) decide how to handle structurally missing
-per-tick IOB for HK-path uploaders; (3) second time-of-day harmonic; then P3 third
-user.
+**Cohort (landed 2026-08-17)**: `export_behavior_traces.py` defaults to the **top
+20** span-ranked candidates (the persisted pool holds up to `MAX_CANDIDATES=50`
+passing the gates; same pseudonymization salt, so ids are stable across exports).
+Re-export flow: run it on Databricks, download the five CSVs to
+`data/behavior_traces/`, validate with `build_tick_frame.py --no-run`, record with
+`--label`. The meta figure and dashboard scale past the 3-hue palette: >3 users
+switches to muted per-user lines + an emphasized cross-user median, identity via
+dashboard hover and the per-user tables.
+
+**Parallel driver (2026-08-17)**: `build_tick_frame.py --jobs N` sets a total
+process budget (default cores − 2). Users fan out across processes — the natural
+grain, saturating any machine once the cohort reaches the core count (P4's ~200
+users on a 96-core box) — and when cores exceed users the leftover budget goes to
+replicate-level workers inside each user's `evaluate` (`n_jobs = jobs // n_users`).
+Per-replicate seeds hang off the replicate index, so **`--jobs` never changes a
+recorded number** (tested). Worker logs are captured and printed atomically per
+user; the metrics history keeps a single writer (the parent), appended in
+users.csv order.
+
+**Next** (each recorded as `it03+` with `--label`/`--note` and judged against the
+`it01`/`it02` regime): (1) the IOB decision for HK-path uploaders — now blocking,
+since the whole cohort is HK-path; (2) bolus-based excitation features
+(`mins_since_bolus` — real cascade gaps sit below the 20-min visibility floor, so
+the current correction-history features can't express them); (3) richer clock
+(second harmonic or finer basis) — directly motivated by the diurnal surrogate
+beating the model on timing shape for both hazards. P3 replication is satisfied by
+the 20-user cohort.
 
 ## What this is
 
@@ -120,11 +149,20 @@ behavior_model/
   `stage_a_metrics.evaluate`, which consumes the `run_mvp` result (it exposes
   train/holdout, the split config, and an ablated hazard fit for this purpose). Three
   metric tiers: **holdout fit** (one-step-ahead, teacher-forced — per-hazard held-out
-  NLL + skill vs a train-rate baseline, rank AUC, calibration slope, observed/predicted
+  NLL + skill vs TWO baselines: the train-rate constant (a fitted binomial) and the
+  train hour-of-day rate — skill vs the latter tracks what glucose/IOB/excitation add
+  beyond the habit clock; plus rank AUC, calibration slope, observed/predicted
   ratio), **simulation** (free-running, mean ± sd over seeded replicates — rate ratios,
-  gap median/p10, ablation Δ gap p10, diurnal total-variation distance, overnight
-  correction share, KS mark fidelity, NaN-mark fraction), and **context** (counts, days,
-  `meal_bolus_p`). During evaluation the running mean ± sd of headline sim metrics is
+  gap median/p10 and ablation Δ gap p10 for BOTH hazards, diurnal total-variation
+  distance, overnight shares for both hazards, KS mark fidelity, NaN-mark fraction),
+  and **context** (counts, days, `meal_bolus_p`). Every metric carries a
+  plain-language explanation (`metric_description`, surfaced as dashboard hover
+  tooltips; the smoke test fails on an undocumented metric). The simulation tier also scores two **surrogate reference
+  generators** on the same holdout ticks — iid Bernoulli at the train rate
+  (`surr_const_*`) and at the train hour-of-day rate (`surr_diurnal_*`) — rate-matched
+  floors that locate where the model earns its keep (rate calibration vs habit clock vs
+  physiology response); they draw from their own seed streams, so adding them changed
+  no recorded model number. During evaluation the running mean ± sd of headline sim metrics is
   printed as each replicate lands, and every replicate's raw values are saved per user
   (`replicates.csv`) so Monte Carlo convergence of any metric can be checked (is
   `n_sims` enough?). Same result + same base seed ⇒ identical output. History rows carry

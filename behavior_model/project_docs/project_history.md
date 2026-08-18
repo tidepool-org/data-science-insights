@@ -229,15 +229,94 @@ refutation-first agents running mutations in the conda env): 9 findings, 6 confi
   regime vs `it00_baseline` — the holdout itself changed. Qualitative outcome in the
   data-adjacent results writeup; suites 11/11 + 5/5.
 
+## 2026-08-17 — Cohort expansion to the top-20 candidates (prepared)
+
+- `export_behavior_traces.py` default bumped `N_EXPORT_USERS` 2 → 20 (top of the
+  span-ranked candidate pool persisted by `export_trace_candidates.py`, which holds up
+  to 50 users passing the gates); the export now prints the full candidate table.
+  Pseudonymization salt unchanged, so the first two users keep their ids and their
+  metric history connects across iteration labels.
+- Meta views scale past the 3-hue palette: >3 users switches the PNG figure and the
+  dashboard to muted per-user lines with an emphasized cross-user median (hues never
+  cycled; per-user identity via dashboard hover and the per-user tables). New
+  `test_many_user_report` covers the path; suites 11/11 + 6/6.
+- **Landed same day**: owner ran the export and downloaded the five CSVs (previous
+  2-user snapshot kept at `data/behavior_traces/prev_2user/`). All 20 frames passed
+  validation (long records, high CGM coverage, entry-clock drops ≲1%). Recorded as
+  `it02_users20` (same model + interleaved split as it01; the two original users
+  reproduced their it01 metrics exactly, confirming cross-run determinism).
+  Cohort-level reading (numbers in the data-adjacent writeup/dashboard): the
+  carb-entry hazard replicates across all 20 users (rate ratios tight around 1);
+  corrections are systematically **under-produced** for most of the cohort — the
+  it01 finding generalizes, pointing at the correction hazard (IOB gap + excitation
+  redesign) as the next target. **Whole cohort is HK-path** (per-tick IOB coverage
+  ~0–10%), so the IOB decision now blocks the correction-hazard work outright.
+
+## 2026-08-17 — Two-level parallel driver
+
+- The Stage A pipeline was single-core; now `build_tick_frame.py --jobs N` (default
+  cores − 2) fans users out across processes and, when cores exceed users, gives the
+  leftover budget to replicate-level workers inside `evaluate` (`n_jobs`), so the same
+  command saturates a laptop today and a 96-core box at P4 scale (~200 users) without
+  changes. Replicate seeds hang off the replicate index alone, so parallelism is
+  bit-identical to sequential (regression-tested); worker stdout is captured and
+  printed atomically per user, and the metrics history keeps a single writer with
+  deterministic row order. `evaluate`'s convergence log now prints as replicates
+  complete (out-of-order safe).
+
+## 2026-08-17 — Surrogate reference ladder in the metric suite
+
+- Two rate-matched Bernoulli surrogates now score alongside every run's simulation
+  metrics, on the same holdout ticks and block spans: `surr_const_*` (iid at the train
+  event rate — the "fitted binomial" floor) and `surr_diurnal_*` (iid at the train
+  hour-of-day rate — the habit-clock null). Each reports rate ratios, correction gap
+  p10/median, diurnal TV, and overnight share, with replicate sd. The point: the
+  ladder constant → diurnal → model separates rate calibration from habit-clock
+  structure from physiology response, so a model win is attributable.
+- Fit tier gains `*_nll_skill_diurnal` — model skill vs the train hourly-rate
+  baseline (the one-step analog of the diurnal surrogate); tracked as a key panel for
+  corrections, where it measures exactly what the glucose/IOB/excitation features buy.
+  Note the hourly baseline is NOT always harder than the constant (hour-bin noise can
+  make it worse out-of-sample) — the smoke test asserts the direction only for the
+  strongly-diurnal carb process.
+- Surrogates draw from their own seed streams (`[base_seed, k, 2+]`), so re-recording
+  `it02_users20` added the new rows while reproducing every existing model metric
+  bit-for-bit (verified). Suites 11/11 + 6/6.
+- The floors are drawn, not just tabulated: rate-ratio and gap-p10 panels carry the
+  labeled "binomial" dash-dot reference, and both diurnal-TV panels carry "binomial" +
+  "clock" (cross-user median), in the meta figure and the dashboard alike — so
+  model-vs-floor separation is read off the charts directly.
+- Every metric is self-documenting in the dashboard: hovering a metric name in the run
+  table or a panel title shows a plain-language explanation (what it measures, how to
+  read it, which floor/reference applies). Descriptions live beside the metric
+  definitions in `stage_a_metrics.py` (`metric_description`), and the smoke test fails
+  if a new metric ships without one.
+
+## 2026-08-18 — Symmetric per-hazard metric pairs; two-column meta view
+
+- The suite is now symmetric across the two hazards: carb-entry analogs added for the
+  correction-only metrics — gap median/p10 (real + sim + `surr_*_carb_gap_p10_min`
+  binomial floor), overnight share (real + sim), and the ablation delta
+  (`ablation_carb_gap_p10_delta_min` — meaningful because the correction-history
+  features feed BOTH hazards, so it tests correction→carb coupling, e.g. rescue
+  carbs). No new RNG draws: re-recording `it02_users20` reproduced every existing row
+  bit-for-bit while adding the new ones.
+- Meta views (figure + dashboard) restructured to `KEY_METRIC_PAIRS`: two columns —
+  correction hazard left, carb-entry hazard right — one metric family per row, larger
+  panels, column headers. Panel membership is now structurally paired, so a metric
+  family can't ship for one hazard only.
+
 ## Pending / In Progress
 
 - Stage A iteration, in order — each recorded via `build_tick_frame.py --label itNN_…
-  --note "…"` and compared in `stage_a_metrics.py --report`: (1) bolus-based
-  excitation features (`mins_since_bolus` / `n_boluses_2h` — no label arbitration, no
-  visibility lag); (2) IOB decision for HK-path uploaders (feature drop + missing
-  indicator vs DD-density selection gate vs derive-with-caveat — owner call, each
-  deviates from §6 somewhere); (3) second time-of-day harmonic for night suppression;
-  (4) replicate on a third user (P3).
+  --note "…"` and compared in `stage_a_metrics.py --report` against the it01/it02
+  regime: (1) IOB decision for HK-path uploaders (feature drop + missing indicator vs
+  DD-density selection gate vs derive-with-caveat — owner call, each deviates from §6
+  somewhere; now blocking, the whole cohort is HK-path); (2) bolus-based excitation
+  features (`mins_since_bolus` / `n_boluses_2h` — no label arbitration, no visibility
+  lag); (3) richer clock (second harmonic or finer basis — the diurnal surrogate
+  currently beats the model on timing shape for both hazards). P3 replication is
+  satisfied by the 20-user cohort (`it02_users20`).
 - Handoff §9 open questions: intended use; which curated cohort (engagement-screening
   bias?); does the physiology simulator support mid-run event injection (Stage B gate).
 - Later: promote the four raw-BDDP extractions (entry-clock carbs, classified boluses,

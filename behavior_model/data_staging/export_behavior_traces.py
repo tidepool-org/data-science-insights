@@ -44,7 +44,8 @@ OUTPUT_DIR = (
 USERID_SALT = "behavior-model-v1"
 ENTRY_CLOCK_KEY = "com.loopkit.CarbKit.HKMetadataKey.UserCreatedDate"
 
-N_EXPORT_USERS = 2
+N_EXPORT_USERS = 20           # cohort expansion (2026-08-17): top of the
+                              # span-ranked candidate pool; first export was 2
 OVERRIDE_USER_IDS = []        # raw _userIds; set to skip the top-N pick
 
 def _hash_expr(alias):
@@ -64,9 +65,9 @@ def run(spark, output_dir=OUTPUT_DIR, n_users=N_EXPORT_USERS):
             f"could not read {CANDIDATES_TABLE} -- run "
             "export_trace_candidates.py first"
         ) from exc
-    print(f"Candidates from {CANDIDATES_TABLE} "
+    print(f"{len(candidates)} candidate(s) in {CANDIDATES_TABLE} "
           "(raw ids stay on Databricks; CSVs are pseudonymized):")
-    print(candidates.head(15).to_string(index=False))
+    print(candidates.to_string(index=False))
 
     if OVERRIDE_USER_IDS:
         picked = candidates[candidates["_userId"].isin(OVERRIDE_USER_IDS)]

@@ -26,6 +26,7 @@ from stage_a_metrics import (
     _overnight_share,
     append_history,
     evaluate,
+    metric_description,
     report,
 )
 from test_behavior_model_mvp import make_synthetic
@@ -85,15 +86,20 @@ def test_evaluate_smoke():
     m = evaluate(res, n_sims=3, base_seed=7).set_index("metric")
 
     assert m.index.is_unique
+    undocumented = [name for name in m.index if not metric_description(name)]
+    assert not undocumented, f"metrics missing descriptions: {undocumented}"
     for name in [
         "train_days", "holdout_days", "n_holdout_corrections", "meal_bolus_p",
         "corr_per_day_real", "corr_gap_p10_real_min", "overnight_corr_share_real",
         "corr_holdout_nll", "corr_nll_skill", "corr_auc", "corr_cal_slope",
         "corr_obs_pred_ratio", "carb_nll_skill", "carb_auc",
         "corr_per_day_sim", "corr_rate_ratio", "carb_rate_ratio",
-        "corr_gap_p10_sim_min", "ablation_gap_p10_delta_min",
+        "corr_gap_p10_sim_min", "carb_gap_p10_sim_min",
+        "carb_gap_p10_real_min", "ablation_gap_p10_delta_min",
+        "ablation_carb_gap_p10_delta_min",
         "diurnal_tv_corrections", "diurnal_tv_carb_entries",
-        "overnight_corr_share_sim", "ks_carb_grams", "ks_corr_units",
+        "overnight_corr_share_sim", "overnight_carb_share_sim",
+        "overnight_carb_share_real", "ks_carb_grams", "ks_corr_units",
         "nan_corr_mark_frac",
     ]:
         assert name in m.index, f"missing metric: {name}"
@@ -108,6 +114,25 @@ def test_evaluate_smoke():
     # data whose generator is feature-driven
     assert m.loc["corr_nll_skill", "value"] > 0
     assert m.loc["carb_nll_skill", "value"] > 0
+    # ... and corrections must beat the diurnal baseline too (their synthetic
+    # signal is glucose/excitation, not the clock). For CARB entries the
+    # generator is strongly diurnal, so the hourly baseline must be markedly
+    # harder to beat than the constant one -- no sign assertion there (a
+    # 24-bin baseline can legitimately beat the model's 2-harmonic clock).
+    assert m.loc["corr_nll_skill_diurnal", "value"] > 0
+    assert m.loc["carb_nll_skill_diurnal", "value"] < \
+        m.loc["carb_nll_skill", "value"], \
+        "hourly baseline should be harder than constant for diurnal carbs"
+
+    # surrogate references: rate-matched by construction (loose band under
+    # the interleaved split), and the diurnal surrogate must match the real
+    # diurnal shape better than the constant one
+    for kind in ("const", "diurnal"):
+        assert 0.6 < m.loc[f"surr_{kind}_corr_rate_ratio", "value"] < 1.6
+        assert m.loc[f"surr_{kind}_corr_gap_p10_min", "value"] > 0
+    assert m.loc["surr_diurnal_diurnal_tv_carb_entries", "value"] < \
+        m.loc["surr_const_diurnal_tv_carb_entries", "value"], \
+        "hour-of-day surrogate should beat constant on diurnal shape"
     assert m.loc["corr_auc", "value"] > 0.55
     assert m.loc["carb_auc", "value"] > 0.55
     for ratio in ("corr_rate_ratio", "carb_rate_ratio", "corr_obs_pred_ratio"):
@@ -129,6 +154,13 @@ def test_evaluate_smoke():
         assert "corr_rate_ratio" in rep.columns
         assert np.isclose(rep["corr_per_day_sim"].mean(),
                           m.loc["corr_per_day_sim", "value"])
+
+        # replicate-level parallelism must be bit-identical to sequential:
+        # seeds hang off the replicate index, not the execution order
+        m3 = evaluate(res, n_sims=3, base_seed=7, n_jobs=2).set_index("metric")
+        assert np.allclose(m["value"], m3["value"], equal_nan=True) and \
+            np.allclose(m["sd"], m3["sd"], equal_nan=True), \
+            "n_jobs changed evaluate output"
     finally:
         shutil.rmtree(tmp)
 
@@ -175,8 +207,42 @@ def test_history_roundtrip():
             html = f.read()
         assert "corr_rate_ratio" in html and "it01_change" in html
         assert "what changed in it01" in html, "iteration note missing from dashboard"
+        assert "memoryless" in html, \
+            "metric descriptions missing from dashboard payload"
         assert "NaN" not in html.split("const DATA = ")[1].split(";\n")[0], \
             "NaN leaked into the dashboard JSON payload"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_many_user_report():
+    """Past the 3-hue palette the report/dashboard must switch to the
+    muted-lines + median mode, not raise or cycle hues."""
+    tmp = tempfile.mkdtemp()
+    try:
+        hist_path = os.path.join(tmp, "metrics_history.csv")
+        rng = np.random.default_rng(0)
+        config = {"split": {"type": "interleaved_weeks", "train_frac": 0.75}}
+        for label in ("it00", "it01"):
+            for u in range(6):
+                # includes a surrogate metric so the floor-drawing path in
+                # both the PNG and the dashboard is exercised
+                m = pd.DataFrame({
+                    "metric": ["corr_rate_ratio", "corr_gap_p10_real_min",
+                               "corr_gap_p10_sim_min",
+                               "surr_const_corr_rate_ratio"],
+                    "value": rng.uniform(0.5, 1.5, 4),
+                    "sd": [0.05, np.nan, 0.4, 0.03],
+                })
+                append_history(m, label, f"u{u:02d}", config, hist_path,
+                               note=f"{label} note")
+
+        meta_dir = os.path.join(tmp, "meta")
+        report(hist_path, meta_dir)
+        assert os.path.exists(os.path.join(meta_dir, "meta_metrics.png"))
+        tables = [f for f in os.listdir(meta_dir) if f.startswith("meta_table_")]
+        assert len(tables) == 6
+        assert os.path.exists(os.path.join(meta_dir, "dashboard.html"))
     finally:
         shutil.rmtree(tmp)
 
@@ -187,6 +253,7 @@ TESTS = [
     test_diurnal_tv_and_shares,
     test_evaluate_smoke,
     test_history_roundtrip,
+    test_many_user_report,
 ]
 
 

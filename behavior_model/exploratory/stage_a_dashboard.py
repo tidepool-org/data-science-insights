@@ -24,8 +24,9 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stage_a_metrics import (DEFAULT_HISTORY, DEFAULT_META_DIR,
-                             FIT_METRIC_SUFFIXES, KEY_METRICS, REFERENCE,
-                             SIM_METRICS, _run_order)
+                             FIT_METRIC_SUFFIXES, KEY_METRIC_PAIRS,
+                             PAIR_COLUMN_HEADS, REFERENCE, SIM_METRICS,
+                             _run_order, metric_description)
 
 DASHBOARD_FILENAME = "dashboard.html"
 USER_COLORS = ["#2a78d6", "#eb6834", "#1baf7a"]  # categorical slots 1-3
@@ -63,8 +64,10 @@ def _payload(hist):
         "users": sorted(hist["user"].unique()),
         "metric_order": metric_order,
         "tiers": {m: _tier(m) for m in metric_order},
+        "descriptions": {m: metric_description(m) for m in metric_order},
         "rows": rows.to_dict("records"),
-        "key_metrics": [list(km) for km in KEY_METRICS],
+        "key_metric_pairs": KEY_METRIC_PAIRS,
+        "pair_column_heads": list(PAIR_COLUMN_HEADS),
         "reference": REFERENCE,
         "user_colors": USER_COLORS,
     }
@@ -121,14 +124,23 @@ _TEMPLATE = r"""<!doctype html>
            border-bottom: 1px solid var(--grid); }
   th { color: var(--sec); font-weight: 600; }
   td:first-child, th:first-child { text-align: left; }
-  td.metric { color: var(--sec); }
+  td.metric { color: var(--sec); cursor: help;
+              text-decoration: underline dotted var(--baseline);
+              text-underline-offset: 3px; }
   tr.tier td { background: var(--band); color: var(--mut); font-size: 11.5px;
                text-transform: uppercase; letter-spacing: 0.06em;
                text-align: left; }
-  .panels { display: flex; flex-wrap: wrap; gap: 18px; }
+  .panels { display: grid; grid-template-columns: repeat(2, max-content);
+            gap: 18px; overflow-x: auto; }
+  .colhead { color: var(--sec); font-size: 13px; font-weight: 650;
+             text-transform: uppercase; letter-spacing: 0.06em;
+             padding-left: 12px; }
   .panel { background: var(--surface); border: 1px solid var(--grid);
            border-radius: 8px; padding: 10px 14px 2px; }
-  .panel .ptitle { color: var(--sec); font-size: 12.5px; margin: 0 0 2px 10px; }
+  .panel .ptitle { color: var(--sec); font-size: 12.5px; margin: 0 0 2px 10px;
+                   cursor: help; display: inline-block;
+                   text-decoration: underline dotted var(--baseline);
+                   text-underline-offset: 3px; }
   .panel svg { overflow: visible; }  /* rotated x labels may exceed the box */
   #tooltip { position: fixed; display: none; pointer-events: none;
              background: var(--ink); color: #fcfcfb; font-size: 12px;
@@ -154,7 +166,8 @@ _TEMPLATE = r"""<!doctype html>
 
 <h2>Metrics across iterations <span style="color:var(--mut);font-weight:400;
   font-size:12px">(bars: ±sd over simulation replicates; dotted: real holdout
-  reference; shaded: acceptance band)</span></h2>
+  reference; dash-dot: surrogate floors — "binomial" = constant-rate,
+  "clock" = hour-of-day rate; shaded: acceptance band)</span></h2>
 <div class="panels" id="panels"></div>
 
 <h2>Iteration log</h2>
@@ -166,7 +179,20 @@ const DATA = __DATA__;
 
 const ORDER = DATA.runs.map(r => r.label);
 const USERS = DATA.users;
-const COLOR = Object.fromEntries(USERS.map((u, i) => [u, DATA.user_colors[i % DATA.user_colors.length]]));
+// per-user hue identity caps at the validated palette (hues are never
+// cycled); beyond it, panels switch to muted per-user lines + a median line,
+// with identity available via hover and the run table
+const SPAGHETTI = USERS.length > DATA.user_colors.length;
+const GRAY = "#898781";
+const COLOR = Object.fromEntries(USERS.map((u, i) =>
+  [u, SPAGHETTI ? GRAY : DATA.user_colors[i]]));
+const median = arr => {
+  const v = arr.filter(x => x !== null && x !== undefined && !Number.isNaN(x))
+    .sort((a, b) => a - b);
+  if (!v.length) return null;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+};
 const CELL = {};   // run -> user -> metric -> {value, sd}
 for (const row of DATA.rows) {
   ((CELL[row.run_label] ??= {})[row.user] ??= {})[row.metric] = row;
@@ -184,8 +210,13 @@ function renderSub() {
   document.getElementById("sub").textContent =
     `generated ${DATA.generated} · ${DATA.runs.length} run(s) · ${USERS.length} user(s)`;
   const leg = document.getElementById("legend");
-  leg.innerHTML = USERS.map(u =>
-    `<span><span class="dot" style="background:${COLOR[u]}"></span>${u}</span>`).join("");
+  leg.innerHTML = SPAGHETTI
+    ? `<span><span class="dot" style="background:${GRAY};opacity:.5"></span>` +
+      `individual users (n=${USERS.length}, hover for identity)</span>` +
+      `<span><span class="dot" style="background:${DATA.user_colors[0]}"></span>` +
+      `median across users</span>`
+    : USERS.map(u =>
+      `<span><span class="dot" style="background:${COLOR[u]}"></span>${u}</span>`).join("");
   const sel = document.getElementById("runsel");
   sel.innerHTML = ORDER.map(l => `<option value="${l}">${l}</option>`).join("");
   sel.value = ORDER[ORDER.length - 1];
@@ -226,10 +257,17 @@ function renderTable(run) {
       html += `<tr class="tier"><td colspan="${USERS.length + 1}">${tr}</td></tr>`;
       lastTier = tr;
     }
-    html += `<tr><td class="metric">${m}</td>` +
+    html += `<tr><td class="metric" data-m="${m}">${m}</td>` +
       USERS.map(u => `<td>${cellText(CELL[run]?.[u]?.[m])}</td>`).join("") + `</tr>`;
   }
   t.innerHTML = html;
+  for (const td of t.querySelectorAll("td.metric")) {
+    const m = td.dataset.m;
+    const desc = DATA.descriptions[m];
+    if (!desc) continue;
+    td.addEventListener("mousemove", evt => showTip(evt, [m, desc]));
+    td.addEventListener("mouseleave", hideTip);
+  }
 }
 
 const TT = document.getElementById("tooltip");
@@ -248,13 +286,21 @@ function svgEl(tag, attrs) {
 }
 
 function panel(metric, title, selectedRun) {
-  const W = 360, H = 242, L = 48, R = 12, T = 10, B = 64;
+  const W = 540, H = 300, L = 52, R = 14, T = 12, B = 66;
   const ref = DATA.reference[metric] || {};
   const series = USERS.map(u => ({
     user: u,
     pts: ORDER.map(run => CELL[run]?.[u]?.[metric] ?? null),
     real: ref.real_ref ? ORDER.map(run => CELL[run]?.[u]?.[ref.real_ref] ?? null) : null,
   }));
+
+  // surrogate floors: cross-user median per run, drawn as labeled dash-dot
+  // references ("binomial" = constant-rate, "clock" = hour-of-day-rate)
+  const surrFloors = (ref.surr_refs || []).map(([m, label]) => ({
+    label,
+    vals: ORDER.map(run =>
+      median(USERS.map(u => (CELL[run]?.[u]?.[m] ?? {}).value ?? null))),
+  })).filter(f => f.vals.some(v => v !== null));
 
   const vals = [];
   for (const s of series) {
@@ -263,6 +309,7 @@ function panel(metric, title, selectedRun) {
     }
     if (s.real) for (const p of s.real) if (p && p.value !== null) vals.push(p.value);
   }
+  for (const f of surrFloors) for (const v of f.vals) if (v !== null) vals.push(v);
   if (ref.band) vals.push(ref.band[0], ref.band[1]);
   if (ref.line !== undefined) vals.push(ref.line);
   if (!vals.length) return null;
@@ -276,7 +323,13 @@ function panel(metric, title, selectedRun) {
 
   const div = document.createElement("div");
   div.className = "panel";
-  div.innerHTML = `<div class="ptitle">${title}</div>`;
+  div.innerHTML = `<div><span class="ptitle">${title}</span></div>`;
+  const desc = DATA.descriptions[metric];
+  if (desc) {
+    const pt = div.querySelector(".ptitle");
+    pt.addEventListener("mousemove", evt => showTip(evt, [metric, desc]));
+    pt.addEventListener("mouseleave", hideTip);
+  }
   const svg = svgEl("svg", {width: W, height: H});
   div.appendChild(svg);
 
@@ -297,6 +350,25 @@ function panel(metric, title, selectedRun) {
     x1: L, x2: W - R, y1: y(ref.line), y2: y(ref.line),
     stroke: "var(--baseline)", "stroke-dasharray": "5 4"}));
 
+  for (const f of surrFloors) {
+    const seg = f.vals.map((v, i) => v !== null ? `${x(i)},${y(v)}` : null)
+      .filter(Boolean);
+    svg.appendChild(svgEl("polyline", {points: seg.join(" "), fill: "none",
+      stroke: GRAY, "stroke-width": 1.1, "stroke-dasharray": "4 2 1 2"}));
+    let last = null;
+    f.vals.forEach((v, i) => { if (v !== null) {
+      svg.appendChild(svgEl("rect", {x: x(i) - 2.5, y: y(v) - 2.5, width: 5,
+        height: 5, fill: "none", stroke: GRAY}));
+      last = [x(i), y(v)];
+    }});
+    if (last) {
+      const lab = svgEl("text", {x: last[0] + 5, y: last[1] - 4,
+        fill: "var(--mut)", "font-size": 9});
+      lab.textContent = f.label;
+      svg.appendChild(lab);
+    }
+  }
+
   ORDER.forEach((run, i) => {                         // x labels
     const lab = svgEl("text", {
       x: x(i), y: H - B + 16, fill: run === selectedRun ? "var(--ink)" : "var(--mut)",
@@ -305,6 +377,45 @@ function panel(metric, title, selectedRun) {
     lab.textContent = run;
     svg.appendChild(lab);
   });
+
+  if (SPAGHETTI) {
+    const seg = pts => pts.filter(p => p !== null).join(" ");
+    for (const s of series) {
+      svg.appendChild(svgEl("polyline", {
+        points: seg(s.pts.map((p, i) => p && p.value !== null ? `${x(i)},${y(p.value)}` : null)),
+        fill: "none", stroke: GRAY, "stroke-width": 0.9, opacity: 0.4}));
+    }
+    const med = i => median(series.map(s => s.pts[i] ? s.pts[i].value : null));
+    if (ref.real_ref) {
+      const rmed = i => median(series.map(s => s.real && s.real[i] ? s.real[i].value : null));
+      svg.appendChild(svgEl("polyline", {
+        points: seg(ORDER.map((_, i) => rmed(i) !== null ? `${x(i)},${y(rmed(i))}` : null)),
+        fill: "none", stroke: DATA.user_colors[0], "stroke-width": 1.2,
+        opacity: 0.7, "stroke-dasharray": "2 3"}));
+      ORDER.forEach((_, i) => { const v = rmed(i); if (v !== null)
+        svg.appendChild(svgEl("circle", {cx: x(i), cy: y(v), r: 3,
+          fill: "none", stroke: DATA.user_colors[0], opacity: 0.7})); });
+    }
+    svg.appendChild(svgEl("polyline", {
+      points: seg(ORDER.map((_, i) => med(i) !== null ? `${x(i)},${y(med(i))}` : null)),
+      fill: "none", stroke: DATA.user_colors[0], "stroke-width": 2.2}));
+    ORDER.forEach((run, i) => { const v = med(i); if (v !== null) {
+      const c = svgEl("circle", {cx: x(i), cy: y(v), r: 4,
+        fill: DATA.user_colors[0], stroke: "var(--surface)", "stroke-width": 1.5});
+      svg.appendChild(c);
+    }});
+    // identity via hover: a hit circle on every user point
+    for (const s of series) s.pts.forEach((p, i) => {
+      if (!p || p.value === null) return;
+      const hit = svgEl("circle", {cx: x(i), cy: y(p.value), r: 7,
+        fill: "transparent"});
+      hit.addEventListener("mousemove", evt =>
+        showTip(evt, [`${s.user} — ${ORDER[i]}`, `${metric}: ${cellText(p)}`]));
+      hit.addEventListener("mouseleave", hideTip);
+      svg.appendChild(hit);
+    });
+    return div;
+  }
 
   series.forEach((s, si) => {
     const off = (si - (USERS.length - 1) / 2) * 5;
@@ -350,10 +461,18 @@ function panel(metric, title, selectedRun) {
 function renderPanels(selectedRun) {
   const host = document.getElementById("panels");
   host.innerHTML = "";
-  for (const [metric, title] of DATA.key_metrics) {
-    const p = panel(metric, title, selectedRun);
-    if (p) host.appendChild(p);
+  for (const head of DATA.pair_column_heads) {
+    const d = document.createElement("div");
+    d.className = "colhead";
+    d.textContent = head;
+    host.appendChild(d);
   }
+  for (const pair of DATA.key_metric_pairs)
+    for (const [metric, title] of pair)
+      // empty placeholder keeps the two-column pairing aligned when one
+      // side has no data yet
+      host.appendChild(panel(metric, title, selectedRun) ??
+                       document.createElement("div"));
 }
 
 function render() {
