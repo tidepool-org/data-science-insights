@@ -150,11 +150,13 @@ def bolus_row(ax, y, meal_t, meal_u, corr_t, corr_u):
                            s=bolus_area(u), zorder=z, edgecolors=SURFACE,
                            linewidths=0.6)
             else:
-                # dose unknown (simulated marks can be NaN): faded at floor
-                # size, so it never reads as a genuinely small bolus -- and
-                # it can't be a label anchor. Fading, not an open marker:
+                # dose unknown (simulated marks can be NaN): full-strength at
+                # floor size -- on this cohort nearly every simulated bolus is
+                # NaN-dose, so fading made the whole sim lane near-invisible.
+                # The missing surface ring is the remaining "unknown" cue, and
+                # an unknown dose can't be a label anchor. Not an open marker:
                 # open already means "stated meal time" on the carb row.
-                ax.scatter([t], [y], marker=marker, color=hue, alpha=0.35,
+                ax.scatter([t], [y], marker=marker, color=hue,
                            s=bolus_area(u), zorder=z, edgecolors="none")
             if t in labeled and pd.notna(u):
                 labeled = labeled - {t}
@@ -211,7 +213,8 @@ def event_legend(ax, meal_time=False, **kwargs):
     ]
     leg = ax.legend(handles=handles, frameon=False, fontsize=8,
                     labelcolor=SEC, title="marker area ∝ grams / units · "
-                    "min · max labeled · faded bolus = dose unknown",
+                    "min · max labeled · floor-size bolus, no outline = "
+                    "dose unknown",
                     **kwargs)
     leg.get_title().set_color(MUT)
     leg.get_title().set_fontsize(7.5)

@@ -17,6 +17,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from behavior_model_mvp import (
     ASSOCIATION_TICKS,
+    BOLUS_VISIBILITY_TICKS,
+    CLOCK_FEATURES,
+    CLOCK_JEFFREYS_ALPHA,
     CYCLE_WEEKS,
     EXCITATION_TICKS,
     FEATURES,
@@ -25,13 +28,15 @@ from behavior_model_mvp import (
     SELF_EXCITATION_FEATURES,
     TICK_MINUTES,
     TICKS_PER_DAY,
-    CorrectionHistory,
+    IOB_FEATURE,
     EmpiricalMarks,
+    EventHistory,
     add_features,
     block_gap_minutes,
     block_spans,
     fit_meal_bolus_rate,
     holdout_blocks,
+    hourly_clock_logits,
     label_events,
     run_mvp,
     split_masks,
@@ -140,10 +145,21 @@ def make_synthetic(days=120, seed=1):
         cgm_displayed[s:s + int(rng.integers(6, 30))] = np.nan
     recommended[np.isnan(cgm_displayed)] = np.nan
 
+    # HK-path upload realism: the WORLD above has dense insulin state (the
+    # correction process is generated with true iob), but the UPLOADED iob
+    # column is era-bound -- one short dense window, NaN elsewhere --
+    # mirroring the cohort, where dosingDecisions exist only while the
+    # direct uploader ran. The feature policy (iob dropped 2026-08-18) is
+    # what this world rewards; re-adding a naive ffilled iob feature should
+    # look as useless here as it is on the real data.
+    iob_uploaded = np.full(n, np.nan)
+    era = slice(10 * TICKS_PER_DAY, min(20 * TICKS_PER_DAY, n))
+    iob_uploaded[era] = iob[era]
+
     return pd.DataFrame({
         "timestamp": ts,
         "cgm": cgm_displayed,
-        "iob": iob,
+        "iob": iob_uploaded,
         "recommended_bolus": recommended,
         "carb_meal_time": meal_time,
         "carb_entry_time": entry_time,
@@ -224,25 +240,34 @@ def test_label_events_two_clock():
 
 
 def test_feature_parity():
-    """Highest-value test: the self-excitation features from the shared
-    CorrectionHistory walk must match an independent brute-force
-    recomputation, row for row. A correction is visible only once its
-    association window has closed (age > ASSOCIATION_TICKS)."""
+    """Highest-value test: the excitation features from the shared
+    EventHistory walks must match an independent brute-force recomputation,
+    row for row, for BOTH families. A correction is visible only once its
+    association window has closed (age > ASSOCIATION_TICKS); a bolus of any
+    kind is visible from the next tick (age > 0)."""
     df = add_features(label_events(make_synthetic(days=30)), cgm_fill_value=SYNTH_CGM_FILL)
-    corr = np.flatnonzero(df["is_correction"].to_numpy())
+    events = {
+        ("mins_since_correction", "n_corrections_2h", ASSOCIATION_TICKS):
+            np.flatnonzero(df["is_correction"].to_numpy()),
+        ("mins_since_bolus", "n_boluses_2h", 0):
+            np.flatnonzero(df["bolus_u"].notna().to_numpy()),
+    }
 
     for i in range(len(df)):
-        visible = corr[(i - corr) > ASSOCIATION_TICKS]
-        mins = HISTORY_CAP_MINUTES if len(visible) == 0 else min(
-            (i - visible[-1]) * float(TICK_MINUTES), HISTORY_CAP_MINUTES)
-        n_2h = int(((i - visible) <= EXCITATION_TICKS).sum())
-        assert df["mins_since_correction"].iloc[i] == mins, f"mins mismatch at tick {i}"
-        assert df["n_corrections_2h"].iloc[i] == n_2h, f"count mismatch at tick {i}"
+        for (mins_col, count_col, lag), ticks in events.items():
+            visible = ticks[(i - ticks) > lag]
+            mins = HISTORY_CAP_MINUTES if len(visible) == 0 else min(
+                (i - visible[-1]) * float(TICK_MINUTES), HISTORY_CAP_MINUTES)
+            n_2h = int(((i - visible) <= EXCITATION_TICKS).sum())
+            assert df[mins_col].iloc[i] == mins, f"{mins_col} mismatch at tick {i}"
+            assert df[count_col].iloc[i] == n_2h, f"{count_col} mismatch at tick {i}"
 
 
-def test_correction_history():
-    """Visibility lag and retraction semantics of the shared history."""
-    hist = CorrectionHistory()
+def test_event_history():
+    """Visibility lag and retraction semantics of the shared history, at
+    both lags in use: the correction lag (association window) and the bolus
+    lag (visible from the next tick)."""
+    hist = EventHistory(ASSOCIATION_TICKS)
     assert hist.features(100) == (HISTORY_CAP_MINUTES, 0.0)
 
     hist.record(100)
@@ -257,6 +282,13 @@ def test_correction_history():
 
     assert hist.retract(100) == [100]
     assert hist.features(100 + ASSOCIATION_TICKS + 1) == (HISTORY_CAP_MINUTES, 0.0)
+
+    bolus = EventHistory(BOLUS_VISIBILITY_TICKS)
+    bolus.record(50)
+    assert bolus.features(50) == (HISTORY_CAP_MINUTES, 0.0)  # no self-reference
+    assert bolus.features(51) == (float(TICK_MINUTES), 1.0)
+    assert bolus.features(51 + EXCITATION_TICKS) == \
+        ((EXCITATION_TICKS + 1) * TICK_MINUTES, 0.0)
 
 
 def test_correction_mark_ratio():
@@ -273,17 +305,67 @@ def test_no_future_leakage():
     removed -- the model may only see what the user could see.
 
     Every feature is compared on EVERY truncated row: the direct features
-    are label-free, and the self-excitation features only consume
-    corrections whose association window closed strictly in the past, so
-    the labels-differ-near-the-cut band cannot reach them."""
+    are label-free, the self-excitation features only consume corrections
+    whose association window closed strictly in the past, so the
+    labels-differ-near-the-cut band cannot reach them, and the clock
+    features are a fixed train-derived lookup (held constant here, like
+    cgm_fill_value -- run_mvp computes both on the training segment)."""
     raw = make_synthetic(days=30)
     k = 2000
-    full = add_features(label_events(raw), cgm_fill_value=SYNTH_CGM_FILL)
-    trunc = add_features(label_events(raw.iloc[:k].copy()), cgm_fill_value=SYNTH_CGM_FILL)
+    full_labeled = label_events(raw)
+    clock = hourly_clock_logits(full_labeled)
+    full = add_features(full_labeled, cgm_fill_value=SYNTH_CGM_FILL,
+                        clock_logits=clock)
+    trunc = add_features(label_events(raw.iloc[:k].copy()),
+                         cgm_fill_value=SYNTH_CGM_FILL, clock_logits=clock)
 
     for col in FEATURES:
         same = (full[col].iloc[:k].to_numpy() == trunc[col].iloc[:k].to_numpy())
         assert same.all(), f"future leakage in {col}"
+
+
+def test_clock_crossfit():
+    """Train rows carry leave-one-tick-out clock values (brute-force
+    recomputation must match); holdout rows keep the full-train lookup."""
+    raw = make_synthetic(days=60)
+    res = run_mvp(raw, seed=0)
+    frame, train, holdout = res["frame"], res["train"], res["holdout"]
+    logits = hourly_clock_logits(train)
+
+    hour_all = train["timestamp"].dt.hour
+    for event, col in CLOCK_FEATURES.items():
+        # holdout: exactly the full-train lookup
+        h_hours = holdout["timestamp"].dt.hour.to_numpy()
+        assert (holdout[col].to_numpy() == logits[event][h_hours]).all(), \
+            f"holdout {col} is not the full-train lookup"
+        # train: exact LOO, brute-forced on a sample of ticks
+        for pos in range(0, len(train), max(1, len(train) // 50)):
+            row = train.iloc[pos]
+            others = train.drop(train.index[pos])
+            same_hour = others[others["timestamp"].dt.hour == row["timestamp"].hour]
+            rate = ((same_hour[event].sum() + CLOCK_JEFFREYS_ALPHA)
+                    / (len(same_hour) + 2 * CLOCK_JEFFREYS_ALPHA))
+            expect = np.log(rate / (1.0 - rate))
+            assert abs(row[col] - expect) < 1e-12, \
+                f"train {col} LOO mismatch at position {pos}"
+
+
+def test_iob_feature_flag():
+    """use_iob appends the app-displayed IOB to both the full and ablated
+    hazard bases and leaves the default basis untouched -- the with/without
+    comparison lever for dense-DD cohorts (cohort B)."""
+    df = make_synthetic(days=60)
+    res = run_mvp(df, seed=0, use_iob=True)
+    assert res["hazards"]["features"] == FEATURES + [IOB_FEATURE]
+    assert IOB_FEATURE in res["hazards_ablated"]["features"]
+    assert set(res["hazards_ablated"]["features"]).isdisjoint(
+        SELF_EXCITATION_FEATURES)
+    assert res["frame"][IOB_FEATURE].notna().all(), \
+        "prepared iob column must be dense after ffill"
+
+    res0 = run_mvp(df, seed=0)
+    assert res0["hazards"]["features"] == FEATURES, \
+        "flagged-off basis must be unchanged"
 
 
 def test_meal_bolus_rate():
@@ -448,26 +530,28 @@ def test_build_tick_frame_assembly():
 
 
 def test_user_sets():
-    """Even/odd 1-based span ranks -> internal user-level train/dev sets;
+    """Odd/even 1-based span ranks -> internal user-level train/dev sets;
     users.csv order IS the rank order."""
     ids = [f"u{i:02d}" for i in range(1, 21)]
     sets = user_sets(ids)
-    assert sets["train"] == ids[1::2]  # even ranks 2, 4, ..., 20
-    assert sets["dev"] == ids[0::2]    # odd ranks 1, 3, ..., 19
+    assert sets["train"] == ids[0::2]  # odd ranks 1, 3, ..., 19
+    assert sets["dev"] == ids[1::2]    # even ranks 2, 4, ..., 20
     assert len(sets["train"]) == len(sets["dev"]) == 10
     assert not set(sets["train"]) & set(sets["dev"])
-    # odd-sized pool: dev (odd ranks, incl. rank 1) gets the extra user
+    # odd-sized pool: train (odd ranks, incl. rank 1) gets the extra user
     odd = user_sets(ids[:5])
-    assert len(odd["dev"]) == 3 and len(odd["train"]) == 2
+    assert len(odd["train"]) == 3 and len(odd["dev"]) == 2
 
 
 TESTS = [
     test_validate_tick_frame,
     test_label_events_two_clock,
-    test_correction_history,
+    test_event_history,
     test_correction_mark_ratio,
     test_feature_parity,
     test_no_future_leakage,
+    test_clock_crossfit,
+    test_iob_feature_flag,
     test_meal_bolus_rate,
     test_run_mvp_smoke,
     test_degenerate_training_segment,

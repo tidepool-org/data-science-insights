@@ -459,16 +459,310 @@ refutation-first agents running mutations in the conda env): 9 findings, 6 confi
   construction: the NLL-skill zero line IS the binomial (or clock) baseline and
   0.5 is chance for AUC.
 
+## 2026-08-18 — Selected-run ROC view; recorded surrogate AUC floors; train/dev trace columns
+
+- The dashboard now **opens with a selected-run ROC section** (per feedback: show
+  the ROC itself, not just the AUC number): per-hazard holdout one-step-ahead
+  curves — cross-user median at a fixed FPR grid with shaded IQR (per-user curves
+  behind the existing toggle), the **clock surrogate's ROC** dash-dot beneath,
+  and the **binomial surrogate's ROC recorded from its own predictor** rather
+  than asserted: a constant rate ties every tick at one threshold, so its
+  computed tie-collapsed curve is exactly (0,0)→(1,1) and draws along the chance
+  diagonal as data. The recorded AUCs print in-panel (model median [IQR] · clock
+  · binomial), and a second row adds a per-user model-vs-clock AUC dumbbell
+  strip sorted by model AUC, so which users' models beat their own habit clock
+  is visible at a glance.
+- ROC vertices come from `roc_curves` (`stage_a_metrics`) — ties collapsed,
+  thinned to ≤150 vertices, trapezoid area equal to the tie-aware rank AUC for
+  all three predictors (tested) — written per user (`<user>/roc.csv`) and
+  recorded per labeled run in `roc_history.csv` beside the metrics history with
+  the same replace-idempotent semantics. Runs recorded before this change show a
+  "not recorded" note in the ROC panels until re-run.
+- The surrogates' own AUCs are now **recorded metrics** (per feedback: the
+  actual calculated AUC, not a by-construction claim): `surr_diurnal_*_auc`
+  (what hour-of-day alone achieves at ranking holdout ticks) and
+  `surr_const_*_auc` (computes to exactly 0.5 — kept so the floor pair stays
+  complete), emitted from `fit_metrics` with no new RNG draws. The AUC
+  across-iterations panels draw both labeled floors like every other floored
+  family, superseding the "0.5 is chance by construction" floor story. Table
+  ordering is tier-grouped (`grouped_metric_order`) so metrics first emitted in
+  later runs join their tier instead of trailing with a duplicate tier header.
+- The dashboard trace strip lists **train and dev users in two columns** (per
+  feedback) in span-rank order with rank numbers, membership from the
+  `user_sets` parity rule against users.csv; it falls back to the flat list
+  when the data dir is absent.
+- `it02_train10` re-recorded with the current code: all 600 pre-existing metric
+  rows reproduced **bit-for-bit** (verified against a snapshot; other runs
+  byte-identical), adding the four surrogate AUCs, the ROC history, and the
+  carb-side overnight surrogate shares that had been awaiting the next recorded
+  run. A parent-process refit reproduces recorded curves only to ~1 ulp (BLAS
+  context differs from the pooled workers), so recorded artifacts always come
+  from the canonical `build_tick_frame.py --label` path, never side scripts.
+- First reading of the new floors (numbers in the dashboard, per policy): the
+  correction model out-ranks its clock floor by a wide margin for nearly every
+  train user, but the **carb-entry model does not clear its clock floor** for
+  most users — the richer-clock iteration motive, now visible in discrimination
+  terms, not just NLL skill.
+- Train/dev parity **swapped** (per feedback, for the dashboard columns): odd
+  span ranks → train, even → dev. No re-run — `it02_train10` stays as recorded
+  (on the even-rank half, now the dev set); the odd half's per-user baseline
+  rows live in `it02_users20`, so the first real model iteration should record
+  a fresh odd-half train baseline to compare against per user.
+
+## 2026-08-18 — Why per-tick IOB coverage is ~0 across the cohort (exploration)
+
+- The missing IOB is **era-bound dosingDecision uploads, not sparse ones**: each
+  user's `reason='loop'` DDs arrive at the full 5-minute cadence (~288/day,
+  median gap 5 min, IOB parseable on essentially all of them — which is how the
+  `frac_iob ≥ 0.90` candidate gate passed) but only inside **one short
+  contiguous era** — days to a few weeks of records spanning 1–2.5 years; one
+  train user has no loop DDs at all. Outside the era there are no DDs of any
+  reason: the `normalBolus` DDs (the recommended-bolus-at-bolus source) sit in
+  the same era, which is why `nan_corr_mark_frac ≈ 1`. Era position varies
+  (start of record for about half the users, middle or end for the rest).
+  Consistent with the HK-path standing fact: the selection gates require HK
+  metadata on carbs (entry clock) and boluses (auto flag), so the cohort's
+  day-to-day stream is HealthKit-synced samples — and `dosingDecision` is not a
+  HealthKit type, so it exists only for the brief window when the direct
+  Loop→Tidepool uploader was active. The candidate gate checks the *fraction*
+  of existing loop DDs bearing IOB, never their *density* over the span.
+- Feature consequence: `add_features` does `iob.ffill().fillna(0)` with no
+  staleness cap, so the `iob` feature is 0.0 before the era, live inside it
+  (a few percent of ticks at most), and **frozen at the era's last value for
+  the entire remainder of the record** — a de facto per-user step function
+  aligned with calendar time, not insulin state. Both hazards consume it.
+  We are NOT estimating IOB (§6: "as logged by the app, not re-derived"), and
+  the carb hazard has NO prior-bolus features — insulin exposure enters only
+  via this degraded `iob` plus the correction-history features
+  (`mins_since_correction` / `n_corrections_2h`, which see correction boluses
+  only, ≥20 min late). This is the evidence base for the pending IOB decision
+  and strengthens the case for the bolus-based excitation features (pending
+  item 2), which need no DDs at all.
+
+## 2026-08-18 — it03_clock24: empirical clock features; the carb hazard beats the clock
+
+- Iteration goal (per feedback): get the carb hazard above the habit-clock floor.
+- Change: per-event **empirical hourly clock features** (`clock_carb` /
+  `clock_corr` — log-odds of the train hourly event rate, `hourly_clock_logits`)
+  replace `tod_sin`/`tod_cos`/`in_meal_window` in the hazard basis. The meal
+  windows are hour-aligned, so the 24-bin clock spans the old basis with fewer
+  collinear parameters, and it is the diurnal surrogate's own lookup exposed as
+  a feature — a unit coefficient on it nests the habit-clock baseline.
+  `in_meal_window` is still computed and still drives the grams pool and plots.
+- Two traps found on the way, both caught by the synthetic smoke test: a train
+  hour with zero events became a −20 logit outlier through the raw rate clip
+  (fixed with Jeffreys Beta(½,½) smoothing), and the lookup **memorizes its own
+  training outcomes** — each event tick inflates its own hour's rate, so MLE
+  weights in-sample noise and pays for it on the holdout at thin event counts
+  (fixed with exact leave-one-tick-out cross-fitting of the train clock values,
+  `crossfit_train_clock`; holdout and simulate keep the full-train lookup; a
+  brute-force LOO parity test guards it).
+- Result on the train set, paired against `it02_train10_odd` (numbers in the
+  dashboard, per policy): carb NLL skill vs the diurnal baseline flips positive
+  for 9/10 users, carb AUC rises about two points with the remaining
+  below-floor users at parity rather than below, carb calibration slope lands
+  on 1, the simulated carb diurnal-shape TV distance roughly halves to near the
+  clock surrogate's own level, and simulated overnight carb share lands near
+  real. The correction side improves on every fit metric too; overnight
+  correction over-production — the criterion-3 miss in the first results
+  writeup — drops by roughly a third toward the real share. Correction rate
+  under-production persists (the standing covariate problem: IOB / bolus
+  features, not clock).
+- Dev set deliberately not spent: per protocol it confirms an accepted
+  improvement — owner's call on accepting it03 first.
+
+## 2026-08-18 — it04: iob dropped; rescue carbs confirmed; trace-page fixes; Q10 SQL
+
+- **it04_no_iob** (owner call on the IOB decision, per feedback): the `iob`
+  feature is dropped from the hazard basis — the era-bound exploration showed
+  the ffilled value was a frozen per-user calendar step, and a missing
+  indicator would be the same step. The §6 column stays in the data contract.
+  Paired against it03 on the train set, every metric delta is third-decimal
+  noise (the feature was inert on real data, as predicted) and
+  `carb_nll_skill_diurnal > 0` ticks up to all train users. The synthetic
+  generator now mirrors the pathology honestly: the world still generates
+  corrections against true dense insulin state, but the UPLOADED `iob` column
+  is era-bound (one short window, NaN elsewhere), so a re-added naive iob
+  feature would look as useless on synthetic as it is in the cohort; smoke-test
+  bounds recalibrated to the deliberate exclusion (the synthetic correction
+  process is iob-suppressed by construction, so its skill-vs-constant hovers at
+  zero without the feature — bounded, no longer asserted positive).
+- **Rescue carbs are real and common** (descriptive pass over all 20 users,
+  numbers in chat/outputs): roughly one in seven carb entries happens in a
+  hypo context (CGM < 80, or < 90 and falling), and those entries are
+  **unbolused about half the time vs ~10% for other entries** — the rescue
+  signature — with slightly smaller grams and a majority within 3 h of a
+  preceding bolus. Per-user hypo-context share ranges a few percent to over a
+  quarter. Supports the reviewer's and owner's point that insulin history is
+  too thin to inform carb consumption: rescue carbs follow ANY bolus on an
+  hours scale, while the carb hazard currently sees only correction events
+  ≥20 min late. Bolus-based features (it05) are the replacement channel.
+- Trace pages: unknown-dose simulated boluses now draw **full-strength** at
+  floor size (fading made the whole sim bolus lane near-invisible on this
+  cohort, where nearly every sim mark is NaN-dose; the missing surface ring is
+  the remaining "dose unknown" cue, legend updated). The IOB coverage series,
+  index column, and page chip are removed (useless given the era-bound
+  stream); the weekly coverage panel is CGM-only.
+- `p0_timestamp_verification.sql` gains **Q10a–c** (Databricks, read-only):
+  per-candidate DD-era sizing, month-by-month stream density for the two
+  longest records, and an uploader fingerprint (origin version + HK
+  sourceRevision by type) to confirm the era = direct-uploader window
+  hypothesis.
+
+## 2026-08-18 — it05_bolus_excite: bolus-history features; the carb win is refractory, not excitatory
+
+- Change (implemented + recorded by a subagent, verified by the parent
+  session): `CorrectionHistory` generalized **in place** to
+  `EventHistory(visibility_ticks)` — still one shared implementation for the
+  fit and simulate paths. Corrections keep the association-window visibility
+  lag; the new bolus family (`mins_since_bolus` / `n_boluses_2h` over ALL user
+  boluses) is visible from the next tick (`BOLUS_VISIBILITY_TICKS = 0`) —
+  occurrence is label-free and final instantly, so the 20-min floor never
+  applies. Occurrence-based only, never dose-weighted: the simulate path
+  cannot produce doses, so a dose-weighted feature would be train/serve skew
+  by construction. The rollout records at most one bolus occurrence per tick
+  for every generated bolus however arbitration labels it; retraction never
+  touches the bolus history (a relabeled correction is still a bolus). Both
+  real histories are seeded per holdout block; the ablation arm now removes
+  BOTH excitation families. Brute-force parity tests cover both pairs;
+  13/13 + 7/7 with no smoke-bound recalibration.
+- Result (train set, paired vs it04; numbers in the dashboard): the carb
+  hazard improves for **all** train users on AUC and both NLL skills — now
+  clearly above the clock floor cohort-wide — and the simulated carb gap p10
+  moves most of the way from its overshoot to the real reference. The
+  mechanism is the surprise: the carb-side ablation delta flips from
+  decorative to clearly negative, i.e. bolus history acts as a **refractory
+  brake** on the carb hazard (meal spacing — a carb entry is unlikely right
+  after a bolus), not the hypothesized rescue-carb excitation. The correction
+  side was already saturated by the correction-history pair (cascade
+  structure unchanged, far beyond the memoryless floor); correction rate
+  under-production persists. No regressions — rates, calibration, diurnal
+  shape, overnight shares, and mark KS unchanged; surrogate floors and real
+  references bit-identical across labels (like-for-like regime confirmed).
+- **Q11a–c** appended to `p0_timestamp_verification.sql` (second subagent):
+  all-BDDP loop-DD continuity ranking (gaps-and-islands over ≥100-DD days),
+  co-gate check for the top-25 DD-continuous users (entry-clock expression
+  reused verbatim from the candidate export; CGM completeness inside the
+  longest run), and the entry-clock-by-uploader-path breakdown that decides
+  whether a both-worlds (dense-IOB + entry-clock) cohort is structurally
+  possible.
+- **Q11 results** (run on Databricks; numbers stay there/chat): persistent
+  direct-uploader users EXIST — the top longest contiguous full-cadence DD
+  runs are all multi-year, several covering essentially the whole record;
+  runs cluster from mid-2023 (the Loop 3.x Tidepool-service era; per-user
+  `com.<TEAMID>.loopkit.Loop` bundle ids = DIY builds), and none of the
+  current 20 candidates surface (sanity check passed). The entry-clock key
+  rides **only** HealthKit-path food rows — never direct-path rows — so the
+  0.95 `frac_entry_clock` gate fails these users on a **denominator
+  artifact** (their food flows through both channels; unclocked direct-path
+  duplicates dilute the fraction). Most of the top-25 nevertheless have
+  HK-clocked food flowing during their DD run, and in-run CGM completeness
+  is mostly excellent. **Q12a/b appended** (parent session): per-user
+  in-run HK-clock food density, direct-vs-HK duplicate matching (±2 min +
+  same grams — decides whether HK-only carb frames lose meals), bolus
+  auto-flag classifiability, and recommendedBolus density on the DDs (dense
+  recommendations would finally make the correction-marks model computable);
+  plus an all-BDDP count-only screen sizing the prospective cohort B. If
+  Q12 confirms duplicates + density, a cohort-B export needs the
+  entry-clock gate recomputed over HK rows only (or after channel dedupe).
+
+## 2026-08-18 — Q12 confirms cohort B; staging rebuilt for it; dev set parked
+
+- **Q12 results** (Databricks; numbers stay there/chat): the direct-vs-HK
+  "disjointness" is **temporal, not per-entry** — the duplicate fraction
+  tracks the clocked-day fraction almost exactly, i.e. on days when HealthKit
+  sync is active the direct-path food rows are near-fully duplicated by
+  clocked HK rows, so taking carbs from clocked rows only loses nothing on
+  overlap days. The bolus auto-issued flag is ~universal on the HK bolus
+  stream wherever it exists, and recommendedBolus rides a substantial share
+  of in-run loop DDs (the correction-marks model becomes at least partially
+  computable). The eligible pool (≥180-day full-cadence DD run with ≥1
+  clocked carb/day) is far larger than the current cohort. Verdict: a
+  both-worlds cohort exists; the export window per user is the DD-run ∩
+  clocked-food **intersection window**.
+- **Cohort-B staging built** (per feedback): `export_trace_candidates.py`
+  rewritten in place — gaps-and-islands DD-run detection, intersection-window
+  gating (window ≥ 180 d, clocked-day fraction ≥ 0.70, ≥ 1 clocked carb/day,
+  CGM ≥ 0.70, in-window IOB ≥ 0.90, bolus flag ≥ 0.90), a **seeded
+  deterministic random `selection_rank`** (sha2 of raw id + `SAMPLE_SALT`;
+  the sample is the 10 lowest ranks — sampled, not span-ranked, so cohort B
+  is not length-biased like cohort A), persisted to a NEW table
+  (`behavior_trace_candidates_b`; cohort A's table stays frozen — its ranking
+  defines the existing cohort and the parity split), plus a
+  `plot_coverage` step writing a per-selected-user daily IOB/CGM
+  tick-coverage figure (pseudonymized ids) for eyeballing before export.
+  `export_behavior_traces.py` updated: reads the B table by selection_rank,
+  exports 10 users to `exports_b/`, carbs restricted to entry-clock-bearing
+  rows (one filter dedupes the dual channels AND guarantees the P0 no-fallback
+  property), bolus dedup/classification unchanged (already dual-path-safe),
+  same pseudonymization salt. Download target: `data/behavior_traces_b/`,
+  keeping cohort A's data intact for it00–it05 reproducibility.
+- **Dev set parked** (owner call): with strictly per-user fits, dev users test
+  procedure-level generalization only — the owner wants cross-validation of a
+  trained model on NEW users, which needs a pooled/transferable construction.
+  Dev-set confirmation runs are deferred until that exists; cohort B (new
+  users, dense IOB) is the natural test bed.
+- **Flagged IOB feature** (per feedback, ahead of the cohort-B export):
+  `run_mvp(use_iob=True)` / `build_tick_frame.py --iob-feature` appends the
+  app-displayed IOB (ffilled `iob` column, always prepared by `add_features`)
+  to both the full and ablated hazard bases; default off, so cohort-A history
+  is untouched. The A/B on cohort B is two recordings of the same cohort under
+  different labels (e.g. `it06_b_baseline` vs `it06_b_iob`); the recorded
+  feature list + a `use_iob` config key self-document which is which. Tested
+  (14/14 + 7/7).
+
+## 2026-08-18 — Cohort B landed; it06_b A/B: IOB is a strong predictor that Stage A cannot roll forward
+
+- Cohort-B export run by the owner, downloaded to `data/behavior_traces_b/`,
+  frames validated: IOB tick coverage is now ~90%+ with high CGM across all
+  10 users (cohort A was ~0–10%), windows months-to-1.5-years, and every carb
+  entry carries the entry clock (zero drops — the export filter preserved the
+  P0 property). Recorded into the SAME history/dashboard per owner
+  instruction: cohort membership is marked in the run notes (`COHORT B …`),
+  not a separate view; cohort-B labels are a new comparison population, not
+  like-for-like with cohort-A labels.
+- **Baseline arm** (`it06_b_baseline`, it05 basis, flag off): the modeling
+  recipe transfers — rates calibrate near 1 on the new population and both
+  hazards clear their clock floors for every user. Two cohort-A standing
+  facts do NOT transfer: correction under-production is absent on cohort B
+  (rate ratio ≈ 1 without any iob feature), and manual corrections are much
+  rarer per day — these are autobolus-era Loop 3.x users whose controller
+  does most correcting. Correction marks become measurable for the first
+  time (the NaN-mark fraction falls from ~1 to a minority) and measured mark
+  fidelity is poor — the delivered/recommended resampler is now a real
+  iteration target.
+- **IOB arm** (`it06_b_iob`, `--iob-feature`): teacher-forced fit improves
+  consistently — modestly for corrections, dramatically for carbs (IOB
+  carries meal-refractory/rescue information beyond bolus occurrence, just
+  as the synthetic world foreshadowed). BUT the free-running carb simulation
+  degrades sharply: rate overshoot and a collapsed short-gap tail. The
+  mechanism is the Stage A approximation itself — the rollout feeds the
+  REAL iob trace, so the feature both leaks real meal timing into the sim's
+  inputs and never responds to simulated meals: an endogenous covariate used
+  exogenously. Verdict: **flag OFF for Stage A rollout scoring; the fit-tier
+  value is banked for Stage B**, where the physiology sim closes the loop
+  and IOB becomes endogenous. Behavior-side insulin recency stays covered by
+  the bolus-occurrence features, which the rollout CAN update.
+
 ## Pending / In Progress
 
 - Stage A iteration, in order — each recorded via `build_tick_frame.py --label itNN_…
   --user-set train --note "…"` and compared in `stage_a_metrics.py --report` against
-  the `it02_train10` baseline (dev users held out for generalization checks): (1) IOB decision for HK-path uploaders (feature drop + missing indicator vs
-  DD-density selection gate vs derive-with-caveat — owner call, each deviates from §6
-  somewhere; now blocking, the whole cohort is HK-path); (2) bolus-based excitation
-  features (`mins_since_bolus` / `n_boluses_2h` — no label arbitration, no visibility
-  lag); (3) richer clock (second harmonic or finer basis — the diurnal surrogate
-  currently beats the model on timing shape for both hazards). P3 replication is
+  the `it02_train10_odd` baseline: (1) run the cohort-B staging on Databricks
+  (`export_trace_candidates.py` → coverage figure → `export_behavior_traces.py`),
+  DONE 2026-08-18 (`it06_b_baseline` / `it06_b_iob` — see the cohort-B A/B
+  entry: flag off for rollout scoring, fit-tier value banked for Stage B);
+  (1b) **marks model** — cohort B makes correction-mark fidelity measurable
+  for the first time and it measures poorly; the delivered/recommended
+  resampler is now a concrete iteration target; (2) exponentially-decaying excitation states (2–3 time
+  constants, per the 2026-08-18 external review) — the boxcar bolus pair
+  already landed the refractory meal-spacing effect, so the states test
+  whether kernel shape adds more; (3) a pooled/transferable construction to
+  enable cross-user validation (dev-set runs are parked until then — owner
+  call; cohort B is the natural held-out-user test bed). RESOLVED 2026-08-18:
+  richer clock (`it03_clock24`), IOB decision (`it04_no_iob`; Q10 confirmed
+  era-bound DDs), bolus-based excitation (`it05_bolus_excite` — refractory,
+  not excitatory, on the carb side). P3 replication is
   satisfied by the 20-user cohort (`it02_users20`).
 - Handoff §9 open questions: intended use; which curated cohort (engagement-screening
   bias?); does the physiology simulator support mid-run event injection (Stage B gate).

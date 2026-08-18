@@ -11,29 +11,57 @@ dirs); qualitative summaries in `project_docs/project_history.md`. Suites 11/11 
 6/6 on synthetic data. P0 resolved: modern Loop food payloads carry the entry clock
 (`com.loopkit.CarbKit.HKMetadataKey.UserCreatedDate`); user selection targets records
 where every entry carries it, so no timestamp fallbacks are needed. Cohort-level
-standing facts: the carb-entry hazard replicates across users; corrections are
-systematically under-produced (a covariate problem, per the surrogate floors — not
-base rate); the **whole cohort is HK-path** (per-tick IOB coverage ~0–10%), so the
-IOB decision blocks correction-hazard work.
+standing facts: the carb-entry hazard replicates across users; correction
+under-production is a **cohort-A phenomenon** (on cohort B, `it06_b_baseline`
+calibrates near 1 and manual corrections are far rarer — autobolus-era users);
+cohort A is HK-path (per-tick IOB coverage ~0–10% — dosingDecisions are
+era-bound direct-uploader windows, Q10 confirmed; iob dropped in `it04_no_iob`)
+while **cohort B is dense-IOB** (~90%+ tick coverage; `--iob-feature` A/B on it,
+`it06_b_*`, showed IOB is a strong teacher-forced predictor — especially for
+carbs — but degrades free-running carb simulation because the Stage A rollout
+feeds the real, non-responsive iob trace: flag off for rollout scoring, value
+banked for Stage B). Insulin recency in the rollout-safe basis comes from the
+bolus-occurrence history (`it05_bolus_excite`).
 
 **Iteration protocol**: `build_tick_frame.py --label <iteration-name> --note "<what
-changed>"` records the run (per user) into `outputs/behavior_traces/metrics_history.csv`;
+changed>"` records the run (per user) into `outputs/behavior_traces/metrics_history.csv`
+— plus, since 2026-08-18, the holdout ROC vertices (model + surrogate predictors —
+clock, and binomial, whose computed curve is exactly the chance diagonal since a
+constant ties every tick; ties collapsed, ≤150 vertices whose trapezoid area equals
+the rank AUC) into `roc_history.csv` beside it, same replace-idempotent semantics;
 `stage_a_metrics.py --report` renders metric×iteration tables, the meta figure, and a
-self-contained HTML dashboard (`meta/dashboard.html` — tiered metric table for a
-selected run with hover explanations for every metric, across-iterations charts, and
-the iteration log; local file only, per the numbers-stay-with-the-data policy). The
+self-contained HTML dashboard (`meta/dashboard.html` — a selected-run ROC section up
+top, tiered metric table for the selected run with hover explanations for every
+metric, across-iterations charts, and the iteration log; local file only, per the
+numbers-stay-with-the-data policy). The
 meta views are **two columns — correction hazard left, carb-entry hazard right — one
 metric family per row** (`KEY_METRIC_PAIRS`; membership is structurally paired), with
-real-holdout references and labeled surrogate floors drawn in the panels. Recorded so
+real-holdout references and labeled surrogate floors drawn in the panels. The
+fit-tier discrimination floors are recorded metrics too: `surr_diurnal_*_auc` (what
+the habit clock alone achieves at ranking holdout ticks) and `surr_const_*_auc`
+(exactly 0.5 by construction, kept so the floor pair stays complete) feed the AUC
+panels' binomial/clock floors; metric ordering in the tables is tier-grouped
+(`grouped_metric_order`), so metrics first emitted in later runs join their tier. Recorded so
 far: `it00_baseline` (naive 75/25 chronological), `it01_interleaved_weeks`
 (drift-aware split — a **new comparison regime**, the holdout changed),
-`it02_users20` (20-user cohort, doubles as P3 replication; same regime as it01), and
-`it02_train10` (train half only — reproduced the it02 per-user rows bit-for-bit;
-the baseline column for train-set iterations).
+`it02_users20` (20-user cohort, doubles as P3 replication; same regime as it01),
+`it02_train10` (even-rank half — the pre-swap train baseline; reproduced the it02
+per-user rows bit-for-bit), `it02_train10_odd` (post-swap train baseline, odd
+ranks; reproduces it02_users20's odd-user rows bit-for-bit), `it03_clock24`
+(empirical per-event clock features replace the harmonic/meal-window basis —
+the carb hazard beats its clock floor in NLL skill for 9/10 train users),
+`it04_no_iob` (iob feature dropped per the era-bound DD finding; paired deltas
+vs it03 are noise), and `it05_bolus_excite` (bolus-occurrence history pair,
+1-tick visibility — carb hazard improves for all train users and its simulated
+gap p10 approaches the real reference via a refractory meal-spacing effect;
+correction side already saturated). Dev set not yet spent on any candidate.
 
 **Internal user-level train/dev split (2026-08-18)**: the cohort is split by
-span-rank parity in users.csv — even 1-based ranks → `train`, odd → `dev` (10/10,
-span-matched by interleaving; the two 2-user-era users land one per set).
+span-rank parity in users.csv — odd 1-based ranks → `train`, even → `dev` (10/10,
+span-matched by interleaving; the two 2-user-era users land one per set; parity
+swapped later on 2026-08-18 — `it02_train10` was recorded on the even-rank half,
+and the odd half's per-user baseline rows live in `it02_users20`, so record a
+fresh train-set baseline alongside the first real model iteration).
 `build_tick_frame.py --user-set {all,train,dev}` selects the set (`user_sets` in
 that module is the rule), and the set is recorded in each history row's config.
 Iterations are developed with `--user-set train` and judged against `it02_train10`;
@@ -72,13 +100,20 @@ never a hue — it is a shaded labeled row group or solid-vs-dashed/open with a
 `real_sim_legend`. Without `simulated_events.csv` the page falls back to
 real-only example days. It also writes a
 cohort index (`traces_index.html`: rank, set, span, whole-record rates). The
-dashboard main page leads with the across-iterations panels drawn at cohort level
+dashboard main page opens with a **selected-run ROC section** — per-hazard
+holdout one-step-ahead curves (cross-user median at a fixed FPR grid + shaded
+IQR; per-user curves behind the toggle), the clock surrogate's ROC dash-dot
+beneath, the chance diagonal labeled as the binomial surrogate, the recorded
+AUCs printed in-panel, and a per-user model-vs-clock AUC dumbbell strip sorted
+by model AUC (runs recorded before roc_history.csv existed show a "not
+recorded" note) — then the across-iterations panels drawn at cohort level
 — cross-user median + shaded IQR, per-user spaghetti behind a "per-user lines"
 toggle (the y-range tightens to the cohort view when hidden) — then a cohort
 summary of the selected run (median + IQR across users); per-user numbers live in
 a collapsed one-user-at-a-time drill-down. Trace pages are one click away: a
-links strip under the dashboard header (cohort index + every user), plus the
-drill-down link.
+links strip under the dashboard header (cohort index + **train/dev user columns**
+in span-rank order with rank numbers, membership from the `user_sets` parity
+rule; flat list when the data dir is absent), plus the drill-down link.
 
 **Drift-aware split (default since 2026-08-17)**: `split_masks` assigns
 record-relative weeks in a repeating 4-week cycle, 3 train : 1 holdout
@@ -90,12 +125,25 @@ block** (`simulate_blocks`), each block seeded with the user's real history up t
 the block start; gap metrics pool within blocks (`block_gap_minutes`) because
 cross-block gaps are split artifacts.
 
-**Cohort (landed 2026-08-17)**: `export_behavior_traces.py` defaults to the **top
-20** span-ranked candidates (the persisted pool holds up to `MAX_CANDIDATES=50`
-passing the gates; same pseudonymization salt, so ids are stable across exports).
-Re-export flow: run it on Databricks, download the five CSVs to
-`data/behavior_traces/`, validate with `build_tick_frame.py --no-run`, record with
-`--label`. The meta figure and dashboard scale past the 3-hue palette: >3 users
+**Cohort A (landed 2026-08-17, frozen)**: the current 20-user HK-path cohort —
+top-20 span-ranked candidates from the frozen
+`behavior_trace_candidates` table. Its local data (`data/behavior_traces/`) and
+ranking must stay intact: it00–it05 reproduce from it and the train/dev parity
+split is rank-defined. **Cohort B (staging built 2026-08-18)**: the staging
+scripts now target the dense-IOB + entry-clock population — Q10–Q12 showed
+dosingDecisions are direct-uploader-only and hundreds of DIY Loop 3.x users ran
+that uploader continuously, with their clocked HK food rows duplicating the
+direct-path rows on overlap days. `export_trace_candidates.py` gates on the
+DD-run ∩ clocked-food **intersection window** (≥180 d, clocked-day frac ≥0.70,
+≥1 clocked carb/day, CGM ≥0.70, IOB ≥0.90, bolus flag ≥0.90), persists ALL
+eligible users to `behavior_trace_candidates_b` with a seeded deterministic
+random `selection_rank`, and writes a per-selected-user daily IOB/CGM coverage
+figure; `export_behavior_traces.py` exports the **10 lowest ranks** (a random
+sample, not span-ranked) to `exports_b/`, carbs from entry-clock rows only
+(dedupes the dual channels + guarantees the P0 property), same salt.
+Re-export flow: run both on Databricks, download the five CSVs to
+`data/behavior_traces_b/`, validate with `build_tick_frame.py --data-dir … --no-run`,
+record with `--label`. The meta figure and dashboard scale past the 3-hue palette: >3 users
 switches to muted per-user lines + an emphasized cross-user median, identity via
 dashboard hover and the per-user tables.
 
@@ -109,15 +157,22 @@ recorded number** (tested). Worker logs are captured and printed atomically per
 user; the metrics history keeps a single writer (the parent), appended in
 users.csv order.
 
-**Next** (each recorded as `it03+` with `--label`/`--note`, run with
-`--user-set train` and judged against the `it02_train10` baseline; dev users are
-held out for generalization checks): (1) the IOB decision for HK-path uploaders — now blocking,
-since the whole cohort is HK-path; (2) bolus-based excitation features
-(`mins_since_bolus` — real cascade gaps sit below the 20-min visibility floor, so
-the current correction-history features can't express them); (3) richer clock
-(second harmonic or finer basis) — directly motivated by the diurnal surrogate
-beating the model on timing shape for both hazards. P3 replication is satisfied by
-the 20-user cohort.
+**Next** (each recorded as `it06+` with `--label`/`--note`, run with
+`--user-set train` and judged against the `it02_train10_odd` baseline; dev users
+are held out for generalization checks): (0) dev-set confirmation of the
+`it03_clock24` → `it05_bolus_excite` batch once accepted (the one thing dev
+runs are spent on); (1) exponentially-decaying excitation states (2–3 time
+constants per the 2026-08-18 external review) — the boxcar bolus pair landed a
+refractory meal-spacing effect, so the states test whether kernel shape adds
+anything beyond it, especially on the still-under-produced correction rate;
+(2) Q11a–c results (Databricks, pending) decide whether a both-worlds
+(dense-IOB + entry-clock) export is possible. RESOLVED 2026-08-18: richer
+clock (`it03_clock24` — Jeffreys-smoothed, train-cross-fitted empirical hourly
+clock logits, `hourly_clock_logits` / `crossfit_train_clock`); the IOB decision
+(`it04_no_iob` — feature dropped, era-bound DDs confirmed by Q10, §6 column
+retained); bolus-based excitation (`it05_bolus_excite` — `EventHistory`
+generalization, occurrence-based bolus pair at 1-tick visibility). P3
+replication is satisfied by the 20-user cohort.
 
 ## What this is
 
@@ -138,11 +193,14 @@ behavior_model/
 │   ├── architecture.md                 # this file
 │   └── project_history.md              # dated changelog
 ├── data_staging/
-│   ├── export_trace_candidates.py      # Databricks step 1 (slow): rank users (entry-clock coverage
-│   │                                   #   ≥95%, long span, CGM ≥70%, IOB-bearing DDs) → persist to
-│   │                                   #   dev.fda_510k_rwd.behavior_trace_candidates
+│   ├── export_trace_candidates.py      # Databricks step 1 (slow): cohort-B gating — DD-run ∩
+│   │                                   #   clocked-food intersection window ≥180d + CGM/IOB/flag
+│   │                                   #   gates → persist to …behavior_trace_candidates_b with a
+│   │                                   #   seeded random selection_rank + IOB/CGM coverage figure
+│   │                                   #   (cohort A's …behavior_trace_candidates table is frozen)
 │   ├── export_behavior_traces.py       # Databricks step 2 (cheap, re-runnable): read saved candidates,
-│   │                                   #   pick top N → export 5 pseudonymized CSV streams
+│   │                                   #   pick the 10 lowest selection_rank → export 5 pseudonymized
+│   │                                   #   CSV streams to exports_b/ (carbs from entry-clock rows only)
 │   └── exports/                        # Databricks-side CSV output (git-ignored)
 ├── exploratory/
 │   ├── behavior_model_mvp.py           # Stage A module (two-clock labels, shared history features,
@@ -151,8 +209,9 @@ behavior_model/
 │   │                                   #   calibration slope, obs/pred), multi-seed sim metrics
 │   │                                   #   (rate ratios, gap/diurnal/mark fidelity, ablation Δ),
 │   │                                   #   iteration history + --report meta-analysis figure
-│   ├── stage_a_dashboard.py            # self-contained HTML dashboard from the history (run
-│   │                                   #   view + across-iterations view); written by --report
+│   ├── stage_a_dashboard.py            # self-contained HTML dashboard from the history (selected-run
+│   │                                   #   ROC view + across-iterations view + run summary);
+│   │                                   #   written by --report
 │   ├── build_tick_frame.py             # local: CSVs → §6 tick frame → validate → run_mvp →
 │   │                                   #   metric suite; --label records into metrics_history.csv
 │   ├── plot_traces.py                  # trace plots: latency hist, latency-vs-ΔBG, diurnal,
@@ -166,7 +225,8 @@ behavior_model/
 │   ├── test_stage_a_metrics.py         # direct-call tests for the metric suite + history
 │   ├── p0_timestamp_verification.sql   # Databricks read-only queries (results stay off-repo)
 │   └── outputs/                        # per-user Stage A outputs, results writeup,
-│                                       #   metrics_history.csv + meta/ (all git-ignored)
+│                                       #   metrics_history.csv + roc_history.csv + meta/
+│                                       #   (all git-ignored)
 └── data/behavior_traces/               # downloaded trace CSVs (git-ignored)
 ```
 
@@ -175,16 +235,21 @@ behavior_model/
 - **Two-clock convention**: carb entries sit on the tick of their app *entry* time;
   `carb_meal_time` rides along for Stage B physiology; `announce_latency_min` is a mark.
   `validate_tick_frame` enforces placement.
-- **Shared history features**: `CorrectionHistory` is the single implementation of
-  `mins_since_correction` / `n_corrections_2h`, used by both `add_features` (fit) and
+- **Shared history features**: `EventHistory(visibility_ticks)` is the single
+  implementation of both excitation families, used by both `add_features` (fit) and
   `simulate_behavior` (rollout, on simulated history, seeded from the training tail).
-  A correction becomes **visible only once its association window closes**
-  (age > `ASSOCIATION_TICKS`): its correction-vs-meal-bolus label depends on carb entries
+  Corrections (`mins_since_correction` / `n_corrections_2h`) become **visible only
+  once their association window closes**
+  (age > `ASSOCIATION_TICKS`): the correction-vs-meal-bolus label depends on carb entries
   up to 15 min later, so earlier exposure would leak future information into the fit and
   leave the simulate path unable to reproduce the arbitration. Cost: a 20-min floor on
-  `mins_since_correction`. The simulate path mirrors fit-time labeling — a generated
+  `mins_since_correction`. Boluses (`mins_since_bolus` / `n_boluses_2h`, any user
+  bolus, occurrence-based — never dose-weighted, the rollout can't produce doses)
+  are visible from the next tick: occurrence is label-free and final instantly.
+  The simulate path mirrors fit-time labeling — a generated
   bolus within the window of a generated carb is emitted as `meal_bolus`, and a carb
-  entry retracts/relabels a just-recorded simulated correction.
+  entry retracts/relabels a just-recorded simulated correction (the bolus history is
+  never retracted: a relabeled correction is still a bolus).
 - **Hazards**: one statsmodels `Logit` per event type (plain MLE — mean predicted hazard
   equals observed rate by construction), no class rebalancing. Degenerate training
   segments (an event type with zero train events → singular/rank-deficient fit) fall

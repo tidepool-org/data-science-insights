@@ -3,8 +3,8 @@
 Fits and validates the behavior module ALONE, driven by the user's real CGM
 trace. No physiology simulator required.
 
-Known approximation: during simulation, `cgm` and `iob` come from the real
-holdout record, so they do not respond to simulated boluses. Stage A is
+Known approximation: during simulation, `cgm` comes from the real
+holdout record, so it does not respond to simulated boluses. Stage A is
 therefore a check on MARGINAL event rates and timing structure, not a
 coherent trajectory. That is still the right first test -- if marginal
 rates are wrong, nothing downstream can be right.
@@ -58,23 +58,51 @@ EXCITATION_TICKS = EXCITATION_WINDOW_MINUTES // TICK_MINUTES
 NAN_MARK_WARN_FRAC = 0.25  # simulated correction marks allowed to be NaN before warning
 
 EVENT_TYPES = ("is_carb_entry", "is_correction")
-SELF_EXCITATION_FEATURES = ["mins_since_correction", "n_corrections_2h"]
+# two excitation families, kept side by side so they can be compared: the
+# correction pair waits out the label's association window before an event
+# becomes visible; the bolus pair sees any user bolus (meal or correction)
+# from the NEXT tick, because bolus OCCURRENCE is label-free and final
+# instantly. Occurrence-based only, never dose-weighted -- the simulate path
+# cannot produce doses (sparse recommended_bolus), so a dose-weighted feature
+# would be train/serve skew by construction.
+CORRECTION_EXCITATION_FEATURES = ["mins_since_correction", "n_corrections_2h"]
+BOLUS_EXCITATION_FEATURES = ["mins_since_bolus", "n_boluses_2h"]
+SELF_EXCITATION_FEATURES = CORRECTION_EXCITATION_FEATURES + BOLUS_EXCITATION_FEATURES
+BOLUS_VISIBILITY_TICKS = 0  # a bolus is visible once age > 0: the hazard at a
+                            # tick is evaluated before that tick's own events
+                            # (no self-reference), and nothing else needs hiding
+CLOCK_FEATURES = {"is_carb_entry": "clock_carb", "is_correction": "clock_corr"}
+CLOCK_JEFFREYS_ALPHA = 0.5  # Beta(1/2,1/2) smoothing of the hourly rates: a
+                            # train hour with zero events must not become a
+                            # -20 logit outlier in the clock feature
 
 DEFAULT_SPLIT = "interleaved_weeks"
 CYCLE_WEEKS = 4  # interleaved split: repeating cycle; the trailing
                  # (1 - train_frac) share of each cycle is holdout
 
+# time-of-day enters via the per-event empirical clocks (hourly_clock_logits);
+# tod_sin/tod_cos/in_meal_window are still computed as columns (marks + plots
+# + the simulate grams pool use in_meal_window) but the 24-bin clock spans
+# them as a hazard basis -- the meal windows are hour-aligned.
+# `iob` is NOT in the default basis (dropped 2026-08-18): cohort A's dosing
+# decisions are era-bound, so the ffilled value was a frozen per-user calendar
+# step, not insulin state. On dense-DD cohorts (cohort B) it is the number the
+# app DISPLAYED at each cycle -- the ideal behavioral covariate -- so
+# run_mvp(use_iob=True) / build_tick_frame --iob-feature re-adds it for an
+# exact with/without comparison on the same cohort. The column is always in
+# the data contract and add_features always prepares it.
 FEATURES = [
     "cgm_filled",
     "cgm_missing",
     "delta_30",
-    "iob",
     "mins_since_correction",
     "n_corrections_2h",
-    "tod_sin",
-    "tod_cos",
-    "in_meal_window",
+    "mins_since_bolus",
+    "n_boluses_2h",
+    "clock_carb",
+    "clock_corr",
 ]
+IOB_FEATURE = "iob"  # appended to the basis only when use_iob is set
 
 REQUIRED_COLUMNS = [
     "timestamp", "cgm", "iob", "recommended_bolus",
@@ -151,35 +179,46 @@ def label_events(df):
 # Features -- all strictly backward-looking
 # --------------------------------------------------------------------------
 
-class CorrectionHistory:
-    """Past correction events as seen from a given tick.
+class EventHistory:
+    """Past events of one kind (corrections, boluses) as seen from a tick.
 
-    The single implementation of the two self-excitation features, used by
-    BOTH the fit and simulate paths -- any second implementation is
-    train/serve skew waiting to happen.
+    The single implementation of the excitation feature pairs, used by BOTH
+    the fit and simulate paths -- any second implementation is train/serve
+    skew waiting to happen.
 
-    A correction only becomes VISIBLE once its association window has closed
-    (age > ASSOCIATION_TICKS): until then its label still depends on carb
-    entries the user hasn't made yet, so exposing it would leak future
-    information into the fit and force the simulate path to arbitrate labels
-    it cannot know. The cost is a (ASSOCIATION_TICKS+1)-tick floor on
-    mins_since_correction. `retract` lets the simulate path undo a recorded
-    correction that a subsequently generated carb entry relabels as a meal
-    bolus -- the visibility lag guarantees it never influenced any feature.
+    `visibility_ticks` is the age at or below which an event is still
+    INVISIBLE: features at tick i consume only events with
+    i - t > visibility_ticks. Two lags are in use:
+
+    * corrections (ASSOCIATION_TICKS): a correction's label depends on carb
+      entries the user may not have made yet, so it stays hidden until its
+      association window closes -- exposing it earlier would leak future
+      information into the fit and force the simulate path to arbitrate
+      labels it cannot know. The cost is a (ASSOCIATION_TICKS+1)-tick floor
+      on mins_since_correction.
+    * boluses (BOLUS_VISIBILITY_TICKS = 0): bolus OCCURRENCE is label-free
+      and final the moment it happens, so the only lag is the structural one
+      tick -- the hazard at a tick is evaluated before that tick's events.
+
+    `retract` lets the simulate path undo a recorded correction that a
+    subsequently generated carb entry relabels as a meal bolus -- the
+    correction visibility lag guarantees it never influenced any feature.
+    A bolus history never retracts: a relabeled correction is still a bolus.
     """
 
-    def __init__(self):
+    def __init__(self, visibility_ticks):
+        self.visibility_ticks = visibility_ticks
         self._ticks = []
 
     def features(self, i):
-        """(mins_since_correction, n_corrections_2h) from corrections whose
-        label is final at tick i (i.e. i - t > ASSOCIATION_TICKS)."""
+        """(mins_since_event, n_events_2h) from events visible at tick i
+        (i.e. i - t > visibility_ticks)."""
         mins = HISTORY_CAP_MINUTES
         n = 0
         newest_seen = False
         for t in reversed(self._ticks):
             age = i - t
-            if age <= ASSOCIATION_TICKS:
+            if age <= self.visibility_ticks:
                 continue
             if not newest_seen:
                 mins = min(age * float(TICK_MINUTES), HISTORY_CAP_MINUTES)
@@ -201,35 +240,84 @@ class CorrectionHistory:
         return popped
 
 
-def seeded_history(df, upto=None):
-    """History pre-loaded with the REAL corrections before positional index
-    `upto` (all rows if None), so a simulated block starts under the user's
-    true recent history rather than falsely quiet history. Positions are
+def seeded_history(flags, visibility_ticks, upto=None):
+    """History pre-loaded with the REAL events flagged True before positional
+    index `upto` (all rows if None), so a simulated block starts under the
+    user's true recent history rather than falsely quiet history. `flags` is
+    a per-tick boolean over the FULL labeled frame (is_correction for the
+    correction history, bolus_u.notna() for the bolus history): positions are
     full-frame positional indices -- the same space simulate_behavior's
-    start_index lives in, so df must be the full labeled frame."""
-    hist = CorrectionHistory()
-    flags = df["is_correction"].to_numpy()
+    start_index lives in."""
+    hist = EventHistory(visibility_ticks)
+    arr = np.asarray(flags, dtype=bool)
     if upto is not None:
-        flags = flags[:upto]
-    for i in np.flatnonzero(flags):
+        arr = arr[:upto]
+    for i in np.flatnonzero(arr):
         hist.record(int(i))
     return hist
 
 
-def add_features(df, cgm_fill_value=None):
-    """Nine strictly backward-looking features (only what the user could see).
+def hourly_clock_logits(df):
+    """Per-event log-odds of the empirical hourly event rate (24-vector per
+    event type), from a LABELED frame -- pass the training segment so the
+    holdout never leaks in. This is the diurnal surrogate's 24-bin lookup
+    exposed as a feature (Jeffreys-smoothed, so it nests the habit-clock
+    baseline up to that smoothing): a unit coefficient on its own clock
+    reproduces the baseline, so the fitted hazard builds ON the clock
+    instead of chasing it with two harmonics."""
+    hour = df["timestamp"].dt.hour
+    n_h = hour.value_counts().reindex(range(24), fill_value=0).to_numpy(dtype=float)
+    out = {}
+    for event in EVENT_TYPES:
+        e_h = (df[event].groupby(hour).sum()
+               .reindex(range(24), fill_value=0).to_numpy(dtype=float))
+        rate = (e_h + CLOCK_JEFFREYS_ALPHA) / (n_h + 2 * CLOCK_JEFFREYS_ALPHA)
+        rate[n_h == 0] = max(df[event].mean(), CLOCK_JEFFREYS_ALPHA / len(df))
+        out[event] = np.log(rate / (1.0 - rate))
+    return out
 
-    `cgm_fill_value` covers ticks before the first CGM reading; pass a value
-    computed on the TRAINING segment so the holdout never leaks into it.
+
+def crossfit_train_clock(df, mask):
+    """Overwrite the TRAIN rows' clock features with leave-one-tick-out
+    hourly rates (Jeffreys-smoothed), in place. The lookup is estimated on
+    the same train ticks the Logit then fits, so each event tick inflates
+    its own hour's rate and MLE learns that memorization -- at thin event
+    counts it costs real holdout skill. Exact per-tick LOO removes the
+    self-contribution; holdout rows (and the simulate path) keep the
+    full-train lookup from hourly_clock_logits."""
+    train_idx = np.flatnonzero(~mask)
+    hour = df["timestamp"].dt.hour.to_numpy()[train_idx]
+    n_h = np.bincount(hour, minlength=24).astype(float)
+    for event, col in CLOCK_FEATURES.items():
+        y = df[event].to_numpy(dtype=float)[train_idx]
+        e_h = np.bincount(hour, weights=y, minlength=24)
+        rate = ((e_h[hour] - y + CLOCK_JEFFREYS_ALPHA)
+                / (n_h[hour] - 1 + 2 * CLOCK_JEFFREYS_ALPHA))
+        df.loc[df.index[train_idx], col] = np.log(rate / (1.0 - rate))
+
+
+def add_features(df, cgm_fill_value=None, clock_logits=None):
+    """Thirteen strictly backward-looking feature columns (only what the
+    user could see).
+
+    `cgm_fill_value` covers ticks before the first CGM reading and
+    `clock_logits` (from hourly_clock_logits) supplies the per-event hourly
+    log-odds clock; pass values computed on the TRAINING segment so the
+    holdout never leaks into them. Both default to whole-frame computation
+    for direct/test use.
     """
     df = df.copy()
     if cgm_fill_value is None:
         cgm_fill_value = df["cgm"].median()
+    if clock_logits is None:
+        clock_logits = hourly_clock_logits(df)
 
     df["cgm_missing"] = df["cgm"].isna().astype(float)
     df["cgm_filled"] = df["cgm"].ffill().fillna(cgm_fill_value)
     df["delta_30"] = df["cgm_filled"].diff(DELTA_WINDOW_MINUTES // TICK_MINUTES).fillna(0.0)
-    df["iob"] = df["iob"].ffill().fillna(0.0)
+    # always prepared, consumed only under use_iob (dense-DD cohorts): the
+    # app-displayed IOB, forward-filled across the short intra-cycle gaps
+    df[IOB_FEATURE] = df[IOB_FEATURE].ffill().fillna(0.0)
 
     hour = df["timestamp"].dt.hour + df["timestamp"].dt.minute / 60.0
     df["tod_sin"] = np.sin(2 * np.pi * hour / 24.0)
@@ -237,17 +325,28 @@ def add_features(df, cgm_fill_value=None):
     df["in_meal_window"] = sum(
         ((hour >= lo) & (hour < hi)).astype(float) for lo, hi in MEAL_WINDOWS
     )
+    hour_idx = df["timestamp"].dt.hour.to_numpy()
+    for event, col in CLOCK_FEATURES.items():
+        df[col] = clock_logits[event][hour_idx]
 
-    mins, counts = [], []
-    hist = CorrectionHistory()
-    for i, is_corr in enumerate(df["is_correction"].to_numpy()):
-        m, n = hist.features(i)
-        mins.append(m)
-        counts.append(n)
-        if is_corr:
-            hist.record(i)
-    df["mins_since_correction"] = mins
-    df["n_corrections_2h"] = counts
+    # bolus occurrence = any tick with a user bolus, meal or correction --
+    # taken from the raw column so it needs no label arbitration
+    for (mins_col, count_col), flags, lag in [
+        (CORRECTION_EXCITATION_FEATURES, df["is_correction"].to_numpy(),
+         ASSOCIATION_TICKS),
+        (BOLUS_EXCITATION_FEATURES, df["bolus_u"].notna().to_numpy(),
+         BOLUS_VISIBILITY_TICKS),
+    ]:
+        mins, counts = [], []
+        hist = EventHistory(lag)
+        for i, fired in enumerate(flags):
+            m, n = hist.features(i)
+            mins.append(m)
+            counts.append(n)
+            if fired:
+                hist.record(i)
+        df[mins_col] = mins
+        df[count_col] = counts
     return df
 
 
@@ -411,12 +510,12 @@ SIMULATED_COLUMNS = ["timestamp", "event", "mark", "announce_latency_min", "bolu
 
 
 def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
-                      history=None, start_index=0):
+                      history=None, bolus_history=None, start_index=0):
     """Walk the holdout ticks, generating events from the fitted hazards.
 
-    `cgm` and `iob` are taken from the real record (the Stage A
-    approximation). Self-excitation features come from the SIMULATED history
-    via the same CorrectionHistory used at fit time, so cascades are
+    `cgm` is taken from the real record (the Stage A
+    approximation). Self-excitation features come from the SIMULATED
+    histories via the same EventHistory used at fit time, so cascades are
     generated by the model, not copied from the user. `start_index` is the
     holdout's first positional index in the full frame, so seeded history
     tick indices line up.
@@ -428,11 +527,23 @@ def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
     correction recorded inside the window -- the visibility lag guarantees a
     retracted correction never influenced any feature. Seeded (real) train
     corrections are never retracted; their labels are final.
+
+    The bolus history records an occurrence for EVERY generated bolus --
+    correction events (however arbitration labels them), and carb entries
+    whose meal-bolus coin flip lands True -- but at most one per tick,
+    because the real side is tick-grained (same-tick boluses sum into one
+    bolus_u). Retraction never touches it: a correction relabeled to
+    meal_bolus is still a bolus. That asymmetry is the point of the pair --
+    occurrence needs no label arbitration, so it is visible from the next
+    tick instead of waiting out the association window.
     """
     features = hazards["features"]
     models = hazards["models"]
-    hist = history if history is not None else CorrectionHistory()
-    dynamic = [f for f in SELF_EXCITATION_FEATURES if f in features]
+    hist = history if history is not None else EventHistory(ASSOCIATION_TICKS)
+    bolus_hist = (bolus_history if bolus_history is not None
+                  else EventHistory(BOLUS_VISIBILITY_TICKS))
+    dynamic = [(hist, CORRECTION_EXCITATION_FEATURES),
+               (bolus_hist, BOLUS_EXCITATION_FEATURES)]
 
     out = []
     corr_row_by_tick = {}
@@ -441,20 +552,24 @@ def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
     for offset, row in enumerate(holdout.itertuples()):
         i = start_index + offset
         feats = {f: getattr(row, f) for f in features}
-        if dynamic:
-            m, n = hist.features(i)
-            if "mins_since_correction" in feats:
-                feats["mins_since_correction"] = m
-            if "n_corrections_2h" in feats:
-                feats["n_corrections_2h"] = n
+        for h, family in dynamic:
+            if any(f in feats for f in family):
+                for f, value in zip(family, h.features(i)):
+                    if f in feats:
+                        feats[f] = value
         x = np.array([feats[f] for f in features], dtype=float)
+        bolus_this_tick = False
 
         if rng.random() < _hazard(models["is_carb_entry"], x):
-            grams = marks.sample_grams(feats.get("in_meal_window", 0) > 0, rng)
+            # grams pool by meal window regardless of hazard feature set
+            grams = marks.sample_grams(row.in_meal_window > 0, rng)
             latency = marks.sample_latency(rng)
             bolused = rng.random() < meal_bolus_p
             out.append((row.timestamp, "carb_entry", grams, latency, bolused))
             last_carb_tick = i
+            if bolused:
+                bolus_hist.record(i)
+                bolus_this_tick = True
             for t in hist.retract(max(i - ASSOCIATION_TICKS, start_index)):
                 idx = corr_row_by_tick.pop(t)
                 ts, _, mark, lat, bol = out[idx]
@@ -468,6 +583,8 @@ def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
                 out.append((row.timestamp, "correction", units, np.nan, True))
                 hist.record(i)
                 corr_row_by_tick[i] = len(out) - 1
+            if not bolus_this_tick:
+                bolus_hist.record(i)
 
     sim = pd.DataFrame(out, columns=SIMULATED_COLUMNS)
     sim["timestamp"] = pd.to_datetime(sim["timestamp"])
@@ -485,14 +602,20 @@ def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
 
 def simulate_blocks(df, blocks, hazards, marks, meal_bolus_p, rng):
     """Stage A simulation over (possibly non-contiguous) holdout blocks: each
-    block is rolled out separately, seeded with the user's REAL history up to
-    the block start; self-excitation WITHIN a block still comes from
-    simulated events. Scoring is marginal/pooled, so conditioning each block
-    on real pre-block history is the block-wise analog of seeding the single
-    chronological holdout with the training tail."""
+    block is rolled out separately, seeded with the user's REAL correction
+    and bolus histories up to the block start; self-excitation WITHIN a
+    block still comes from simulated events. Scoring is marginal/pooled, so
+    conditioning each block on real pre-block history is the block-wise
+    analog of seeding the single chronological holdout with the training
+    tail."""
     sims = [
-        simulate_behavior(df.iloc[s:e], hazards, marks, meal_bolus_p, rng,
-                          history=seeded_history(df, upto=s), start_index=s)
+        simulate_behavior(
+            df.iloc[s:e], hazards, marks, meal_bolus_p, rng,
+            history=seeded_history(df["is_correction"], ASSOCIATION_TICKS,
+                                   upto=s),
+            bolus_history=seeded_history(df["bolus_u"].notna(),
+                                         BOLUS_VISIBILITY_TICKS, upto=s),
+            start_index=s)
         for s, e in blocks
     ]
     if not sims:
@@ -584,14 +707,19 @@ def weekly_drift_check(df):
 
 # --------------------------------------------------------------------------
 
-def run_mvp(df, split=DEFAULT_SPLIT, train_frac=0.75, seed=0):
+def run_mvp(df, split=DEFAULT_SPLIT, train_frac=0.75, seed=0, use_iob=False):
     """End-to-end Stage A driver: split (drift-aware interleaved weeks by
     default), fit, one quick-look block-wise simulation, comparison tables.
     Returns the fitted pieces plus the full labeled frame and the holdout
     blocks so downstream evaluation can re-simulate. The metric suite
     (multi-seed replicates, ablation, holdout fit metrics, iteration
     history) lives in `stage_a_metrics.evaluate`, which consumes this
-    result."""
+    result.
+
+    `use_iob` appends the app-displayed IOB to the hazard basis -- meant
+    for dense-DD cohorts (cohort B), where flagged-on and flagged-off runs
+    on the same cohort give the exact with/without comparison. The recorded
+    feature list carries the flag's effect, so history rows self-document."""
     rng = np.random.default_rng(seed)
 
     validate_tick_frame(df)
@@ -600,13 +728,16 @@ def run_mvp(df, split=DEFAULT_SPLIT, train_frac=0.75, seed=0):
     if not mask.any() or mask.all():
         raise ValueError(
             f"{split} split left train or holdout empty ({len(df)} ticks)")
-    df = add_features(df, cgm_fill_value=df.loc[~mask, "cgm"].median())
+    df = add_features(df, cgm_fill_value=df.loc[~mask, "cgm"].median(),
+                      clock_logits=hourly_clock_logits(df[~mask]))
+    crossfit_train_clock(df, mask)
     train, holdout = df[~mask], df[mask]
     blocks = holdout_blocks(mask)
     spans = block_spans(df, blocks)
 
-    hazards = fit_hazards(train)
-    reduced = [f for f in FEATURES if f not in SELF_EXCITATION_FEATURES]
+    features = FEATURES + ([IOB_FEATURE] if use_iob else [])
+    hazards = fit_hazards(train, features=features)
+    reduced = [f for f in features if f not in SELF_EXCITATION_FEATURES]
     marks = EmpiricalMarks(train)
     meal_bolus_p = fit_meal_bolus_rate(train)
 

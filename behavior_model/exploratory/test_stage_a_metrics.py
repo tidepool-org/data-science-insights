@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from behavior_model_mvp import run_mvp
 from stage_a_metrics import (
+    MAX_ROC_POINTS,
     _auc,
     _calibration_slope,
     _diurnal_tv,
@@ -25,9 +26,12 @@ from stage_a_metrics import (
     _nll,
     _overnight_share,
     append_history,
+    append_roc_history,
     evaluate,
+    fit_metrics,
     metric_description,
     report,
+    roc_curves,
 )
 from test_behavior_model_mvp import make_synthetic
 
@@ -110,9 +114,11 @@ def test_evaluate_smoke():
     assert m.loc["corr_per_day_sim", "sd"] > 0
     assert m.loc["carb_per_day_sim", "sd"] > 0
 
-    # the fitted hazards must beat the constant-rate baseline on synthetic
-    # data whose generator is feature-driven
-    assert m.loc["corr_nll_skill", "value"] > 0
+    # the carb hazard must beat the constant-rate baseline; the synthetic
+    # CORRECTION process is iob-suppressed and the model deliberately
+    # excludes iob (era-bound uploads, dropped 2026-08-18), so at ~90 train
+    # events its skill vs constant hovers at zero -- bounded, not positive
+    assert m.loc["corr_nll_skill", "value"] > -0.05
     assert m.loc["carb_nll_skill", "value"] > 0
     # ... and corrections must beat the diurnal baseline too (their synthetic
     # signal is glucose/excitation, not the clock). For CARB entries the
@@ -133,8 +139,17 @@ def test_evaluate_smoke():
     assert m.loc["surr_diurnal_diurnal_tv_carb_entries", "value"] < \
         m.loc["surr_const_diurnal_tv_carb_entries", "value"], \
         "hour-of-day surrogate should beat constant on diurnal shape"
-    assert m.loc["corr_auc", "value"] > 0.55
+    # corr discrimination without iob is near-chance in this iob-driven
+    # synthetic world (sanity-bounded only); carb discrimination must be real
+    assert m.loc["corr_auc", "value"] > 0.45
     assert m.loc["carb_auc", "value"] > 0.55
+    # surrogate AUC floors: the constant kind is exactly 0.5 by construction
+    # (a flat rate cannot rank ticks); the clock floor is a real number and
+    # must be markedly above chance for the strongly diurnal carb generator
+    assert m.loc["surr_const_corr_auc", "value"] == 0.5
+    assert m.loc["surr_const_carb_auc", "value"] == 0.5
+    assert m.loc["surr_diurnal_carb_auc", "value"] > 0.55
+    assert 0.4 < m.loc["surr_diurnal_corr_auc", "value"] < 1.0
     for ratio in ("corr_rate_ratio", "carb_rate_ratio", "corr_obs_pred_ratio"):
         assert 1 / 3 < m.loc[ratio, "value"] < 3, \
             f"{ratio} = {m.loc[ratio, 'value']:.2f}"
@@ -161,6 +176,46 @@ def test_evaluate_smoke():
         assert np.allclose(m["value"], m3["value"], equal_nan=True) and \
             np.allclose(m["sd"], m3["sd"], equal_nan=True), \
             "n_jobs changed evaluate output"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_roc_curves_and_history():
+    """ROC vertices: valid step curves whose trapezoid area matches the
+    recorded AUCs (model and clock surrogate), thinning respected, and the
+    roc_history file replaces (label, user) blocks like the metrics one."""
+    df = make_synthetic(days=120)
+    res = run_mvp(df, seed=0)
+    roc = roc_curves(res)
+    fm = fit_metrics(res["train"], res["holdout"], res["hazards"])
+
+    assert set(roc["event"]) == {"corr", "carb"}
+    assert set(roc["predictor"]) == {"model", "binomial", "clock"}
+    for prefix in ("corr", "carb"):
+        for pred, auc_key in (("model", f"{prefix}_auc"),
+                              ("binomial", f"surr_const_{prefix}_auc"),
+                              ("clock", f"surr_diurnal_{prefix}_auc")):
+            c = roc[(roc["event"] == prefix) & (roc["predictor"] == pred)]
+            f, t = c["fpr"].to_numpy(), c["tpr"].to_numpy()
+            assert 2 <= len(c) <= MAX_ROC_POINTS
+            assert f[0] == 0.0 and t[0] == 0.0 and f[-1] == 1.0 and t[-1] == 1.0
+            assert np.all(np.diff(f) >= 0) and np.all(np.diff(t) >= 0)
+            area = float(((t[1:] + t[:-1]) / 2 * np.diff(f)).sum())
+            assert abs(area - fm[auc_key]) < 0.02, \
+                f"{prefix}/{pred}: trapezoid {area:.4f} vs AUC {fm[auc_key]:.4f}"
+
+    tmp = tempfile.mkdtemp()
+    try:
+        path = os.path.join(tmp, "roc_history.csv")
+        append_roc_history(roc, "it00", "uA", path)
+        append_roc_history(roc, "it00", "uA", path)
+        assert len(pd.read_csv(path)) == len(roc), \
+            "re-recording a (label, user) must replace, not append"
+        append_roc_history(roc, "it00", "uB", path)
+        hist = pd.read_csv(path)
+        assert len(hist) == 2 * len(roc)
+        assert list(hist.columns) == ["run_label", "user", "event",
+                                      "predictor", "fpr", "tpr"]
     finally:
         shutil.rmtree(tmp)
 
@@ -197,6 +252,13 @@ def test_history_roundtrip():
         assert all(c in hist.columns
                    for c in ["run_ts", "git_commit", "user", "config"])
 
+        # a ROC block beside the history feeds the dashboard's selected-run
+        # ROC section (runs without one fall back to the not-recorded note)
+        roc = pd.DataFrame({"event": ["corr"] * 3, "predictor": ["model"] * 3,
+                            "fpr": [0.0, 0.2, 1.0], "tpr": [0.0, 0.7, 1.0]})
+        append_roc_history(roc, "it01_change", "uA",
+                           os.path.join(tmp, "roc_history.csv"))
+
         meta_dir = os.path.join(tmp, "meta")
         report(hist_path, meta_dir)
         assert os.path.exists(os.path.join(meta_dir, "meta_table_uA.csv"))
@@ -209,8 +271,11 @@ def test_history_roundtrip():
         assert "what changed in it01" in html, "iteration note missing from dashboard"
         assert "memoryless" in html, \
             "metric descriptions missing from dashboard payload"
-        assert "NaN" not in html.split("const DATA = ")[1].split(";\n")[0], \
+        payload = html.split("const DATA = ")[1].split(";\n")[0]
+        assert "NaN" not in payload, \
             "NaN leaked into the dashboard JSON payload"
+        assert '"model": [[0.0, 0.0], [0.2, 0.7], [1.0, 1.0]]' in payload, \
+            "ROC vertices missing from the dashboard payload"
     finally:
         shutil.rmtree(tmp)
 
@@ -252,6 +317,7 @@ TESTS = [
     test_calibration_slope,
     test_diurnal_tv_and_shares,
     test_evaluate_smoke,
+    test_roc_curves_and_history,
     test_history_roundtrip,
     test_many_user_report,
 ]

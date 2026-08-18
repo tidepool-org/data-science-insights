@@ -44,7 +44,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from behavior_model_mvp import (DEFAULT_SPLIT, TICK_MINUTES, run_mvp,
                                 validate_tick_frame)
 from stage_a_metrics import (BASE_SEED_DEFAULT, HISTORY_FILENAME,
-                             N_SIMS_DEFAULT, append_history, evaluate)
+                             N_SIMS_DEFAULT, ROC_FILENAME, append_history,
+                             append_roc_history, evaluate, roc_curves)
 
 DEFAULT_DATA_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "data", "behavior_traces")
@@ -58,17 +59,19 @@ def user_sets(user_ids):
     """Internal user-level train/dev sets from users.csv order.
 
     Rank = 1-based position in users.csv (the export writes it in span-rank
-    order). Even ranks -> train (the set iterations are developed against),
-    odd ranks -> dev (held-out users, run sparingly to check that an
-    improvement generalizes). Interleaving by rank matches the two sets on
+    order). Odd ranks -> train (the set iterations are developed against),
+    even ranks -> dev (held-out users, run sparingly to check that an
+    improvement generalizes). (Parity swapped 2026-08-18 -- it02_train10 was
+    recorded on the even-rank half; the odd half's per-user baseline rows
+    live in it02_users20.) Interleaving by rank matches the two sets on
     record span, and the two 2-user-era users (ranks 1-2) land one per set.
     Distinct from the within-user temporal train/holdout split. Membership
     is defined by rank, not id: a re-export that reshuffles the candidate
     ranking moves users between sets.
     """
     return {
-        "train": [u for i, u in enumerate(user_ids) if (i + 1) % 2 == 0],
-        "dev": [u for i, u in enumerate(user_ids) if (i + 1) % 2 == 1],
+        "train": [u for i, u in enumerate(user_ids) if (i + 1) % 2 == 1],
+        "dev": [u for i, u in enumerate(user_ids) if (i + 1) % 2 == 0],
     }
 
 
@@ -204,10 +207,12 @@ def load_streams(data_dir):
     return streams
 
 
-def _user_report(uid, per_user, out_dir, run_model, n_sims, split, sim_jobs=1):
+def _user_report(uid, per_user, out_dir, run_model, n_sims, split, sim_jobs=1,
+                 use_iob=False):
     """Build/validate/run/score one user; writes the per-user outputs.
-    Returns (metrics_df|None, config|None, captured_log) -- stdout is
-    captured so parallel workers' logs print atomically, in one block."""
+    Returns (metrics_df|None, config|None, roc_df|None, captured_log) --
+    stdout is captured so parallel workers' logs print atomically, in one
+    block."""
     buf = io.StringIO()
     with redirect_stdout(buf):
         print(f"\n=== {uid} ===")
@@ -220,9 +225,9 @@ def _user_report(uid, per_user, out_dir, run_model, n_sims, split, sim_jobs=1):
               f"iob coverage {frame['iob'].notna().mean():.1%}")
 
         if not run_model:
-            return None, None, buf.getvalue()
+            return None, None, None, buf.getvalue()
 
-        res = run_mvp(frame, split=split)
+        res = run_mvp(frame, split=split, use_iob=use_iob)
         print(f"\n  split: {res['split']}")
         print("\n  weekly drift (inspect BEFORE trusting the time split):")
         print(res["drift"].to_string())
@@ -245,12 +250,15 @@ def _user_report(uid, per_user, out_dir, run_model, n_sims, split, sim_jobs=1):
         res["drift"].to_csv(os.path.join(user_out, "drift.csv"))
         res["simulated"].to_csv(os.path.join(user_out, "simulated_events.csv"), index=False)
         metrics.to_csv(os.path.join(user_out, "metrics.csv"), index=False)
+        roc = roc_curves(res)
+        roc.to_csv(os.path.join(user_out, "roc.csv"), index=False)
         print(f"  outputs -> {user_out}/")
 
         config = {"split": res["split"],
                   "features": res["hazards"]["features"],
+                  "use_iob": use_iob,
                   "n_sims": n_sims, "base_seed": BASE_SEED_DEFAULT}
-    return metrics, config, buf.getvalue()
+    return metrics, config, roc, buf.getvalue()
 
 
 def default_jobs():
@@ -260,7 +268,7 @@ def default_jobs():
 def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
                 only_user=None, run_model=True, label=None,
                 n_sims=N_SIMS_DEFAULT, split=DEFAULT_SPLIT, note="",
-                jobs=None, user_set="all"):
+                jobs=None, user_set="all", use_iob=False):
     """Two-level parallelism against a total process budget `jobs`
     (None -> cores minus JOBS_RESERVED_CORES): users fan out across
     processes (the natural grain -- saturates any machine once the cohort
@@ -276,7 +284,7 @@ def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
     selected = all_ids if user_set == "all" else user_sets(all_ids)[user_set]
     if user_set != "all":
         print(f"user set '{user_set}': {len(selected)}/{len(all_ids)} users "
-              "(even span ranks -> train, odd -> dev)")
+              "(odd span ranks -> train, even -> dev)")
     uids = [u for u in selected if not only_user or u == only_user]
     if not uids:
         raise SystemExit(
@@ -295,36 +303,39 @@ def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
     results = {}
     if user_workers == 1:
         for uid in uids:
-            metrics, config, log = _user_report(
+            metrics, config, roc, log = _user_report(
                 uid, per_user[uid], out_dir, run_model, n_sims, split,
-                sim_jobs=sim_jobs)
+                sim_jobs=sim_jobs, use_iob=use_iob)
             print(log, end="")
-            results[uid] = {"metrics": metrics, "config": config}
+            results[uid] = {"metrics": metrics, "config": config, "roc": roc}
     else:
         print(f"running {len(uids)} user(s) across {user_workers} processes"
               + (f" x {sim_jobs} replicate workers" if sim_jobs > 1 else ""))
         with ProcessPoolExecutor(max_workers=user_workers) as pool:
             futures = {
                 pool.submit(_user_report, uid, per_user[uid], out_dir,
-                            run_model, n_sims, split, sim_jobs): uid
+                            run_model, n_sims, split, sim_jobs, use_iob): uid
                 for uid in uids
             }
             for fut in as_completed(futures):
                 uid = futures[fut]
                 try:
-                    metrics, config, log = fut.result()
+                    metrics, config, roc, log = fut.result()
                 except Exception:
                     print(f"\n=== {uid} === FAILED")
                     raise
                 print(log, end="")
-                results[uid] = {"metrics": metrics, "config": config}
+                results[uid] = {"metrics": metrics, "config": config,
+                                "roc": roc}
 
     if label and run_model:
         history_path = os.path.join(out_dir, HISTORY_FILENAME)
+        roc_path = os.path.join(out_dir, ROC_FILENAME)
         for uid in uids:  # stable order, single writer
             append_history(results[uid]["metrics"], label, uid,
                            dict(results[uid]["config"], user_set=user_set),
                            history_path, note=note)
+            append_roc_history(results[uid]["roc"], label, uid, roc_path)
         print(f"\nrecorded {len(uids)} user(s) as '{label}' in {history_path}")
         print("meta-analysis: python stage_a_metrics.py --report")
     return results
@@ -338,8 +349,8 @@ if __name__ == "__main__":
     parser.add_argument("--user-set", default="all",
                         choices=["all", "train", "dev"],
                         help="internal user-level split by span rank in "
-                             "users.csv: even ranks -> train (iterate here), "
-                             "odd -> dev (held out for generalization checks)")
+                             "users.csv: odd ranks -> train (iterate here), "
+                             "even -> dev (held out for generalization checks)")
     parser.add_argument("--no-run", action="store_true",
                         help="build + validate frames only")
     parser.add_argument("--label", default=None,
@@ -355,6 +366,11 @@ if __name__ == "__main__":
                         help="one-line description of what this iteration "
                              "changed; recorded with --label and shown in "
                              "the report + dashboard")
+    parser.add_argument("--iob-feature", action="store_true",
+                        help="append the app-displayed IOB to the hazard "
+                             "basis (dense-DD cohorts only; run the same "
+                             "cohort with and without under different "
+                             "labels for the A/B comparison)")
     parser.add_argument("--jobs", type=int, default=None,
                         help="total process budget (default: cores minus "
                              f"{JOBS_RESERVED_CORES}); split across users, "
@@ -364,4 +380,5 @@ if __name__ == "__main__":
     run_stage_a(args.data_dir, args.out_dir, args.user,
                 run_model=not args.no_run, label=args.label,
                 n_sims=args.n_sims, split=args.split, note=args.note,
-                jobs=args.jobs, user_set=args.user_set)
+                jobs=args.jobs, user_set=args.user_set,
+                use_iob=args.iob_feature)

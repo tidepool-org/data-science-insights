@@ -403,7 +403,6 @@ def weekly_table(frame, mask, sim):
         "carb_g_per_day": (w["carb_entry_g"].sum() / days).where(ok_days),
         "bolus_u_per_day": (w["bolus_u"].sum() / days).where(ok_days),
         "cgm_coverage": w["cgm"].apply(lambda s: s.notna().mean()),
-        "iob_coverage": w["iob"].apply(lambda s: s.notna().mean()),
         "median_announce_latency_min": w["announce_latency_min"].median(),
     })
     out.index.name = "week_end"
@@ -526,13 +525,10 @@ def plot_weekly_aggregates(weekly, out_dir, has_sim):
                     color="#cde2fb")
     ax.plot(weekly.index, weekly["cgm_coverage"].clip(upper=1.0), color=BLUE,
             linewidth=1.5)
-    ax.plot(weekly.index, weekly["iob_coverage"].clip(upper=1.0), color=MUT,
-            linewidth=1.5)
     ax.set_ylim(0, 1.05)
-    _end_labels(ax, [(weekly["cgm_coverage"].iloc[-1], "CGM", BLUE),
-                     (weekly["iob_coverage"].iloc[-1], "IOB", MUT)],
+    _end_labels(ax, [(weekly["cgm_coverage"].iloc[-1], "CGM", BLUE)],
                 min_sep_frac=0.14)
-    ax.set_ylabel("tick coverage", color=SEC, fontsize=9)
+    ax.set_ylabel("CGM tick coverage", color=SEC, fontsize=9)
     _save(fig, out_dir, "11_weekly_aggregates.png")
 
 
@@ -788,14 +784,14 @@ def _table_html(df, floatfmt="{:.2f}"):
 def write_index(rows, out_path):
     head = ("<tr><th>rank</th><th>user</th><th>set</th><th>window</th>"
             "<th>days</th><th>carb entries/day</th><th>corrections/day</th>"
-            "<th>meal boluses/day</th><th>CGM cov</th><th>IOB cov</th></tr>")
+            "<th>meal boluses/day</th><th>CGM cov</th></tr>")
     body = "".join(
         f'<tr><td>{r["rank"]}</td>'
         f'<td><a href="{r["uid"]}/traces.html">{r["uid"]}</a></td>'
         f'<td>{r["set"]}</td><td>{r["window"]}</td><td>{r["days"]:.0f}</td>'
         f'<td>{r["carb_rate"]:.1f}</td><td>{r["corr_rate"]:.1f}</td>'
-        f'<td>{r["mb_rate"]:.1f}</td><td>{r["cgm_cov"]:.0%}</td>'
-        f'<td>{r["iob_cov"]:.0%}</td></tr>' for r in rows)
+        f'<td>{r["mb_rate"]:.1f}</td><td>{r["cgm_cov"]:.0%}</td></tr>'
+        for r in rows)
     doc = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -833,15 +829,13 @@ def build_user_page(uid, rank, uset, window, frame, mask, spans, sim,
     n_mb = int(frame["is_meal_bolus"].sum())
     lat_med = frame["announce_latency_min"].median()
     cgm_cov = frame["cgm"].notna().mean()
-    iob_cov = frame["iob"].notna().mean()
 
     chips = [(f"{n_days:.0f}", "days"), (n_carb, "carb entries"),
              (n_corr, "corrections"), (n_mb, "meal boluses"),
              (f"{n_mb / max(n_mb + n_corr, 1):.0%}", "boluses near a carb"),
              (f"{lat_med:+.0f} min" if pd.notna(lat_med) else "–",
               "median announce latency"),
-             (f"{cgm_cov:.0%}", "CGM coverage"),
-             (f"{iob_cov:.0%}", "IOB coverage")]
+             (f"{cgm_cov:.0%}", "CGM coverage")]
     if sim is not None:
         chips += [(len(spans), "holdout blocks"),
                   (sim["n_events"], "simulated events (1 replicate)")]
@@ -1007,8 +1001,7 @@ def run(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_PLOT_DIR, only_user=None):
             "carb_rate": int(frame["is_carb_entry"].sum()) / n_days,
             "corr_rate": int(frame["is_correction"].sum()) / n_days,
             "mb_rate": int(frame["is_meal_bolus"].sum()) / n_days,
-            "cgm_cov": frame["cgm"].notna().mean(),
-            "iob_cov": frame["iob"].notna().mean()})
+            "cgm_cov": frame["cgm"].notna().mean()})
 
     if not only_user:
         write_index(index_rows, os.path.join(out_dir, INDEX_FILENAME))

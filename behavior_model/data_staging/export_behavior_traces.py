@@ -1,9 +1,24 @@
-"""Export full behavior-model traces for a few hand-picked Loop users.
+"""Export full behavior-model traces for the cohort-B sample.
+
+Cohort B (2026-08-18): users whose longest full-cadence dosingDecision run
+intersects their entry-clocked (HealthKit-path) food period for >=180 days
+-- per-tick IOB and entry-clocked carbs coexist in the export window by
+construction. The sample is the N_EXPORT_USERS lowest `selection_rank`
+rows (seeded deterministic random order), NOT span-ranked. Carbs are taken
+from entry-clock-bearing rows ONLY: on overlap days the direct-path food
+rows are near-complete duplicates of the clocked HK rows (Q12a), so this
+single filter both dedupes the two upload channels and guarantees the
+no-fallback entry-clock property. Boluses keep both channels -- the
+existing (user, time, units) dedup merges dual-path copies and the flag /
+DD fallback classifies them.
 
 Two-step flow: run export_trace_candidates.py FIRST (the slow full-BDDP
-ranking scan; persists to CANDIDATES_TABLE), then this script, which reads
+gating scan; persists to CANDIDATES_TABLE), then this script, which reads
 the saved candidates and does the comparatively cheap stream export -- so
-export tweaks don't pay the ranking cost again.
+export tweaks don't pay the gating cost again. Download the CSVs to
+behavior_model/data/behavior_traces_b/ locally (keep cohort A's
+data/behavior_traces/ intact -- the recorded it00-it05 iterations reproduce
+from it) and run build_tick_frame.py --data-dir against it.
 
 Run on Databricks. Emits five CSVs to OUTPUT_DIR, one row-stream each,
 with `_userId` pseudonymized (salted SHA-256, NMA convention) so raw ids
@@ -25,8 +40,9 @@ per-user offset (latest non-NULL timezoneOffset), because per-row offsets
 are inconsistently populated. Sub-record TZ/DST changes are not modelled --
 the local weekly drift check will surface a mid-record clock shift.
 
-Per-user export window = [first, last] food row carrying the entry clock,
-i.e. the span of the user's modern-Loop era.
+Per-user export window = the candidates table's [first_clock_ts,
+last_clock_ts] -- for cohort B that is the DD-run ∩ clocked-food
+intersection window, not the whole record.
 """
 
 import argparse
@@ -35,18 +51,19 @@ from concurrent.futures import ThreadPoolExecutor
 
 BDDP_TABLE = "dev.default.bddp_sample_all_2"
 CBG_TABLE = "dev.fda_510k_rwd.loop_cbg"
-CANDIDATES_TABLE = "dev.fda_510k_rwd.behavior_trace_candidates"
+CANDIDATES_TABLE = "dev.fda_510k_rwd.behavior_trace_candidates_b"
 OUTPUT_DIR = (
     "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights"
-    "/behavior_model/data_staging/exports"
+    "/behavior_model/data_staging/exports_b"
 )
 
-USERID_SALT = "behavior-model-v1"
+USERID_SALT = "behavior-model-v1"  # unchanged from cohort A: same raw id
+                                   # always pseudonymizes to the same uid
 ENTRY_CLOCK_KEY = "com.loopkit.CarbKit.HKMetadataKey.UserCreatedDate"
 
-N_EXPORT_USERS = 20           # cohort expansion (2026-08-17): top of the
-                              # span-ranked candidate pool; first export was 2
-OVERRIDE_USER_IDS = []        # raw _userIds; set to skip the top-N pick
+N_EXPORT_USERS = 10           # cohort B: random sample of the eligible pool
+                              # (lowest selection_rank)
+OVERRIDE_USER_IDS = []        # raw _userIds; set to skip the sampled pick
 
 def _hash_expr(alias):
     """Pseudonymized _userId (NMA convention), qualified to one join alias so
@@ -58,7 +75,7 @@ def _hash_expr(alias):
 def run(spark, output_dir=OUTPUT_DIR, n_users=N_EXPORT_USERS):
     try:
         candidates = spark.sql(
-            f"SELECT * FROM {CANDIDATES_TABLE} ORDER BY span_days DESC"
+            f"SELECT * FROM {CANDIDATES_TABLE} ORDER BY selection_rank"
         ).toPandas()
     except Exception as exc:
         raise RuntimeError(
@@ -156,6 +173,10 @@ def run(spark, output_dir=OUTPUT_DIR, n_users=N_EXPORT_USERS):
       WHERE type = 'food'
         AND nutrition IS NOT NULL
         AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
+        -- clocked rows only: dedupes the direct-upload channel (its rows
+        -- never carry the key and are duplicates on overlap days) and
+        -- guarantees the entry clock with no fallback
+        AND payload LIKE '%{ENTRY_CLOCK_KEY}%'
     )
     SELECT
       {_hash_expr('d')} AS _userId,

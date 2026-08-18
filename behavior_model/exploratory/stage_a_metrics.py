@@ -28,6 +28,9 @@ long format: one row per run_label x user x metric, with git commit and a
 config JSON). Re-running a label replaces that (label, user) block, so runs
 are idempotent. Comparisons are only like-for-like when the split config
 matches -- the report annotates each run's split from its config column.
+Holdout ROC vertices (model + clock surrogate, for the dashboard's
+selected-run ROC view) live beside it in roc_history.csv with the same
+replace semantics.
 """
 
 import argparse
@@ -61,6 +64,8 @@ OVERNIGHT_HOURS = (0, 6)   # [start, end) local hours; over-produced overnight
 EPS_P = 1e-9               # probability clip for log-loss / logit
 
 HISTORY_FILENAME = "metrics_history.csv"
+ROC_FILENAME = "roc_history.csv"
+MAX_ROC_POINTS = 150       # ROC vertices kept per curve (display resolution)
 DEFAULT_OUT_ROOT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "outputs", "behavior_traces")
 DEFAULT_HISTORY = os.path.join(DEFAULT_OUT_ROOT, HISTORY_FILENAME)
@@ -97,6 +102,17 @@ SIM_METRICS = [
      for kind in SURROGATE_KINDS for stem in SURROGATE_METRIC_STEMS]
 FIT_METRIC_SUFFIXES = ("_holdout_nll", "_nll_skill", "_nll_skill_diurnal",
                        "_auc", "_cal_slope", "_obs_pred_ratio")
+TIER_ORDER = ("context", "fit", "simulation")
+
+
+def metric_tier(name):
+    """Tier of a metric name -- the grouping used by the report tables and
+    the dashboard (an all-NaN sim metric is still a sim metric)."""
+    if name in SIM_METRICS:
+        return "simulation"
+    if name.endswith(FIT_METRIC_SUFFIXES):
+        return "fit"
+    return "context"
 
 # meta-view layout: one metric family per row, correction hazard in the LEFT
 # column, carb-entry hazard in the RIGHT (every family exists for both).
@@ -176,11 +192,12 @@ METRIC_INFO = {
                             "memoryless 'binomial' floor — beating the floor "
                             "means the model produces genuine cascade "
                             "structure.",
-    "ablation_gap_p10_delta_min": "Correction gap p10 with the "
-                                  "correction-history features removed minus "
-                                  "with them (paired replicates). >0 = "
-                                  "excitation terms shorten short gaps, i.e. "
-                                  "they do real work; ~0 = decorative.",
+    "ablation_gap_p10_delta_min": "Correction gap p10 with the excitation "
+                                  "features (both correction-history and "
+                                  "bolus-history) removed minus with them "
+                                  "(paired replicates). >0 = excitation "
+                                  "terms shorten short gaps, i.e. they do "
+                                  "real work; ~0 = decorative.",
     "carb_gap_median_sim_min": "Median gap (min) between simulated carb "
                                "entries, within blocks.",
     "carb_gap_p10_sim_min": "10th-percentile simulated carb-entry gap (min) "
@@ -188,12 +205,13 @@ METRIC_INFO = {
                             "compare to the real reference and the "
                             "memoryless 'binomial' floor.",
     "ablation_carb_gap_p10_delta_min": "Carb-entry gap p10 without the "
-                                       "correction-history features minus "
-                                       "with them. The features feed BOTH "
-                                       "hazards, so this tests "
-                                       "correction→carb coupling in "
+                                       "excitation features (both "
+                                       "correction-history and bolus-history) "
+                                       "minus with them. The features feed "
+                                       "BOTH hazards, so this tests "
+                                       "bolus/correction→carb coupling in "
                                        "simulated timing (e.g. rescue carbs "
-                                       "after corrections).",
+                                       "after boluses).",
     "overnight_carb_share_sim": "Fraction of simulated carb entries between "
                                 "00:00–06:00 vs the real dotted reference.",
     "diurnal_tv_corrections": "Total-variation distance between real and "
@@ -224,7 +242,7 @@ FIT_SUFFIX_INFO = {
                     "the skill scores.",
     "_nll_skill_diurnal": "Holdout NLL skill of the {event} hazard vs the "
                           "train hour-of-day-rate baseline — what "
-                          "glucose/IOB/excitation add beyond the habit "
+                          "glucose/excitation add beyond the habit "
                           "clock. Can be negative (a 24-bin lookup can beat "
                           "the model's clock terms).",
     "_nll_skill": "1 − NLL/NLL(train-rate constant baseline) for the {event} "
@@ -232,7 +250,9 @@ FIT_SUFFIX_INFO = {
                   ">0 = the features add predictive value.",
     "_auc": "Rank AUC of the {event} hazard on holdout ticks: P(random "
             "event tick scores above random non-event tick). Discrimination "
-            "only — says nothing about calibration.",
+            "only — says nothing about calibration. Floors: 0.5 = chance = "
+            "the binomial surrogate; the clock floor is the recorded "
+            "surr_diurnal AUC.",
     "_cal_slope": "Slope of a logistic recalibration of the {event} hazard "
                   "on the holdout. 1 = calibrated; <1 = predictions too "
                   "extreme; >1 = too timid.",
@@ -261,6 +281,13 @@ SURROGATE_STEM_INFO = {
                                "carb-entry profile.",
     "overnight_corr_share": "its share of corrections between 00:00–06:00.",
     "overnight_carb_share": "its share of carb entries between 00:00–06:00.",
+    "corr_auc": "its rank AUC for corrections on the same holdout ticks, "
+                "scored from its own rate predictor (teacher-forced, no "
+                "draws) — the discrimination floor the model's AUC must "
+                "clear. Exactly 0.5 for the constant kind: a flat rate "
+                "cannot rank ticks.",
+    "carb_auc": "its rank AUC for carb entries on the holdout ticks (see "
+                "the corrections variant).",
 }
 
 
@@ -291,8 +318,12 @@ REFERENCE = {
                                       ["surr_diurnal_carb_rate_ratio", "clock"]]},
     "corr_nll_skill": {"line": 0.0},
     "carb_nll_skill": {"line": 0.0},
-    "corr_auc": {"line": 0.5},
-    "carb_auc": {"line": 0.5},
+    "corr_auc": {"line": 0.5,
+                 "surr_refs": [["surr_const_corr_auc", "binomial"],
+                               ["surr_diurnal_corr_auc", "clock"]]},
+    "carb_auc": {"line": 0.5,
+                 "surr_refs": [["surr_const_carb_auc", "binomial"],
+                               ["surr_diurnal_carb_auc", "clock"]]},
     "corr_cal_slope": {"line": 1.0},
     "carb_cal_slope": {"line": 1.0},
     "diurnal_tv_corrections": {
@@ -397,18 +428,77 @@ def fit_metrics(train, holdout, hazards):
         y = holdout[event].to_numpy(dtype=float)
         p = _predicted_hazard(hazards["models"][event], holdout, features)
         p0 = float(np.clip(train[event].mean(), EPS_P, 1.0 - EPS_P))
+        p_diurnal = _hourly_rates(train, event)[hour]
         nll = _nll(y, p)
         nll0 = _nll(y, np.full_like(y, p0))
-        nll0_diurnal = _nll(y, _hourly_rates(train, event)[hour])
+        nll0_diurnal = _nll(y, p_diurnal)
         out[f"{prefix}_holdout_nll"] = nll
         out[f"{prefix}_nll_skill"] = 1.0 - nll / nll0 if nll0 > 0 else np.nan
         out[f"{prefix}_nll_skill_diurnal"] = (
             1.0 - nll / nll0_diurnal if nll0_diurnal > 0 else np.nan)
         out[f"{prefix}_auc"] = _auc(y, p)
+        # the surrogates' own AUCs -- the discrimination floors (const is
+        # exactly 0.5 by construction; the clock floor is what hour-of-day
+        # alone achieves at ranking event ticks)
+        out[f"surr_const_{prefix}_auc"] = _auc(y, np.full_like(y, p0))
+        out[f"surr_diurnal_{prefix}_auc"] = _auc(y, p_diurnal)
         out[f"{prefix}_cal_slope"] = _calibration_slope(y, p)
         out[f"{prefix}_obs_pred_ratio"] = (
             float(y.sum() / p.sum()) if p.sum() > 0 else np.nan)
     return out
+
+
+def _roc(y, p, max_points=MAX_ROC_POINTS):
+    """Vertices (fpr, tpr) of the ROC step curve, descending-threshold
+    order with ties collapsed, thinned to <= max_points (endpoints kept).
+    Trapezoid area over the full vertex set equals the tie-aware rank AUC.
+    None if one class is absent."""
+    y = np.asarray(y, dtype=float) > 0
+    n_pos, n_neg = int(y.sum()), int((~y).sum())
+    if n_pos == 0 or n_neg == 0:
+        return None
+    p = np.asarray(p, dtype=float)
+    order = np.argsort(-p, kind="stable")
+    boundary = np.r_[np.diff(p[order]) != 0, True]
+    tpr = np.r_[0.0, np.cumsum(y[order])[boundary] / n_pos]
+    fpr = np.r_[0.0, np.cumsum(~y[order])[boundary] / n_neg]
+    if len(fpr) > max_points:
+        keep = np.unique(np.round(
+            np.linspace(0, len(fpr) - 1, max_points)).astype(int))
+        fpr, tpr = fpr[keep], tpr[keep]
+    return fpr, tpr
+
+
+def roc_curves(result, max_points=MAX_ROC_POINTS):
+    """Holdout ROC vertices per hazard, teacher-forced one-step-ahead, for
+    the fitted model and both surrogate predictors -- the same predictors
+    whose AUCs are recorded as surr_*_auc. The binomial (constant-rate)
+    predictor ties every tick at one threshold, so its computed curve is
+    exactly the two vertices (0,0)-(1,1) -- the chance diagonal, recorded
+    from the data rather than asserted. Tidy frame
+    [event(corr|carb), predictor(model|binomial|clock), fpr, tpr];
+    deterministic, no RNG draws."""
+    train, holdout = result["train"], result["holdout"]
+    hazards = result["hazards"]
+    hour = holdout["timestamp"].dt.hour.to_numpy()
+    rows = []
+    for event, prefix in EVENT_PREFIXES:
+        y = holdout[event].to_numpy(dtype=float)
+        p0 = float(np.clip(train[event].mean(), EPS_P, 1.0 - EPS_P))
+        for name, p in [
+            ("model", _predicted_hazard(hazards["models"][event], holdout,
+                                        hazards["features"])),
+            ("binomial", np.full_like(y, p0)),
+            ("clock", _hourly_rates(train, event)[hour]),
+        ]:
+            curve = _roc(y, p, max_points)
+            if curve is None:
+                continue
+            rows.append(pd.DataFrame({"event": prefix, "predictor": name,
+                                      "fpr": curve[0], "tpr": curve[1]}))
+    if not rows:
+        return pd.DataFrame(columns=["event", "predictor", "fpr", "tpr"])
+    return pd.concat(rows, ignore_index=True)
 
 
 # --------------------------------------------------------------------------
@@ -735,6 +825,25 @@ def append_history(metrics, run_label, user, config, history_path=DEFAULT_HISTOR
     return history_path
 
 
+def append_roc_history(roc, run_label, user, path):
+    """Append one run's ROC vertices (from roc_curves); an existing
+    (run_label, user) block is replaced, mirroring append_history."""
+    if roc is None or not len(roc):
+        return path
+    rec = roc.copy()
+    rec.insert(0, "run_label", run_label)
+    rec.insert(1, "user", user)
+    if os.path.exists(path):
+        hist = pd.read_csv(path)
+        dup = (hist["run_label"] == run_label) & (hist["user"] == user)
+        hist = pd.concat([hist[~dup], rec], ignore_index=True)
+    else:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        hist = rec
+    hist.to_csv(path, index=False)
+    return path
+
+
 # --------------------------------------------------------------------------
 # Meta-analysis report
 # --------------------------------------------------------------------------
@@ -742,6 +851,14 @@ def append_history(metrics, run_label, user, config, history_path=DEFAULT_HISTOR
 def _run_order(hist):
     """Run labels in chronological order of first recording."""
     return list(hist.groupby("run_label")["run_ts"].min().sort_values().index)
+
+
+def grouped_metric_order(hist):
+    """First-seen metric order, grouped context -> fit -> simulation, so a
+    metric first emitted in a later run joins its tier instead of trailing
+    the tables (sort is stable within a tier)."""
+    order = list(dict.fromkeys(hist["metric"]))
+    return sorted(order, key=lambda m: TIER_ORDER.index(metric_tier(m)))
 
 
 def _format_cell(value, sd):
@@ -761,7 +878,7 @@ def report(history_path=DEFAULT_HISTORY, out_dir=DEFAULT_META_DIR):
             "build_tick_frame.py --label <name>")
     hist = pd.read_csv(history_path)
     order = _run_order(hist)
-    metric_order = list(dict.fromkeys(hist["metric"]))
+    metric_order = grouped_metric_order(hist)
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"runs (chronological): {order}")
