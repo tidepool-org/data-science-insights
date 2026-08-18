@@ -37,7 +37,7 @@ from behavior_model_mvp import (
     split_masks,
     validate_tick_frame,
 )
-from build_tick_frame import build_user_frame, parse_units
+from build_tick_frame import build_user_frame, parse_units, user_sets
 
 SYNTH_CGM_FILL = 120.0
 
@@ -447,6 +447,20 @@ def test_build_tick_frame_assembly():
     assert np.isnan(parse_units(None))
 
 
+def test_user_sets():
+    """Even/odd 1-based span ranks -> internal user-level train/dev sets;
+    users.csv order IS the rank order."""
+    ids = [f"u{i:02d}" for i in range(1, 21)]
+    sets = user_sets(ids)
+    assert sets["train"] == ids[1::2]  # even ranks 2, 4, ..., 20
+    assert sets["dev"] == ids[0::2]    # odd ranks 1, 3, ..., 19
+    assert len(sets["train"]) == len(sets["dev"]) == 10
+    assert not set(sets["train"]) & set(sets["dev"])
+    # odd-sized pool: dev (odd ranks, incl. rank 1) gets the extra user
+    odd = user_sets(ids[:5])
+    assert len(odd["dev"]) == 3 and len(odd["train"]) == 2
+
+
 TESTS = [
     test_validate_tick_frame,
     test_label_events_two_clock,
@@ -459,6 +473,7 @@ TESTS = [
     test_degenerate_training_segment,
     test_split_masks_and_block_gaps,
     test_build_tick_frame_assembly,
+    test_user_sets,
 ]
 
 

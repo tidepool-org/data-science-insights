@@ -82,7 +82,7 @@ SURROGATE_METRIC_STEMS = [
     "corr_rate_ratio", "carb_rate_ratio",
     "corr_gap_p10_min", "corr_gap_median_min", "carb_gap_p10_min",
     "diurnal_tv_corrections", "diurnal_tv_carb_entries",
-    "overnight_corr_share",
+    "overnight_corr_share", "overnight_carb_share",
 ]
 SIM_METRICS = [
     "corr_per_day_sim", "carb_per_day_sim",
@@ -260,6 +260,7 @@ SURROGATE_STEM_INFO = {
     "diurnal_tv_carb_entries": "its diurnal TV distance vs the real "
                                "carb-entry profile.",
     "overnight_corr_share": "its share of corrections between 00:00–06:00.",
+    "overnight_carb_share": "its share of carb entries between 00:00–06:00.",
 }
 
 
@@ -283,9 +284,11 @@ def metric_description(name):
 # median) in the panel -- "binomial" = surr_const, "clock" = surr_diurnal
 REFERENCE = {
     "corr_rate_ratio": {"line": 1.0, "band": (0.8, 1.2),
-                        "surr_refs": [["surr_const_corr_rate_ratio", "binomial"]]},
+                        "surr_refs": [["surr_const_corr_rate_ratio", "binomial"],
+                                      ["surr_diurnal_corr_rate_ratio", "clock"]]},
     "carb_rate_ratio": {"line": 1.0, "band": (0.8, 1.2),
-                        "surr_refs": [["surr_const_carb_rate_ratio", "binomial"]]},
+                        "surr_refs": [["surr_const_carb_rate_ratio", "binomial"],
+                                      ["surr_diurnal_carb_rate_ratio", "clock"]]},
     "corr_nll_skill": {"line": 0.0},
     "carb_nll_skill": {"line": 0.0},
     "corr_auc": {"line": 0.5},
@@ -300,14 +303,24 @@ REFERENCE = {
         "line": 0.0,
         "surr_refs": [["surr_const_diurnal_tv_carb_entries", "binomial"],
                       ["surr_diurnal_diurnal_tv_carb_entries", "clock"]]},
-    "overnight_corr_share_sim": {"real_ref": "overnight_corr_share_real"},
-    "overnight_carb_share_sim": {"real_ref": "overnight_carb_share_real"},
+    "overnight_corr_share_sim": {
+        "real_ref": "overnight_corr_share_real",
+        "surr_refs": [["surr_const_overnight_corr_share", "binomial"],
+                      ["surr_diurnal_overnight_corr_share", "clock"]]},
+    "overnight_carb_share_sim": {
+        "real_ref": "overnight_carb_share_real",
+        # carb-side surrogate shares are emitted from 2026-08-18; panels
+        # simply omit the floor for runs recorded before that
+        "surr_refs": [["surr_const_overnight_carb_share", "binomial"],
+                      ["surr_diurnal_overnight_carb_share", "clock"]]},
     "corr_gap_p10_sim_min": {
         "real_ref": "corr_gap_p10_real_min",
-        "surr_refs": [["surr_const_corr_gap_p10_min", "binomial"]]},
+        "surr_refs": [["surr_const_corr_gap_p10_min", "binomial"],
+                      ["surr_diurnal_corr_gap_p10_min", "clock"]]},
     "carb_gap_p10_sim_min": {
         "real_ref": "carb_gap_p10_real_min",
-        "surr_refs": [["surr_const_carb_gap_p10_min", "binomial"]]},
+        "surr_refs": [["surr_const_carb_gap_p10_min", "binomial"],
+                      ["surr_diurnal_carb_gap_p10_min", "clock"]]},
     "ablation_gap_p10_delta_min": {"line": 0.0},
     "ablation_carb_gap_p10_delta_min": {"line": 0.0},
     "corr_nll_skill_diurnal": {"line": 0.0},
@@ -543,6 +556,7 @@ def _surrogate_replicate(payload, k, base_seed):
         out[f"surr_{kind}_diurnal_tv_carb_entries"] = _diurnal_tv(
             real_ref["carb_times"], times["carb"])
         out[f"surr_{kind}_overnight_corr_share"] = _overnight_share(times["corr"])
+        out[f"surr_{kind}_overnight_carb_share"] = _overnight_share(times["carb"])
     return out
 
 

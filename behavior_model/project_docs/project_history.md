@@ -306,11 +306,164 @@ refutation-first agents running mutations in the conda env): 9 findings, 6 confi
   panels, column headers. Panel membership is now structurally paired, so a metric
   family can't ship for one hazard only.
 
+## 2026-08-18 — User-level train/dev split; per-user trace browser; dashboard main page
+
+- The 20-user cohort now carries an **internal user-level train/dev split** by
+  span-rank parity in users.csv: even 1-based ranks → `train`, odd → `dev` (10/10,
+  span-matched by interleaving; the two 2-user-era users land one per set).
+  `build_tick_frame.py --user-set {all,train,dev}` selects the set and records it in
+  each history row's config JSON. Iterations are developed on the train set; the dev
+  set is run sparingly, only to check that an accepted improvement generalizes.
+  Membership is defined by rank, not id — a re-export that reshuffles the candidate
+  ranking moves users between sets. Orthogonal to the within-user interleaved-weeks
+  split.
+- `it02_train10` recorded: the current model re-run on the train half. Every per-user
+  metric row reproduces `it02_users20` bit-for-bit (user selection provably doesn't
+  touch recorded numbers), so it doubles as an end-to-end determinism check and the
+  baseline column for train-set iterations.
+- New `trace_browser.py`: one self-contained HTML page per user — example days picked
+  by archetype (busiest carb day, correction cascade, overnight corrections,
+  retrospective logging, typical day) drawn on the labeled tick frame (CGM + carb
+  entries with meal→entry connectors; meal boluses vs corrections distinguished by
+  marker and validated categorical color), each captioned with why it was picked and
+  whether it falls in a holdout week; weekly aggregates (labeled event rates,
+  grams/day, units/day, CGM + IOB coverage) as figure + `weekly_aggregates.csv`
+  table; and a cohort index (`traces_index.html`) with rank, set, span and
+  whole-record rates linking the pages.
+- Dashboard main page restructured (per feedback that per-run × per-user metric walls
+  aren't useful there): across-iterations panels lead, followed by a cohort summary
+  of the selected run (median + IQR across users); per-user numbers moved into a
+  collapsed one-user-at-a-time drill-down (metric × iteration) that links to that
+  user's trace page. The config line shows a run's user set.
+- Unified event-glyph vocabulary across every figure that draws event lanes (per
+  feedback that bolus markers needed a legend and real-vs-simulated was unclear —
+  the old figures actively conflicted: a filled blue triangle meant "correction" in
+  the Stage A holdout trace but "meal bolus" in the new example days, and 06/07
+  used orange for "simulated" while orange means "carb entry" everywhere else).
+  Now: orange circle = carb entry (open = its stated meal time), blue triangle =
+  meal bolus, aqua diamond = correction — in `trace_browser` and `plot_stage_a`
+  alike (`plot_traces.event_legend` is the single source, drawn as a real marker
+  legend on each figure). Real-vs-simulated is never encoded by hue: it is the
+  labeled lane in the holdout trace (simulated lane shaded, ticks read
+  "real (observed)" / "simulated (model)") and solid-vs-dashed/open in the 06/07
+  rate and diurnal comparisons, each with a real/simulated legend. Marker area now
+  scales with dose (grams / units, shared floor+cap in `plot_traces`), and numeric
+  labels are reserved for the largest `LANE_MAX_LABELS` per lane as scale anchors
+  (per feedback: sizes carry magnitude, labels stopped fighting each other). Trace
+  pages state explicitly that everything on them is the user's real record; the
+  browser's day/weekly figures renumbered to `10_day_*` / `11_weekly_aggregates`
+  to stop colliding with `08_holdout_trace`.
+- Panels decluttered (per feedback that 20 overlaid per-user series read as a mess):
+  the across-iterations charts default to the cross-user median with a shaded IQR
+  band; the per-user spaghetti (and its hover identity) sits behind a "per-user
+  lines" toggle, and with it off the y-axis fits the cohort view instead of the
+  user extremes. Median points carry an n-users hover (cohort size varies by run:
+  2 → 20 → 10). Trace pages are one click from the dashboard header via a links
+  strip (cohort index + all users).
+- Suites 12/12 (new `test_user_sets`) + 6/6.
+
+## 2026-08-18 — Trace pages become real-vs-simulated comparison pages
+
+- Per feedback that the per-user pages are where generated data should be compared
+  to ground truth: each page now leads with example **holdout** days (picked by the
+  same archetypes) showing the model's simulated lane — one replicate of the saved
+  Stage A rollout — shaded beneath the real record on the same glucose;
+  training-week representative days stay available behind a tab (real only, the
+  model fit on them).
+- Weekly aggregates gain simulated overlays. The interleaved split's
+  record-relative weeks don't align with calendar-week bins, so sim and
+  real-holdout weekly rates are normalized by the holdout days actually inside
+  each bin (bins under `MIN_HOLDOUT_DAYS_PER_WEEK` dropped); sim dose overlays are
+  omitted when the simulated marks are NaN-heavy (HK-path users lack the
+  recommendation series the correction-mark model resamples), rather than plotting
+  an undercount.
+- New comparison views per user: sim-vs-real rate **correlation scatters** at two
+  grains (per holdout week — slow-drift tracking; per hour of day — habit clock),
+  each with Pearson r in the legend and a y=x reference; **gap ECDFs** per hazard
+  (block-pooled, log-x) and **mark ECDFs** (carb grams, correction units) — the
+  visuals behind the suite's gap-p10 and KS-mark metrics; and the `plot_stage_a`
+  overview figures (06–08) embedded on the page. All comparisons are
+  holdout-restricted and real vs sim is encoded per the shared vocabulary (lane /
+  linestyle + legend, never hue).
+- First-user reading (numbers stay in the outputs): the hour-of-day scatter
+  correlates strongly for all three event types while the per-week correction
+  scatter does not — the same correction-hazard gap the metric suite flags, now
+  visible per user.
+- Label anchors switched (per feedback, twice refined) from "largest few" to
+  **smallest / largest per lane** (`plot_traces.label_anchors`) — two labels that
+  calibrate the size scale, drawn at ONE fixed height per row (the alternating
+  stagger read as chaos and collided across rows); the annotate floors went with
+  it. Carbs and boluses stay on **separate rows everywhere**: the 48h holdout
+  trace adopted the example days' 4-row layout, and the lane geometry
+  (`carb_row`/`bolus_row`, `ROW_*`) moved into `plot_traces` as the single
+  implementation. Unknown-dose boluses (NaN simulated marks — most sim
+  corrections on this HK-path cohort, and every bolused-carb meal bolus) draw
+  **faded** at floor size, so "dose unknown" never reads as "dose small" and
+  the missing labels are self-explanatory ("faded bolus = dose unknown" in the
+  legend; fading rather than an open marker, since open already means "stated
+  meal time" on the carb row).
+- Adversarial review (workflow, 3 lenses × verified findings) confirmed and fixed
+  eight defects before they shipped: a missing consistency guard between
+  `simulated_events.csv` and the recomputed split (a stale or `--split
+  chronological` rollout would silently corrupt every comparison view — now
+  detected via holdout-span containment and dropped with a warning); the sim
+  bolus-U/day overlay understating dose because bolused-carb meal boluses carry
+  no units (overlay removed as structurally dishonest, noted on the panel);
+  unguarded few-hour edge bins exploding full-record weekly rates (masked under
+  `MIN_DAYS_PER_WEEK`); comparison days up to 2.4h train-contaminated while
+  captioned "never saw in fitting" (`HOLDOUT_DAY_MIN_FRAC` → 1.0); the
+  retrospective-logging archetype rewarding |latency| so pre-logged days could
+  win (now positive-latency mass only); a "+nan min" chip for users with no carb
+  entries; a crash on zero-event `simulated_events.csv`; and a `plot_split`
+  IndexError for users with zero events of one type.
+
+- Visual QA (workflow: five inspectors reading every user's rendered figures +
+  page HTML, adversarial verification of each flag — 43 confirmed, 0 spurious)
+  caught four systematic layout collisions, all fixed and re-rendered: the
+  weekly figure's legend overprinting its title (title shortened; the HTML
+  header carries the explanation), right-edge series labels piling up when
+  series end at similar values (`_end_labels` de-collision, also applied to
+  CGM/IOB), the U/day panel note grazing data peaks (moved above the axes), and
+  the marks-ECDF NaN note colliding with the legend (legend → center right,
+  where saturated ECDFs are always empty). The remaining flags were correctly
+  classified data observations (a pump-record gap with full CGM coverage;
+  end-of-record behavior bursts), left as-is.
+
+- Second adversarial review round (post label/row rework) confirmed and fixed
+  five more: fig 06's simulated weekly circles were divided by 7 calendar days
+  although sim events exist only on the holdout days inside each bin —
+  systematically deflated (~2x for a perfectly calibrated model, contradicting
+  the correctly normalized page overlay); now normalized per holdout day with
+  the same minimum-coverage guard, real line per record day. The weekly overlay
+  gained the **matched real-holdout dashes** (same denominator as the circles,
+  including a new `real_holdout_carb_g_per_day` column) so circle-vs-dash is the
+  honest bin-wise comparison and the full-record line is context. A NaN-dose or
+  duplicate event sharing a label anchor's tick can no longer print a "nanU"
+  label. The "simulated events" chip counts what the page draws (a bolused carb
+  = entry + implied meal bolus), not CSV rows. The meal-bolus estimand mismatch
+  (real counts bolus records; sim mostly counts bolused carb entries) is now
+  captioned on the correlation figure — full alignment is a model-iteration
+  question, noted below.
+- Example days gained a **mean-intensity band** (per feedback): a faint gray
+  curve behind each simulated row showing the model's mean event rate over
+  `N_INTENSITY_REPS` extra rollouts of just the example days' holdout blocks
+  (own seed stream — recorded metrics untouched; ~13 s/user), peak-normalized
+  per day — the tendency behind the single replicate drawn.
+- Dashboard floors completed (per feedback that binomial/clock were missing from
+  panels): every across-iterations panel whose metric family has a recorded
+  surrogate now draws its floors — clock added to the rate-ratio and gap-p10
+  panels, binomial + clock added to overnight share. The carb-side overnight
+  surrogate was never emitted (a gap in the structurally-paired principle);
+  emission added (pure derived metric, no new RNG draws), so those floors
+  populate from the next recorded run. Fit-tier panels carry their floors by
+  construction: the NLL-skill zero line IS the binomial (or clock) baseline and
+  0.5 is chance for AUC.
+
 ## Pending / In Progress
 
 - Stage A iteration, in order — each recorded via `build_tick_frame.py --label itNN_…
-  --note "…"` and compared in `stage_a_metrics.py --report` against the it01/it02
-  regime: (1) IOB decision for HK-path uploaders (feature drop + missing indicator vs
+  --user-set train --note "…"` and compared in `stage_a_metrics.py --report` against
+  the `it02_train10` baseline (dev users held out for generalization checks): (1) IOB decision for HK-path uploaders (feature drop + missing indicator vs
   DD-density selection gate vs derive-with-caveat — owner call, each deviates from §6
   somewhere; now blocking, the whole cohort is HK-path); (2) bolus-based excitation
   features (`mins_since_bolus` / `n_boluses_2h` — no label arbitration, no visibility

@@ -3,7 +3,8 @@ run Stage A.
 
 Usage (after downloading the export dir to behavior_model/data/behavior_traces):
 
-    python build_tick_frame.py [--data-dir DIR] [--user u<hash>] [--no-run]
+    python build_tick_frame.py [--data-dir DIR] [--user u<hash>]
+                               [--user-set all|train|dev] [--no-run]
 
 Per user: builds the 5-minute tick frame on user-local time, validates it
 against the data contract, prints the weekly drift check FIRST (trap #5 --
@@ -51,6 +52,24 @@ DEFAULT_OUT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "outputs", "behavior_traces")
 TICK = f"{TICK_MINUTES}min"
 JOBS_RESERVED_CORES = 2   # --jobs default: cores minus this, capped below
+
+
+def user_sets(user_ids):
+    """Internal user-level train/dev sets from users.csv order.
+
+    Rank = 1-based position in users.csv (the export writes it in span-rank
+    order). Even ranks -> train (the set iterations are developed against),
+    odd ranks -> dev (held-out users, run sparingly to check that an
+    improvement generalizes). Interleaving by rank matches the two sets on
+    record span, and the two 2-user-era users (ranks 1-2) land one per set.
+    Distinct from the within-user temporal train/holdout split. Membership
+    is defined by rank, not id: a re-export that reshuffles the candidate
+    ranking moves users between sets.
+    """
+    return {
+        "train": [u for i, u in enumerate(user_ids) if (i + 1) % 2 == 0],
+        "dev": [u for i, u in enumerate(user_ids) if (i + 1) % 2 == 1],
+    }
 
 
 def parse_units(raw):
@@ -241,7 +260,7 @@ def default_jobs():
 def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
                 only_user=None, run_model=True, label=None,
                 n_sims=N_SIMS_DEFAULT, split=DEFAULT_SPLIT, note="",
-                jobs=None):
+                jobs=None, user_set="all"):
     """Two-level parallelism against a total process budget `jobs`
     (None -> cores minus JOBS_RESERVED_CORES): users fan out across
     processes (the natural grain -- saturates any machine once the cohort
@@ -253,8 +272,16 @@ def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
     order. Seeds are per-replicate, so `jobs` never affects a recorded
     number."""
     streams = load_streams(data_dir)
-    uids = [u for u in streams["users"]["_userId"]
-            if not only_user or u == only_user]
+    all_ids = list(streams["users"]["_userId"])
+    selected = all_ids if user_set == "all" else user_sets(all_ids)[user_set]
+    if user_set != "all":
+        print(f"user set '{user_set}': {len(selected)}/{len(all_ids)} users "
+              "(even span ranks -> train, odd -> dev)")
+    uids = [u for u in selected if not only_user or u == only_user]
+    if not uids:
+        raise SystemExit(
+            f"no users selected -- {only_user!r} is not in user set "
+            f"'{user_set}'" if only_user else "no users selected -- empty users.csv")
     per_user = {
         uid: {name: df[df["_userId"] == uid]
               for name, df in streams.items() if name != "users"}
@@ -296,7 +323,8 @@ def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
         history_path = os.path.join(out_dir, HISTORY_FILENAME)
         for uid in uids:  # stable order, single writer
             append_history(results[uid]["metrics"], label, uid,
-                           results[uid]["config"], history_path, note=note)
+                           dict(results[uid]["config"], user_set=user_set),
+                           history_path, note=note)
         print(f"\nrecorded {len(uids)} user(s) as '{label}' in {history_path}")
         print("meta-analysis: python stage_a_metrics.py --report")
     return results
@@ -307,6 +335,11 @@ if __name__ == "__main__":
     parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     parser.add_argument("--user", default=None, help="only this (hashed) user id")
+    parser.add_argument("--user-set", default="all",
+                        choices=["all", "train", "dev"],
+                        help="internal user-level split by span rank in "
+                             "users.csv: even ranks -> train (iterate here), "
+                             "odd -> dev (held out for generalization checks)")
     parser.add_argument("--no-run", action="store_true",
                         help="build + validate frames only")
     parser.add_argument("--label", default=None,
@@ -331,4 +364,4 @@ if __name__ == "__main__":
     run_stage_a(args.data_dir, args.out_dir, args.user,
                 run_model=not args.no_run, label=args.label,
                 n_sims=args.n_sims, split=args.split, note=args.note,
-                jobs=args.jobs)
+                jobs=args.jobs, user_set=args.user_set)

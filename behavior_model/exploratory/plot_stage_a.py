@@ -20,82 +20,100 @@ import sys
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from behavior_model_mvp import (block_spans, holdout_blocks, label_events,
-                                split_masks)
+from behavior_model_mvp import (TICKS_PER_DAY, block_spans, holdout_blocks,
+                                label_events, split_masks)
 from build_tick_frame import DEFAULT_DATA_DIR, build_user_frame, load_streams
-from plot_traces import (BLUE, GRID, INK, MUT, ORANGE, SEC, SURFACE,
-                         DEFAULT_PLOT_DIR, _save, _style)
+from plot_traces import (AQUA, BLUE, GRID, INK, MUT, ORANGE,
+                         ROW_REAL_BOLUSES, ROW_REAL_CARBS, ROW_SIM_BOLUSES,
+                         ROW_SIM_CARBS, SEC, SURFACE, DEFAULT_PLOT_DIR, _save,
+                         _style, bolus_row, carb_row, event_legend,
+                         real_sim_legend)
 
 
-def _weekly_per_day(times):
+MIN_DAYS_PER_BIN = 2.0  # weekly rates need this much coverage in a calendar
+                        # bin (real: record days; sim: HOLDOUT days -- the
+                        # record-relative holdout weeks straddle calendar
+                        # bins, so dividing sim counts by 7 would deflate
+                        # every circle)
+
+
+def _weekly_counts(times, index):
     if len(times) == 0:
-        return pd.Series(dtype=float)
-    return pd.Series(1, index=pd.DatetimeIndex(times)).resample("W").sum() / 7.0
+        return pd.Series(0.0, index=index)
+    return (pd.Series(1.0, index=pd.DatetimeIndex(times)).resample("W").sum()
+            .reindex(index, fill_value=0.0))
 
 
 def plot_split(frame, simulated, out_dir):
     mask, config = split_masks(frame)
     spans = block_spans(frame, holdout_blocks(mask))
+    ts = pd.DatetimeIndex(frame["timestamp"])
+    days = pd.Series(1.0, index=ts).resample("W").sum() / TICKS_PER_DAY
+    hdays = (pd.Series(np.asarray(mask, dtype=float), index=ts)
+             .resample("W").sum() / TICKS_PER_DAY)
 
     panels = [
-        ("corrections", frame.loc[frame["is_correction"], "timestamp"],
+        ("corrections", AQUA, frame.loc[frame["is_correction"], "timestamp"],
          simulated.loc[simulated["event"] == "correction", "timestamp"]),
-        ("carb entries", frame.loc[frame["is_carb_entry"], "timestamp"],
+        ("carb entries", ORANGE, frame.loc[frame["is_carb_entry"], "timestamp"],
          simulated.loc[simulated["event"] == "carb_entry", "timestamp"]),
     ]
 
     fig, axes = plt.subplots(2, 1, figsize=(10.0, 5.6), facecolor=SURFACE,
                              sharex=True, gridspec_kw={"hspace": 0.22})
-    for ax, (name, real_times, sim_times) in zip(axes, panels):
+    for ax, (name, hue, real_times, sim_times) in zip(axes, panels):
         _style(ax)
         for t0, t1 in spans:
             ax.axvspan(t0, t1, color="#f0efec", zorder=0)
-        real_w = _weekly_per_day(real_times)
-        sim_w = _weekly_per_day(sim_times)
-        ax.plot(real_w.index, real_w, color=BLUE, linewidth=1.8)
+        real_w = ((_weekly_counts(real_times, days.index) / days)
+                  .where(days >= MIN_DAYS_PER_BIN).dropna())
+        sim_w = ((_weekly_counts(sim_times, days.index)
+                  / hdays.replace(0, np.nan))
+                 .where(hdays >= MIN_DAYS_PER_BIN).dropna())
+        if len(real_w):
+            ax.plot(real_w.index, real_w, color=hue, linewidth=1.8)
+            ax.text(1.005, real_w.iloc[-1], "real", color=SEC, fontsize=9,
+                    va="center", transform=ax.get_yaxis_transform())
         if len(sim_w):
-            ax.plot(sim_w.index, sim_w, color=ORANGE, linewidth=1.8,
-                    marker="o", markersize=3, linestyle="none")
-        ax.set_ylabel(f"{name} / day", color=SEC, fontsize=9)
-        ax.text(1.005, real_w.iloc[-1], "real", color=BLUE, fontsize=9,
-                va="center", transform=ax.get_yaxis_transform())
-        if len(sim_w):
-            ax.text(1.005, sim_w.dropna().iloc[-1], "simulated", color=ORANGE,
+            ax.plot(sim_w.index, sim_w, color=hue, linewidth=1.2,
+                    marker="o", markersize=3.5, markerfacecolor="none",
+                    linestyle="none")
+            ax.text(1.005, sim_w.iloc[-1], "simulated", color=MUT,
                     fontsize=9, va="bottom", transform=ax.get_yaxis_transform())
+        ax.set_ylabel(f"{name} / day", color=SEC, fontsize=9)
+    real_sim_legend(axes[0], loc="upper left")
 
     axes[0].set_title(
         f"Stage A: {config['type']} split — shaded weeks are holdout "
-        "(simulate + compare); fit on the rest", loc="left", color=INK,
-        fontsize=11)
+        "(simulate + compare); fit on the rest. Circles: simulated "
+        "per-holdout-day rate", loc="left", color=INK, fontsize=11)
     _save(fig, out_dir, "06_stage_a_split.png")
 
 
 def plot_diurnal_comparison(diurnal, out_dir):
     panels = [
-        ("corrections", "real_corrections", "sim_corrections"),
-        ("carb entries", "real_carb_entries", "sim_carb_entries"),
+        ("corrections", AQUA, "real_corrections", "sim_corrections"),
+        ("carb entries", ORANGE, "real_carb_entries", "sim_carb_entries"),
     ]
     fig, axes = plt.subplots(1, 2, figsize=(11.0, 3.8), facecolor=SURFACE,
                              gridspec_kw={"wspace": 0.18})
-    for ax, (name, real_col, sim_col) in zip(axes, panels):
+    for ax, (name, hue, real_col, sim_col) in zip(axes, panels):
         _style(ax)
         ax.plot(diurnal.index, diurnal[real_col], drawstyle="steps-mid",
-                color=BLUE, linewidth=2)
+                color=hue, linewidth=2)
         ax.plot(diurnal.index, diurnal[sim_col], drawstyle="steps-mid",
-                color=ORANGE, linewidth=2)
+                color=hue, linewidth=1.6, linestyle="--")
         ax.set_xlim(-0.5, 23.5)
         ax.set_xticks(range(0, 25, 6))
         ax.set_title(name, loc="left", color=SEC, fontsize=10)
         ax.set_xlabel("hour of day", color=SEC, fontsize=9)
     axes[0].set_ylabel("events per day", color=SEC, fontsize=9)
-    axes[1].text(0.98, 0.95, "real", color=BLUE, fontsize=9, ha="right",
-                 va="top", transform=axes[1].transAxes)
-    axes[1].text(0.98, 0.86, "simulated", color=ORANGE, fontsize=9, ha="right",
-                 va="top", transform=axes[1].transAxes)
+    real_sim_legend(axes[1], sim_marker=False, loc="upper right")
     fig.suptitle("Holdout diurnal profile: real vs simulated", x=0.125,
                  ha="left", color=INK, fontsize=11)
     _save(fig, out_dir, "07_diurnal_real_vs_sim.png")
@@ -103,10 +121,11 @@ def plot_diurnal_comparison(diurnal, out_dir):
 
 def plot_holdout_trace(frame, simulated, out_dir, hours=48):
     """Real vs simulated decisions on the SAME glucose trace (the Stage A
-    approximation): a representative holdout window, real events in the top
-    lane, the model's generated events below. Circles = carb entries (grams),
-    filled triangles = corrections (units where known), open triangles =
-    meal-associated boluses."""
+    approximation): a representative holdout window, the real record in the
+    top row pair (carbs / boluses on separate rows), the model's generated
+    events in the shaded row pair below. Shared glyph vocabulary and row
+    layout (plot_traces); real-vs-simulated is the lane group, never the
+    hue."""
     mask, _ = split_masks(frame)
     spans = block_spans(frame, holdout_blocks(mask))
     hold = frame[mask]
@@ -133,8 +152,8 @@ def plot_holdout_trace(frame, simulated, out_dir, hours=48):
     sim = simulated[(simulated["timestamp"] >= day0) & (simulated["timestamp"] < day1)]
 
     fig, (ax1, ax2) = plt.subplots(
-        2, 1, figsize=(12.0, 5.8), facecolor=SURFACE, sharex=True,
-        gridspec_kw={"height_ratios": [2.6, 1.4], "hspace": 0.12})
+        2, 1, figsize=(12.0, 6.8), facecolor=SURFACE, sharex=True,
+        gridspec_kw={"height_ratios": [2.4, 1.9], "hspace": 0.12})
     _style(ax1)
     _style(ax2, ygrid=False)
 
@@ -146,45 +165,37 @@ def plot_holdout_trace(frame, simulated, out_dir, hours=48):
         f"Holdout: real vs simulated decisions on the same glucose — "
         f"{day0.date()} (+{hours}h)", loc="left", color=INK, fontsize=11)
 
-    def lane(ax, y, carbs_t, carbs_g, corr_t, corr_u, meal_t):
-        # stagger annotation heights so near-coincident events stay legible
-        for i, (t, g) in enumerate(zip(carbs_t, carbs_g)):
-            ax.scatter([t], [y], marker="o", color=ORANGE, s=40, zorder=3)
-            ax.annotate(f"{g:.0f}g", (t, y), textcoords="offset points",
-                        xytext=(0, 8 + 8 * (i % 2)), ha="center",
-                        color=SEC, fontsize=7)
-        for i, (t, u) in enumerate(zip(corr_t, corr_u)):
-            ax.scatter([t], [y], marker="^", color=BLUE, s=40, zorder=3)
-            if pd.notna(u):
-                ax.annotate(f"{u:.1f}U", (t, y), textcoords="offset points",
-                            xytext=(0, -14 - 8 * (i % 2)), ha="center",
-                            color=SEC, fontsize=7)
-        for t in meal_t:
-            ax.scatter([t], [y], marker="^", facecolors=SURFACE,
-                       edgecolors=BLUE, linewidths=1.2, s=40, zorder=2)
-
     real_carbs = w[w["is_carb_entry"]]
-    lane(ax2, 1,
-         real_carbs["timestamp"], real_carbs["carb_entry_g"],
-         w.loc[w["is_correction"], "timestamp"], w.loc[w["is_correction"], "bolus_u"],
-         w.loc[w["is_meal_bolus"], "timestamp"])
+    carb_row(ax2, ROW_REAL_CARBS, real_carbs["timestamp"],
+             real_carbs["carb_entry_g"], real_carbs["carb_meal_time"])
+    bolus_row(ax2, ROW_REAL_BOLUSES,
+              w.loc[w["is_meal_bolus"], "timestamp"],
+              w.loc[w["is_meal_bolus"], "bolus_u"],
+              w.loc[w["is_correction"], "timestamp"],
+              w.loc[w["is_correction"], "bolus_u"])
 
     sim_carbs = sim[sim["event"] == "carb_entry"]
     sim_corr = sim[sim["event"] == "correction"]
-    sim_meal = sim[(sim["event"] == "meal_bolus") |
-                   ((sim["event"] == "carb_entry") & sim["bolused"].astype(bool))]
-    lane(ax2, 0,
-         sim_carbs["timestamp"], sim_carbs["mark"],
-         sim_corr["timestamp"], sim_corr["mark"],
-         sim_meal["timestamp"])
+    bolused = sim_carbs["bolused"].astype(bool)
+    sim_meal_t = (list(sim.loc[sim["event"] == "meal_bolus", "timestamp"])
+                  + list(sim_carbs.loc[bolused, "timestamp"]))
+    sim_meal_u = (list(sim.loc[sim["event"] == "meal_bolus", "mark"])
+                  + [float("nan")] * int(bolused.sum()))
+    ax2.axhspan(ROW_SIM_BOLUSES - 0.9, ROW_SIM_CARBS + 0.6, color="#f0efec",
+                zorder=0)
+    carb_row(ax2, ROW_SIM_CARBS, sim_carbs["timestamp"], sim_carbs["mark"])
+    bolus_row(ax2, ROW_SIM_BOLUSES, sim_meal_t, sim_meal_u,
+              sim_corr["timestamp"], sim_corr["mark"])
 
-    ax2.set_ylim(-0.8, 1.9)
-    ax2.set_yticks([0, 1])
-    ax2.set_yticklabels(["simulated", "real"], fontsize=9, color=SEC)
+    ax2.set_ylim(ROW_SIM_BOLUSES - 1.15, ROW_REAL_CARBS + 0.95)
+    ax2.set_yticks([ROW_REAL_CARBS, ROW_REAL_BOLUSES,
+                    ROW_SIM_CARBS, ROW_SIM_BOLUSES])
+    ax2.set_yticklabels(["real · carbs", "real · boluses",
+                         "sim · carbs", "sim · boluses"],
+                        fontsize=8.5, color=SEC)
     ax2.set_xlim(day0, day1)
-    ax2.text(0.01, 0.97,
-             "○ carb entry (g)   ▲ correction (U)   △ meal-associated bolus",
-             transform=ax2.transAxes, ha="left", va="top", color=MUT, fontsize=7.5)
+    event_legend(ax2, meal_time=True, ncol=4, loc="upper center",
+                 bbox_to_anchor=(0.5, -0.24))
     fig.autofmt_xdate(rotation=0, ha="center")
     _save(fig, out_dir, "08_holdout_trace.png")
 

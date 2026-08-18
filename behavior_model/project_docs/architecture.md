@@ -26,8 +26,59 @@ meta views are **two columns — correction hazard left, carb-entry hazard right
 metric family per row** (`KEY_METRIC_PAIRS`; membership is structurally paired), with
 real-holdout references and labeled surrogate floors drawn in the panels. Recorded so
 far: `it00_baseline` (naive 75/25 chronological), `it01_interleaved_weeks`
-(drift-aware split — a **new comparison regime**, the holdout changed), and
-`it02_users20` (20-user cohort, doubles as P3 replication; same regime as it01).
+(drift-aware split — a **new comparison regime**, the holdout changed),
+`it02_users20` (20-user cohort, doubles as P3 replication; same regime as it01), and
+`it02_train10` (train half only — reproduced the it02 per-user rows bit-for-bit;
+the baseline column for train-set iterations).
+
+**Internal user-level train/dev split (2026-08-18)**: the cohort is split by
+span-rank parity in users.csv — even 1-based ranks → `train`, odd → `dev` (10/10,
+span-matched by interleaving; the two 2-user-era users land one per set).
+`build_tick_frame.py --user-set {all,train,dev}` selects the set (`user_sets` in
+that module is the rule), and the set is recorded in each history row's config.
+Iterations are developed with `--user-set train` and judged against `it02_train10`;
+the dev set is run sparingly, only to check that an accepted improvement
+generalizes. Orthogonal to the within-user temporal train/holdout split; membership
+is defined by rank, not id, so a re-export that reshuffles the candidate ranking
+moves users between sets.
+
+**Trace browser (2026-08-18)**: `trace_browser.py` writes one self-contained
+**real-vs-simulated comparison page** per user (git-ignored), from the labeled
+tick frame + the saved Stage A rollout (`simulated_events.csv` — ONE replicate;
+the dashboard metrics average many). Sections: example **holdout** days picked by
+archetype (busiest carb day, correction cascade, overnight corrections,
+retrospective logging, typical day) with the simulated lane shaded beneath the
+real record on the same glucose and a faint **mean-intensity band** behind each
+simulated row (the model's mean event rate over `N_INTENSITY_REPS` extra
+rollouts of the example days' blocks, own seed stream, peak-normalized per
+day); training-week example days (real only) behind a tab; weekly aggregates with simulated per-holdout-day overlays (figure + table +
+`weekly_aggregates.csv`); weekly and hour-of-day sim-vs-real rate scatters with
+Pearson r (does the model track slow drift / the habit clock); gap and mark ECDFs
+(the visuals behind the gap-p10 and KS-mark metrics); and the `plot_stage_a`
+overview figures embedded when present. Everything simulated is holdout-only and
+labeled. Weekly sim and real-holdout rates are normalized by the **holdout days
+inside each calendar bin** (record-relative split weeks don't align with calendar
+bins; bins under `MIN_HOLDOUT_DAYS_PER_WEEK` are dropped), and sim dose overlays
+are omitted when the sim marks are NaN-heavy. Shared **event-glyph vocabulary**
+(`plot_traces.event_legend`): orange circle = carb entry (open = stated meal
+time), blue triangle = meal bolus, aqua diamond = correction; marker area ∝
+grams/units with numeric labels only on the smallest/largest per lane
+(`label_anchors` — two anchors calibrating the size scale, at one fixed height
+per row); carbs
+and boluses always on separate rows (`carb_row`/`bolus_row` + `ROW_*` geometry,
+shared — the 48h holdout trace uses the same 4-row layout as the example days).
+The same vocabulary + legend is used by `plot_stage_a`, and real-vs-simulated is
+never a hue — it is a shaded labeled row group or solid-vs-dashed/open with a
+`real_sim_legend`. Without `simulated_events.csv` the page falls back to
+real-only example days. It also writes a
+cohort index (`traces_index.html`: rank, set, span, whole-record rates). The
+dashboard main page leads with the across-iterations panels drawn at cohort level
+— cross-user median + shaded IQR, per-user spaghetti behind a "per-user lines"
+toggle (the y-range tightens to the cohort view when hidden) — then a cohort
+summary of the selected run (median + IQR across users); per-user numbers live in
+a collapsed one-user-at-a-time drill-down. Trace pages are one click away: a
+links strip under the dashboard header (cohort index + every user), plus the
+drill-down link.
 
 **Drift-aware split (default since 2026-08-17)**: `split_masks` assigns
 record-relative weeks in a repeating 4-week cycle, 3 train : 1 holdout
@@ -58,8 +109,9 @@ recorded number** (tested). Worker logs are captured and printed atomically per
 user; the metrics history keeps a single writer (the parent), appended in
 users.csv order.
 
-**Next** (each recorded as `it03+` with `--label`/`--note` and judged against the
-`it01`/`it02` regime): (1) the IOB decision for HK-path uploaders — now blocking,
+**Next** (each recorded as `it03+` with `--label`/`--note`, run with
+`--user-set train` and judged against the `it02_train10` baseline; dev users are
+held out for generalization checks): (1) the IOB decision for HK-path uploaders — now blocking,
 since the whole cohort is HK-path; (2) bolus-based excitation features
 (`mins_since_bolus` — real cascade gaps sit below the 20-min visibility floor, so
 the current correction-history features can't express them); (3) richer clock
@@ -105,6 +157,8 @@ behavior_model/
 │   │                                   #   metric suite; --label records into metrics_history.csv
 │   ├── plot_traces.py                  # trace plots: latency hist, latency-vs-ΔBG, diurnal,
 │   │                                   #   weekly drift, two-clock day trace
+│   ├── trace_browser.py                # per-user trace pages: example days by archetype +
+│   │                                   #   weekly aggregates; cohort index (traces_index.html)
 │   ├── plot_stage_a.py                 # Stage A plots: train/holdout split + sim overlay,
 │   │                                   #   holdout diurnal real-vs-sim, holdout decision trace
 │   │                                   #   (real vs simulated events on the same glucose)

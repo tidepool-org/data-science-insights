@@ -24,6 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.lines import Line2D
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -36,6 +37,7 @@ DEFAULT_PLOT_DIR = os.path.join(
 INK, SEC, MUT = "#0b0b0b", "#52514e", "#898781"
 GRID, BASELINE, SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
 BLUE, ORANGE = "#2a78d6", "#eb6834"  # slot 1 = boluses, slot 2 = carb entries
+AQUA = "#1baf7a"                     # slot 3 = corrections (validated with 1-2)
 
 LATENCY_BIN_MIN = 10
 LATENCY_RANGE = (-180, 360)      # minutes shown; overflow counted in the margin
@@ -60,6 +62,160 @@ def _fig(width=9.0, height=4.2):
     fig, ax = plt.subplots(figsize=(width, height), facecolor=SURFACE)
     _style(ax)
     return fig, ax
+
+
+# One glyph + hue per event type, in EVERY figure that draws event lanes
+# (trace_browser example days, plot_stage_a holdout trace): filled orange
+# circle = carb entry, open orange circle = its stated meal time, blue
+# triangle = meal bolus, aqua diamond = correction. Real-vs-simulated is
+# NEVER encoded by hue -- it is a lane, a linestyle, or a fill, named in a
+# legend. Marker AREA scales with dose (grams / units); numeric labels sit
+# only on the smallest and largest event per lane -- two anchors that
+# calibrate the size scale, at one fixed height per row so labels never
+# wander into a neighboring row.
+MARKER_AREA_MIN = 14      # pts^2 floor: zero/unknown dose stays visible
+MARKER_AREA_MAX = 140     # cap so one huge meal doesn't swamp the lane
+CARB_AREA_PER_G = 1.0     # marker area added per gram
+BOLUS_AREA_PER_U = 10.0   # marker area added per unit
+
+
+LABEL_REPEL_MINUTES = 60  # two anchor labels closer than this splay outward
+
+
+def label_anchors(pairs):
+    """Timestamps to label in a lane: smallest and largest value among
+    (timestamp, value) pairs -- NaN values can't be labeled."""
+    ranked = sorted((p for p in pairs if pd.notna(p[1])), key=lambda p: p[1])
+    if not ranked:
+        return set()
+    return {ranked[0][0], ranked[-1][0]}
+
+
+def _anchor_ha(labeled):
+    """Horizontal alignment per labeled timestamp: when the two anchors are
+    near-coincident in time, their labels splay outward instead of
+    overlapping."""
+    ts = sorted(labeled)
+    if (len(ts) == 2
+            and ts[1] - ts[0] <= pd.Timedelta(minutes=LABEL_REPEL_MINUTES)):
+        return {ts[0]: "right", ts[1]: "left"}
+    return {t: "center" for t in ts}
+
+
+# Comparison-lane geometry: carbs and boluses always on separate rows; in
+# real-vs-sim figures the sim group sits on a shaded band, with an enlarged
+# gap between the groups so the real-bolus labels (below their row) and the
+# sim-carb labels (above theirs) don't meet.
+ROW_REAL_CARBS, ROW_REAL_BOLUSES = 3.2, 2.2
+ROW_SIM_CARBS, ROW_SIM_BOLUSES = 0.8, -0.2
+
+
+def carb_row(ax, y, times, grams, meal_times=None):
+    """One row of carb entries: sized circles, optional meal-time
+    connectors, labels on the min/median/max anchors."""
+    pairs = list(zip(times, grams))
+    labeled = label_anchors(pairs)
+    ha = _anchor_ha(labeled)
+    meal = list(meal_times) if meal_times is not None else [pd.NaT] * len(pairs)
+    for (t, g), m in zip(pairs, meal):
+        if pd.notna(m):
+            ax.plot([m, t], [y, y], color=ORANGE, linewidth=1.2, alpha=0.7,
+                    zorder=1)
+            ax.scatter([m], [y], marker="o", facecolors=SURFACE,
+                       edgecolors=ORANGE, s=28, zorder=2, linewidths=1.4)
+        ax.scatter([t], [y], marker="o", color=ORANGE, s=carb_area(g),
+                   zorder=3, edgecolors=SURFACE, linewidths=0.6)
+        # anchors are timestamps, so a NaN-dose or duplicate event sharing
+        # the anchor's tick must not print (a second) label
+        if t in labeled and pd.notna(g):
+            labeled = labeled - {t}
+            ax.annotate(f"{g:.0f}g", (t, y), textcoords="offset points",
+                        xytext=(0, 10), ha=ha[t], color=SEC, fontsize=7.5)
+
+
+def bolus_row(ax, y, meal_t, meal_u, corr_t, corr_u):
+    """One row of boluses (meal triangles + correction diamonds), labels on
+    the min/median/max anchors across both kinds."""
+    meals = list(zip(meal_t, meal_u))
+    corrs = list(zip(corr_t, corr_u))
+    labeled = label_anchors(meals + corrs)
+    ha = _anchor_ha(labeled)
+    for kind, pairs in [("meal", meals), ("corr", corrs)]:
+        hue = AQUA if kind == "corr" else BLUE
+        marker = "D" if kind == "corr" else "^"
+        z = 3 if kind == "corr" else 2
+        for t, u in pairs:
+            if pd.notna(u):
+                ax.scatter([t], [y], marker=marker, color=hue,
+                           s=bolus_area(u), zorder=z, edgecolors=SURFACE,
+                           linewidths=0.6)
+            else:
+                # dose unknown (simulated marks can be NaN): faded at floor
+                # size, so it never reads as a genuinely small bolus -- and
+                # it can't be a label anchor. Fading, not an open marker:
+                # open already means "stated meal time" on the carb row.
+                ax.scatter([t], [y], marker=marker, color=hue, alpha=0.35,
+                           s=bolus_area(u), zorder=z, edgecolors="none")
+            if t in labeled and pd.notna(u):
+                labeled = labeled - {t}
+                ax.annotate(f"{u:.1f}U", (t, y), textcoords="offset points",
+                            xytext=(0, -15), ha=ha[t], color=SEC,
+                            fontsize=7.5)
+
+
+def carb_area(grams):
+    return np.clip(MARKER_AREA_MIN + CARB_AREA_PER_G * np.nan_to_num(grams),
+                   MARKER_AREA_MIN, MARKER_AREA_MAX)
+
+
+def bolus_area(units):
+    return np.clip(MARKER_AREA_MIN + BOLUS_AREA_PER_U * np.nan_to_num(units),
+                   MARKER_AREA_MIN, MARKER_AREA_MAX)
+
+
+def real_sim_legend(ax, sim_marker=True, holdout_tick=False, **kwargs):
+    """Real-vs-simulated legend: linestyle/fill encodes provenance, never
+    hue (hue belongs to the event type, everywhere)."""
+    sim = (Line2D([], [], color=SEC, linewidth=1.2, linestyle="none",
+                  marker="o", markerfacecolor="none", markeredgecolor=SEC,
+                  markersize=5, label="simulated (model)")
+           if sim_marker else
+           Line2D([], [], color=SEC, linewidth=2, linestyle="--",
+                  label="simulated (model)"))
+    handles = [Line2D([], [], color=SEC, linewidth=2, label="real (observed)"),
+               sim]
+    if holdout_tick:
+        handles.insert(1, Line2D(
+            [], [], linestyle="none", marker="_", color=SEC, markersize=8,
+            markeredgewidth=1.2, label="real (holdout days only)"))
+    return ax.legend(handles=handles, frameon=False, fontsize=8,
+                     labelcolor=SEC, **kwargs)
+
+
+def event_legend(ax, meal_time=False, **kwargs):
+    """Attach the shared event-glyph legend to an axes."""
+    handles = [
+        Line2D([], [], linestyle="none", marker="o", markerfacecolor=ORANGE,
+               markeredgecolor=SURFACE, markersize=7, label="carb entry (g)"),
+    ]
+    if meal_time:
+        handles.append(
+            Line2D([], [], linestyle="none", marker="o",
+                   markerfacecolor=SURFACE, markeredgecolor=ORANGE,
+                   markersize=7, label="stated meal time"))
+    handles += [
+        Line2D([], [], linestyle="none", marker="^", markerfacecolor=BLUE,
+               markeredgecolor=SURFACE, markersize=8, label="meal bolus (U)"),
+        Line2D([], [], linestyle="none", marker="D", markerfacecolor=AQUA,
+               markeredgecolor=SURFACE, markersize=6.5, label="correction (U)"),
+    ]
+    leg = ax.legend(handles=handles, frameon=False, fontsize=8,
+                    labelcolor=SEC, title="marker area ∝ grams / units · "
+                    "min · max labeled · faded bolus = dose unknown",
+                    **kwargs)
+    leg.get_title().set_color(MUT)
+    leg.get_title().set_fontsize(7.5)
+    return leg
 
 
 def _save(fig, out_dir, name):
