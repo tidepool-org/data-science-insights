@@ -660,9 +660,10 @@ def plot_gap_ecdf(frame, mask, sim, spans, out_dir):
 
 def plot_marks_ecdf(frame, mask, sim, out_dir):
     """Dose/grams ECDFs, real holdout vs simulated -- the visual behind the
-    KS mark-fidelity metrics. Simulated marks resample the user's own
-    training-era values, so mismatch here means holdout-era drift or a NaN-
-    heavy mark stream."""
+    KS mark-fidelity metrics. Simulated marks come from the conditional
+    linear mark models (train-era fit + resampled train residuals), so
+    mismatch here means the conditioning misses, holdout-era drift, or a
+    NaN-heavy mark stream."""
     mask = np.asarray(mask, dtype=bool)
     panels = [
         ("carb entry grams", ORANGE,

@@ -1,6 +1,50 @@
 # behavior_model — Architecture
 
-## Current state (as of 2026-08-18)
+## Current state (as of 2026-08-19)
+
+**Decayed-magnitude states + COB (2026-08-19, `it08_decay_states` /
+`it08_b_decay_states`)**: four behavioral on-board proxies join the hazard AND
+mark bases — decayed sums of past event magnitudes (`DecayedMagnitude`;
+entered grams at τ = 45/180 min, delivered units at τ = 60/300 min, one-tick
+visibility, never retracted, closed-form block seeding), maintained by the
+rollout from its own sampled marks (possible since it07) — NOT the
+app-reported IOB/COB, which the rollout can't update. A third positives-only
+mark model (meal-bolus units) gives coin-flip meal boluses a dose; Stage B
+delivers that modeled dose, replacing the grams/CIR stand-in. Verdict: fit
+tier clearly up on both cohorts (~9/10 users gain AUC + clock-relative NLL
+skill on both hazards — first basis change to move the teacher-forced tier
+since it05); free-running carb gap p10 lands near the real reference on both
+cohorts (grams-weighted meal refractoriness), while the correction side
+over-suppresses (gap p10 overshoots; slight cohort-B rate dip) — the insulin
+state's negative feedback is the follow-up knob. Same day, **COB verified and
+wired**: `carbsOnBoard` is a materialized BDDP column with ~complete coverage
+on the cohort-B windows; the export gains `carbs_on_board_raw`, the contract
+gains an (optional-content) `cob` column, and `--cob-feature` / `use_cob`
+appends it to the basis — flag-gated like iob, same endogeneity caveat.
+Pending: cohort-B re-export with COB, then the displayed-state A/B
+(`--iob-feature --cob-feature` vs it08) to size what Loop-computed state adds
+beyond the decay proxies.
+
+**Conditional linear mark models (2026-08-19, `it07_linear_marks` /
+`it07_b_linear_marks`)**: `LinearMarks` replaces the empirical mark resampler —
+one OLS on log(value) over the hazard feature basis per mark, **fit on
+positive-event ticks only** (grams at carb-entry ticks, ABSOLUTE delivered
+units at correction ticks; the delivered/recommended ratio and its
+`recommended_bolus` dependence are gone). Sampling = train-support-clamped
+conditional mean + a resampled train residual; intercept-only fallback below
+`MIN_MARK_EVENTS_PER_PARAM` events per parameter reduces exactly to the old
+resampler. Verdict on both cohorts: correction-mark fidelity improves
+dramatically (`ks_corr_units` improves for every user with a measurable
+baseline, and simulated NaN correction marks disappear — `nan_corr_mark_frac`
+→ 0); rate/gap/diurnal metrics are unchanged (marks don't feed the hazards);
+a BIC check against intercept-only shows the conditioning is real signal for
+BOTH marks, not noise-fit. The one cost: `ks_carb_grams` is worse for all
+users — the resampler reproduced the user's discrete gram atoms (15/30/45 g)
+exactly and a continuous sampler cannot; accepted for now (snapping sampled
+grams to the user's own train gram grid is the cheap follow-up if atom
+fidelity matters). Stage B consumes the same models — the
+manual-recommendation plumbing and absolute-units fallback are deleted, and
+mark sizes now respond to simulated (display-clamped) glucose/history state.
 
 **Stage B integration prototype landed (2026-08-18)**: the behavior model now
 drives a **closed-loop physiology simulation** — `exploratory/stage_b_closed_loop.py`
@@ -96,7 +140,11 @@ the carb hazard beats its clock floor in NLL skill for 9/10 train users),
 vs it03 are noise), and `it05_bolus_excite` (bolus-occurrence history pair,
 1-tick visibility — carb hazard improves for all train users and its simulated
 gap p10 approaches the real reference via a refractory meal-spacing effect;
-correction side already saturated). Dev set not yet spent on any candidate.
+correction side already saturated), `it07_linear_marks` /
+`it07_b_linear_marks` (conditional linear mark models — hazard-side metrics
+unchanged by construction), and `it08_decay_states` / `it08_b_decay_states`
+(decayed-magnitude states — see the Current state block). Dev set not yet
+spent on any candidate.
 
 **Internal user-level train/dev split (2026-08-18)**: the cohort is split by
 span-rank parity in users.csv — odd 1-based ranks → `train`, even → `dev` (10/10,
@@ -167,11 +215,17 @@ block** (`simulate_blocks`), each block seeded with the user's real history up t
 the block start; gap metrics pool within blocks (`block_gap_minutes`) because
 cross-block gaps are split artifacts.
 
-**Cohort A (landed 2026-08-17, frozen)**: the current 20-user HK-path cohort —
-top-20 span-ranked candidates from the frozen
-`behavior_trace_candidates` table. Its local data (`data/behavior_traces/`) and
-ranking must stay intact: it00–it05 reproduce from it and the train/dev parity
-split is rank-defined. **Cohort B (staging built 2026-08-18)**: the staging
+**Cohort A (landed 2026-08-17; RETIRED for iteration 2026-08-19, owner call)**:
+the 20-user HK-path cohort — top-20 span-ranked candidates from the frozen
+`behavior_trace_candidates` table. HK-path means no displayed IOB, no COB, and
+era-bound dosing decisions, so it cannot support the displayed-state work the
+project is moving into; **cohort B is the development cohort from it09 on**
+(cohort-B runs use `--data-dir …/behavior_traces_b`; a cohort-B train/dev
+protocol is an open question — the `user_sets` parity rule applies to its
+users.csv mechanically, but the owner may prefer to expand cohort B first,
+pending Q11a–c). Cohort A's local data (`data/behavior_traces/`) and ranking
+are kept intact so the recorded it00–it08 ladder stays reproducible — retire
+means "no new iterations", not "delete". **Cohort B (staging built 2026-08-18)**: the staging
 scripts now target the dense-IOB + entry-clock population — Q10–Q12 showed
 dosingDecisions are direct-uploader-only and hundreds of DIY Loop 3.x users ran
 that uploader continuously, with their clocked HK food rows duplicating the
@@ -199,15 +253,21 @@ recorded number** (tested). Worker logs are captured and printed atomically per
 user; the metrics history keeps a single writer (the parent), appended in
 users.csv order.
 
-**Next** (each recorded as `it06+` with `--label`/`--note`, run with
-`--user-set train` and judged against the `it02_train10_odd` baseline; dev users
-are held out for generalization checks): (0) dev-set confirmation of the
-`it03_clock24` → `it05_bolus_excite` batch once accepted (the one thing dev
-runs are spent on); (1) exponentially-decaying excitation states (2–3 time
-constants per the 2026-08-18 external review) — the boxcar bolus pair landed a
-refractory meal-spacing effect, so the states test whether kernel shape adds
-anything beyond it, especially on the still-under-produced correction rate;
-(2) Q11a–c results (Databricks, pending) decide whether a both-worlds
+**Next** (cohort A is retired — from it09 on, iterations run on **cohort B**
+(`--data-dir …/behavior_traces_b`), recorded with `--label`/`--note` and judged
+against the latest cohort-B baseline): (0) **cohort-B re-export with COB**
+(Databricks step 2 re-run + download — the availability query landed
+2026-08-19: materialized column, ~complete coverage); (0b) **displayed-state
+A/B on cohort B**: teacher-forced fit with the real displayed IOB + COB
+(`--iob-feature --cob-feature`) vs the it08 decay proxies — the gap measures
+what Loop-computed state adds beyond the rollout-safe basis, and decides
+whether the Stage B endogenous swap (fit on displayed state, serve the
+simulator Loop's own IOB/COB) is worth building; (0c) the correction side's
+it08 over-suppression (gap p10 overshoot, slight cohort-B rate dip) — tune or
+re-scope the insulin state's negative feedback; (1) RESOLVED 2026-08-19 by
+`it08_decay_states` (magnitude-weighted decaying states supersede the planned
+occurrence-kernel test); (2) Q11a–c results (Databricks, pending) decide
+whether a both-worlds
 (dense-IOB + entry-clock) export is possible; (3) Stage B iteration, now that
 the plumbing prototype works end to end — fit the physiology to the user
 instead of rule-of-thumb sizing, real meal-bolus recommendations (a second
@@ -218,8 +278,10 @@ clock (`it03_clock24` — Jeffreys-smoothed, train-cross-fitted empirical hourly
 clock logits, `hourly_clock_logits` / `crossfit_train_clock`); the IOB decision
 (`it04_no_iob` — feature dropped, era-bound DDs confirmed by Q10, §6 column
 retained); bolus-based excitation (`it05_bolus_excite` — `EventHistory`
-generalization, occurrence-based bolus pair at 1-tick visibility). P3
-replication is satisfied by the 20-user cohort.
+generalization, occurrence-based bolus pair at 1-tick visibility). RESOLVED
+2026-08-19: the marks model (`it07_linear_marks` / `it07_b_linear_marks` —
+`LinearMarks` conditional linear mark-value models, positives-only; see Module
+design → Marks). P3 replication is satisfied by the 20-user cohort.
 
 ## What this is
 
@@ -251,7 +313,7 @@ behavior_model/
 │   └── exports/                        # Databricks-side CSV output (git-ignored)
 ├── exploratory/
 │   ├── behavior_model_mvp.py           # Stage A module (two-clock labels, shared history features,
-│   │                                   #   statsmodels Logit hazards, empirical marks, Stage A sim)
+│   │                                   #   statsmodels Logit hazards, linear mark models, Stage A sim)
 │   ├── stage_a_metrics.py              # metric suite: holdout fit metrics (NLL skill, AUC,
 │   │                                   #   calibration slope, obs/pred), multi-seed sim metrics
 │   │                                   #   (rate ratios, gap/diurnal/mark fidelity, ablation Δ),
@@ -280,6 +342,8 @@ behavior_model/
 │   ├── test_behavior_model_mvp.py      # direct-call test runner (no pytest) + synthetic generator
 │   ├── test_stage_a_metrics.py         # direct-call tests for the metric suite + history
 │   ├── p0_timestamp_verification.sql   # Databricks read-only queries (results stay off-repo)
+│   ├── cob_availability.sql            # Databricks read-only: does dosingDecision carry
+│   │                                   #   Loop's carbsOnBoard on the cohort-B windows?
 │   └── outputs/                        # per-user Stage A outputs, results writeup,
 │                                       #   metrics_history.csv + roc_history.csv + meta/
 │                                       #   (all git-ignored)
@@ -294,6 +358,10 @@ behavior_model/
 - **Shared history features**: `EventHistory(visibility_ticks)` is the single
   implementation of both excitation families, used by both `add_features` (fit) and
   `simulate_behavior` (rollout, on simulated history, seeded from the training tail).
+  `DecayedMagnitude` (it08) is the magnitude analog — decayed grams/units sums
+  (behavioral COB/IOB proxies), same one-class-everywhere rule, one-tick
+  visibility, no retraction (label-free streams), `seeded_decay` closed-form
+  block seeding; the rollout feeds it sampled marks.
   Corrections (`mins_since_correction` / `n_corrections_2h`) become **visible only
   once their association window closes**
   (age > `ASSOCIATION_TICKS`): the correction-vs-meal-bolus label depends on carb entries
@@ -310,8 +378,22 @@ behavior_model/
   equals observed rate by construction), no class rebalancing. Degenerate training
   segments (an event type with zero train events → singular/rank-deficient fit) fall
   back to an intercept-only model at the empirical rate, with a warning.
-- **Marks**: `EmpiricalMarks` resamples the user's own grams, delivered/recommended
-  ratios, and announce latencies.
+- **Marks**: `LinearMarks` — conditional mark-VALUE models, one OLS on log(value)
+  over the hazard feature basis per mark (grams at carb-entry ticks, ABSOLUTE
+  delivered units at correction ticks), fit on **positive-event ticks only** (the
+  mark is undefined elsewhere). Sampling = conditional mean + a resampled train
+  residual, so the user's dispersion survives; an intercept-only fit reduces
+  exactly to empirical resampling — which is also the fallback below
+  `MIN_MARK_EVENTS_PER_PARAM` training events per parameter, and was the pre-it07
+  model. Two guards from the Stage B extrapolation lesson: the fallback, and the
+  conditional mean clamped to the train log-value range before the residual is
+  added. The delivered/recommended ratio — and with it the `recommended_bolus`
+  dependence, sparse on HK cohorts (the NaN-mark hole) and endogenous-used-
+  exogenously like IOB — is gone; announce latencies remain empirically
+  resampled. The rollout samples marks from the same per-tick feature dict the
+  hazards see (built over the union of hazard + mark bases, so the ablated
+  rollout still feeds the marks their full basis, with simulated-history
+  excitation substituted).
 - **Split**: `split_masks` → boolean holdout mask + JSON-able config;
   `holdout_blocks`/`block_spans` expose the contiguous holdout runs; `simulate_blocks`
   rolls each block out separately, seeded with real pre-block history

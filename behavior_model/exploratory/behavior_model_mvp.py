@@ -27,6 +27,9 @@ per tick, one user. `validate_tick_frame` is the acceptance gate:
                         Must be the value the app DISPLAYED -- no smoothing
                         that uses future points.
     iob                 float, units, as logged by the app (not re-derived)
+    cob                 float, grams, Loop's carbsOnBoard as logged by the
+                        app (not re-derived); NaN where no dosing decision
+                        carries it (all of cohort A)
     recommended_bolus   float, units, NaN when unavailable
     carb_meal_time      datetime64[ns] on entry ticks, else NaT.
                         User-stated time of eating (physiology input).
@@ -56,6 +59,8 @@ HISTORY_CAP_MINUTES = 720.0    # cap on minutes-since-correction
 ASSOCIATION_TICKS = MEAL_ASSOCIATION_MINUTES // TICK_MINUTES
 EXCITATION_TICKS = EXCITATION_WINDOW_MINUTES // TICK_MINUTES
 NAN_MARK_WARN_FRAC = 0.25  # simulated correction marks allowed to be NaN before warning
+MIN_MARK_EVENTS_PER_PARAM = 5  # below this, a mark model falls back to
+                               # intercept-only (= empirical resampling)
 
 EVENT_TYPES = ("is_carb_entry", "is_correction")
 # two excitation families, kept side by side so they can be compared: the
@@ -67,7 +72,24 @@ EVENT_TYPES = ("is_carb_entry", "is_correction")
 # would be train/serve skew by construction.
 CORRECTION_EXCITATION_FEATURES = ["mins_since_correction", "n_corrections_2h"]
 BOLUS_EXCITATION_FEATURES = ["mins_since_bolus", "n_boluses_2h"]
-SELF_EXCITATION_FEATURES = CORRECTION_EXCITATION_FEATURES + BOLUS_EXCITATION_FEATURES
+# behavioral carbs/insulin-on-board proxies: decayed sums of past event
+# MAGNITUDES (grams entered, bolus units delivered) at fixed time constants.
+# NOT the app-reported IOB/COB (an endogenous series the Stage A rollout
+# cannot update -- the it04/it06_b lesson): the serve paths maintain these
+# from their own sampled marks, which magnitude marks (it07) made possible,
+# so they are rollout-safe by construction and identical at fit and serve.
+# Two constants per stream bracket the app's kernel shapes (carb absorption
+# ~3 h, insulin activity peak ~1 h / DIA tail ~5-6 h) and let the fitted
+# coefficients weight fast vs slow.
+CARB_DECAY_TAUS_MIN = (45.0, 180.0)
+INSULIN_DECAY_TAUS_MIN = (60.0, 300.0)
+CARB_DECAY_FEATURES = ["carb_decay_45m", "carb_decay_180m"]
+INSULIN_DECAY_FEATURES = ["insulin_decay_60m", "insulin_decay_300m"]
+DECAY_FEATURES = CARB_DECAY_FEATURES + INSULIN_DECAY_FEATURES
+# every feature fed by SIMULATED history in the rollout (the ablation drops
+# the whole set, so the ablation metrics keep meaning "excitation off")
+SELF_EXCITATION_FEATURES = (CORRECTION_EXCITATION_FEATURES
+                            + BOLUS_EXCITATION_FEATURES + DECAY_FEATURES)
 BOLUS_VISIBILITY_TICKS = 0  # a bolus is visible once age > 0: the hazard at a
                             # tick is evaluated before that tick's own events
                             # (no self-reference), and nothing else needs hiding
@@ -81,9 +103,9 @@ CYCLE_WEEKS = 4  # interleaved split: repeating cycle; the trailing
                  # (1 - train_frac) share of each cycle is holdout
 
 # time-of-day enters via the per-event empirical clocks (hourly_clock_logits);
-# tod_sin/tod_cos/in_meal_window are still computed as columns (marks + plots
-# + the simulate grams pool use in_meal_window) but the 24-bin clock spans
-# them as a hazard basis -- the meal windows are hour-aligned.
+# tod_sin/tod_cos/in_meal_window are still computed as columns (plots use
+# in_meal_window) but the 24-bin clock spans them as a hazard basis -- the
+# meal windows are hour-aligned.
 # `iob` is NOT in the default basis (dropped 2026-08-18): cohort A's dosing
 # decisions are era-bound, so the ffilled value was a frozen per-user calendar
 # step, not insulin state. On dense-DD cohorts (cohort B) it is the number the
@@ -101,11 +123,15 @@ FEATURES = [
     "n_boluses_2h",
     "clock_carb",
     "clock_corr",
-]
+] + DECAY_FEATURES
 IOB_FEATURE = "iob"  # appended to the basis only when use_iob is set
+COB_FEATURE = "cob"  # appended only when use_cob is set -- Loop's displayed
+                     # carbsOnBoard (dense on cohort B, absent on cohort A);
+                     # same endogeneity caveat as iob: teacher-forced /
+                     # Stage B only, never in the rollout-scored basis
 
 REQUIRED_COLUMNS = [
-    "timestamp", "cgm", "iob", "recommended_bolus",
+    "timestamp", "cgm", "iob", "cob", "recommended_bolus",
     "carb_meal_time", "carb_entry_time", "carb_entry_g", "bolus_u",
 ]
 
@@ -240,6 +266,52 @@ class EventHistory:
         return popped
 
 
+class DecayedMagnitude:
+    """Behavioral on-board state: the sum of past event magnitudes, each
+    decayed by exp(-age/tau), one value per time constant.
+
+    One-tick visibility, matching the bolus-occurrence convention: values()
+    at a tick excludes that tick's own events, because step() folds a tick's
+    magnitude in only after the tick is processed. Magnitudes are label-free
+    (grams from carb entries, delivered units from any user bolus), so no
+    retraction is ever needed. The single implementation for the fit path
+    (add_features), the Stage A rollout, and the Stage B engine -- the serve
+    paths feed it their own SAMPLED marks, which is what makes a magnitude
+    state rollout-safe (it07) where the app-reported IOB was not.
+    """
+
+    def __init__(self, taus_minutes, state=None):
+        self.taus_minutes = tuple(taus_minutes)
+        self.decays = tuple(float(np.exp(-TICK_MINUTES / t))
+                            for t in self.taus_minutes)
+        self.state = list(state) if state is not None else [0.0] * len(self.decays)
+
+    def values(self):
+        return tuple(self.state)
+
+    def step(self, magnitude):
+        """Advance one tick: fold in this tick's total magnitude (0/NaN =
+        none) -- after this, values() is the NEXT tick's feature."""
+        m = float(magnitude) if np.isfinite(magnitude) else 0.0
+        self.state = [(s + m) * d for s, d in zip(self.state, self.decays)]
+
+
+def seeded_decay(magnitudes, taus_minutes, upto=None):
+    """DecayedMagnitude pre-loaded with the REAL magnitudes before positional
+    index `upto` (all rows if None). Closed form over the (sparse) nonzero
+    events rather than replaying the prefix, so per-block seeding stays cheap
+    across many replicates; agrees with stepping up to float round-off."""
+    mags = np.nan_to_num(np.asarray(magnitudes, dtype=float))
+    if upto is not None:
+        mags = mags[:upto]
+    idx = np.flatnonzero(mags)
+    state = []
+    for tau in taus_minutes:
+        d = np.exp(-TICK_MINUTES / tau)
+        state.append(float(np.sum(mags[idx] * d ** (len(mags) - idx))))
+    return DecayedMagnitude(taus_minutes, state=state)
+
+
 def seeded_history(flags, visibility_ticks, upto=None):
     """History pre-loaded with the REAL events flagged True before positional
     index `upto` (all rows if None), so a simulated block starts under the
@@ -297,8 +369,8 @@ def crossfit_train_clock(df, mask):
 
 
 def add_features(df, cgm_fill_value=None, clock_logits=None):
-    """Thirteen strictly backward-looking feature columns (only what the
-    user could see).
+    """The strictly backward-looking feature columns (only what the user
+    could see).
 
     `cgm_fill_value` covers ticks before the first CGM reading and
     `clock_logits` (from hourly_clock_logits) supplies the per-event hourly
@@ -315,9 +387,11 @@ def add_features(df, cgm_fill_value=None, clock_logits=None):
     df["cgm_missing"] = df["cgm"].isna().astype(float)
     df["cgm_filled"] = df["cgm"].ffill().fillna(cgm_fill_value)
     df["delta_30"] = df["cgm_filled"].diff(DELTA_WINDOW_MINUTES // TICK_MINUTES).fillna(0.0)
-    # always prepared, consumed only under use_iob (dense-DD cohorts): the
-    # app-displayed IOB, forward-filled across the short intra-cycle gaps
+    # always prepared, consumed only under use_iob / use_cob (dense-DD
+    # cohorts): the app-displayed IOB and COB, forward-filled across the
+    # short intra-cycle gaps
     df[IOB_FEATURE] = df[IOB_FEATURE].ffill().fillna(0.0)
+    df[COB_FEATURE] = df[COB_FEATURE].ffill().fillna(0.0)
 
     hour = df["timestamp"].dt.hour + df["timestamp"].dt.minute / 60.0
     df["tod_sin"] = np.sin(2 * np.pi * hour / 24.0)
@@ -347,6 +421,21 @@ def add_features(df, cgm_fill_value=None, clock_logits=None):
                 hist.record(i)
         df[mins_col] = mins
         df[count_col] = counts
+
+    # decayed magnitude states, from the same label-free raw columns
+    for family, taus, mags in [
+        (CARB_DECAY_FEATURES, CARB_DECAY_TAUS_MIN,
+         df["carb_entry_g"].fillna(0.0).to_numpy(dtype=float)),
+        (INSULIN_DECAY_FEATURES, INSULIN_DECAY_TAUS_MIN,
+         df["bolus_u"].fillna(0.0).to_numpy(dtype=float)),
+    ]:
+        state = DecayedMagnitude(taus)
+        rows = np.empty((len(df), len(taus)))
+        for i, m in enumerate(mags):
+            rows[i] = state.values()
+            state.step(m)
+        for k, col in enumerate(family):
+            df[col] = rows[:, k]
     return df
 
 
@@ -457,42 +546,89 @@ def fit_meal_bolus_rate(df):
 
 
 # --------------------------------------------------------------------------
-# Marks -- empirical resampling, not fitted distributions
+# Marks -- conditional linear value models, trained on positive ticks only
 # --------------------------------------------------------------------------
 
-class EmpiricalMarks:
-    """Resample the user's own historical marks.
+class LinearMarks:
+    """Conditional mark-value models: how BIG an event is, given the state
+    that produced it.
 
-    Automatically reproduces their round-number habits (15/30/45 g, whole and
-    half units) with no distributional assumptions. Replace with a parametric
-    mixture only if resampling proves too coarse.
+    One OLS per mark on log(value) over the hazard feature basis, fit on the
+    ticks where the event actually fired (positives only -- the mark is
+    undefined elsewhere): grams on carb-entry ticks, delivered units on
+    correction ticks, delivered units on meal-bolus ticks (it08 -- feeds the
+    insulin decay state and Stage B delivery). Sampling adds a resampled
+    train residual to the
+    conditional mean, so the user's dispersion survives; with an
+    intercept-only fit the procedure reduces EXACTLY to resampling their
+    train values (the previous mark model). The log scale keeps samples
+    positive and makes the errors multiplicative -- the natural scale for
+    grams and units.
+
+    Corrections are modeled as ABSOLUTE units, not the old
+    delivered/recommended ratio: the recommendation trace is sparse on
+    HK-path cohorts (the NaN-mark hole), measured poorly on cohort B, and --
+    like IOB -- is an endogenous series the rollout cannot update, so
+    conditioning on it was train/serve skew.
+
+    Two guardrails, both descendants of the Stage B extrapolation lesson:
+    below MIN_MARK_EVENTS_PER_PARAM training events per parameter the fit
+    falls back to intercept-only, and the conditional mean is clamped to the
+    train log-value range before the residual is added, so an out-of-support
+    feature vector cannot produce an absurd dose.
     """
 
-    def __init__(self, df):
-        meal = df["in_meal_window"] > 0
-        self.grams_meal = df.loc[df["is_carb_entry"] & meal, "carb_entry_g"].dropna().to_numpy()
-        self.grams_other = df.loc[df["is_carb_entry"] & ~meal, "carb_entry_g"].dropna().to_numpy()
-
-        corr = df[df["is_correction"]]
-        ratio = corr["bolus_u"] / corr["recommended_bolus"].replace(0, np.nan)
-        self.bolus_ratio = ratio.replace([np.inf, -np.inf], np.nan).dropna().to_numpy()
-
+    def __init__(self, df, features=FEATURES):
+        self.features = list(features)
+        X = df[self.features].to_numpy(dtype=float)
+        self._grams = self._fit(df["carb_entry_g"].to_numpy(dtype=float),
+                                df["is_carb_entry"].to_numpy(dtype=bool), X)
+        self._units = self._fit(df["bolus_u"].to_numpy(dtype=float),
+                                df["is_correction"].to_numpy(dtype=bool), X)
+        self._meal_units = self._fit(df["bolus_u"].to_numpy(dtype=float),
+                                     df["is_meal_bolus"].to_numpy(dtype=bool), X)
         self.latency_min = (
             df.loc[df["is_carb_entry"], "announce_latency_min"].dropna().to_numpy()
         )
 
-    def sample_grams(self, in_meal_window, rng):
-        pool = self.grams_meal if in_meal_window else self.grams_other
-        if len(pool) == 0:
-            pool = np.concatenate([self.grams_meal, self.grams_other])
-        if len(pool) == 0:
-            return np.nan
-        return float(rng.choice(pool))
+    @staticmethod
+    def _fit(values, fired, X):
+        keep = fired & np.isfinite(values) & (values > 0)
+        y = np.log(values[keep])
+        if len(y) == 0:
+            return None
+        n_params = X.shape[1] + 1
+        if len(y) >= MIN_MARK_EVENTS_PER_PARAM * n_params:
+            fit = sm.OLS(y, sm.add_constant(X[keep], has_constant="add")).fit()
+            params, resid = np.asarray(fit.params), np.asarray(fit.resid)
+        else:
+            params = np.zeros(n_params)
+            params[0] = y.mean()
+            resid = y - y.mean()
+        return {"params": params, "resid": resid,
+                "lo": float(y.min()), "hi": float(y.max())}
 
-    def sample_correction_units(self, recommended, rng):
-        if len(self.bolus_ratio) == 0 or not np.isfinite(recommended):
+    def _sample(self, model, feats, rng):
+        if model is None:
             return np.nan
-        return float(recommended * rng.choice(self.bolus_ratio))
+        x = np.array([feats[f] for f in self.features], dtype=float)
+        mean = float(model["params"][0] + x @ model["params"][1:])
+        mean = min(max(mean, model["lo"]), model["hi"])
+        return float(np.exp(mean + rng.choice(model["resid"])))
+
+    def sample_grams(self, feats, rng):
+        return self._sample(self._grams, feats, rng)
+
+    def sample_correction_units(self, feats, rng):
+        return self._sample(self._units, feats, rng)
+
+    def sample_meal_bolus_units(self, feats, rng):
+        """Units of a meal-associated bolus. Gives the coin-flip meal
+        boluses of the rollout a dose, so the insulin decay state (and the
+        Stage B delivery) can carry a magnitude; conditioned on the shared
+        basis only -- not on the same-tick grams draw -- so dose-size
+        coupling within a tick comes only from shared conditioning."""
+        return self._sample(self._meal_units, feats, rng)
 
     def sample_latency(self, rng):
         """Announce latency in minutes; Stage B places the physiology meal at
@@ -510,7 +646,8 @@ SIMULATED_COLUMNS = ["timestamp", "event", "mark", "announce_latency_min", "bolu
 
 
 def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
-                      history=None, bolus_history=None, start_index=0):
+                      history=None, bolus_history=None, start_index=0,
+                      carb_state=None, insulin_state=None):
     """Walk the holdout ticks, generating events from the fitted hazards.
 
     `cgm` is taken from the real record (the Stage A
@@ -519,6 +656,18 @@ def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
     generated by the model, not copied from the user. `start_index` is the
     holdout's first positional index in the full frame, so seeded history
     tick indices line up.
+
+    Marks are sampled from the SAME per-tick feature dict the hazards see
+    (simulated-history excitation included), over the union of the hazard
+    and mark bases -- an ablated hazard basis still feeds the mark models
+    their full one.
+
+    The decay states (behavioral COB/IOB proxies) are maintained from the
+    rollout's own sampled magnitudes: grams from generated carb entries;
+    bolus units from generated corrections (however arbitration labels
+    them) plus sampled meal-bolus units when the meal-bolus coin lands True
+    -- mirroring the real side, where bolus_u sums every same-tick bolus.
+    Like the bolus history, they are never retracted.
 
     Label arbitration mirrors fit time: a generated bolus within the
     association window of a generated carb entry is a meal bolus, not a
@@ -538,12 +687,19 @@ def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
     tick instead of waiting out the association window.
     """
     features = hazards["features"]
+    feat_names = list(dict.fromkeys([*features, *marks.features]))
     models = hazards["models"]
     hist = history if history is not None else EventHistory(ASSOCIATION_TICKS)
     bolus_hist = (bolus_history if bolus_history is not None
                   else EventHistory(BOLUS_VISIBILITY_TICKS))
+    carb_state = (carb_state if carb_state is not None
+                  else DecayedMagnitude(CARB_DECAY_TAUS_MIN))
+    insulin_state = (insulin_state if insulin_state is not None
+                     else DecayedMagnitude(INSULIN_DECAY_TAUS_MIN))
     dynamic = [(hist, CORRECTION_EXCITATION_FEATURES),
                (bolus_hist, BOLUS_EXCITATION_FEATURES)]
+    decay_dynamic = [(carb_state, CARB_DECAY_FEATURES),
+                     (insulin_state, INSULIN_DECAY_FEATURES)]
 
     out = []
     corr_row_by_tick = {}
@@ -551,32 +707,47 @@ def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
 
     for offset, row in enumerate(holdout.itertuples()):
         i = start_index + offset
-        feats = {f: getattr(row, f) for f in features}
+        feats = {f: getattr(row, f) for f in feat_names}
         for h, family in dynamic:
             if any(f in feats for f in family):
                 for f, value in zip(family, h.features(i)):
                     if f in feats:
                         feats[f] = value
+        for state, family in decay_dynamic:
+            for f, value in zip(family, state.values()):
+                if f in feats:
+                    feats[f] = value
         x = np.array([feats[f] for f in features], dtype=float)
         bolus_this_tick = False
+        carb_mag = 0.0
+        insulin_mag = 0.0
 
         if rng.random() < _hazard(models["is_carb_entry"], x):
-            # grams pool by meal window regardless of hazard feature set
-            grams = marks.sample_grams(row.in_meal_window > 0, rng)
+            grams = marks.sample_grams(feats, rng)
             latency = marks.sample_latency(rng)
             bolused = rng.random() < meal_bolus_p
             out.append((row.timestamp, "carb_entry", grams, latency, bolused))
             last_carb_tick = i
+            if np.isfinite(grams):
+                carb_mag = grams
             if bolused:
                 bolus_hist.record(i)
                 bolus_this_tick = True
+                # the coin-flip meal bolus gets a modeled dose so the insulin
+                # state carries it (the sim log has no row for it -- one
+                # event row per tick per type)
+                mb_units = marks.sample_meal_bolus_units(feats, rng)
+                if np.isfinite(mb_units):
+                    insulin_mag += mb_units
             for t in hist.retract(max(i - ASSOCIATION_TICKS, start_index)):
                 idx = corr_row_by_tick.pop(t)
                 ts, _, mark, lat, bol = out[idx]
                 out[idx] = (ts, "meal_bolus", mark, lat, bol)
 
         if rng.random() < _hazard(models["is_correction"], x):
-            units = marks.sample_correction_units(row.recommended_bolus, rng)
+            units = marks.sample_correction_units(feats, rng)
+            if np.isfinite(units):
+                insulin_mag += units
             if last_carb_tick is not None and i - last_carb_tick <= ASSOCIATION_TICKS:
                 out.append((row.timestamp, "meal_bolus", units, np.nan, True))
             else:
@@ -586,6 +757,9 @@ def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
             if not bolus_this_tick:
                 bolus_hist.record(i)
 
+        carb_state.step(carb_mag)
+        insulin_state.step(insulin_mag)
+
     sim = pd.DataFrame(out, columns=SIMULATED_COLUMNS)
     sim["timestamp"] = pd.to_datetime(sim["timestamp"])
 
@@ -593,8 +767,8 @@ def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
     if len(corr_marks) and corr_marks.isna().mean() > NAN_MARK_WARN_FRAC:
         warnings.warn(
             f"{corr_marks.isna().mean():.0%} of simulated correction marks are NaN "
-            "-- recommended_bolus is probably staged only at delivery ticks; the "
-            "delivered/recommended mark model needs the dense recommendation series",
+            "-- the training segment had no positive corrections to fit the "
+            "conditional mark model on",
             stacklevel=2,
         )
     return sim
@@ -603,7 +777,7 @@ def simulate_behavior(holdout, hazards, marks, meal_bolus_p, rng,
 def simulate_blocks(df, blocks, hazards, marks, meal_bolus_p, rng):
     """Stage A simulation over (possibly non-contiguous) holdout blocks: each
     block is rolled out separately, seeded with the user's REAL correction
-    and bolus histories up to the block start; self-excitation WITHIN a
+    and bolus histories and decay states up to the block start; self-excitation WITHIN a
     block still comes from simulated events. Scoring is marginal/pooled, so
     conditioning each block on real pre-block history is the block-wise
     analog of seeding the single chronological holdout with the training
@@ -615,6 +789,10 @@ def simulate_blocks(df, blocks, hazards, marks, meal_bolus_p, rng):
                                    upto=s),
             bolus_history=seeded_history(df["bolus_u"].notna(),
                                          BOLUS_VISIBILITY_TICKS, upto=s),
+            carb_state=seeded_decay(df["carb_entry_g"], CARB_DECAY_TAUS_MIN,
+                                    upto=s),
+            insulin_state=seeded_decay(df["bolus_u"], INSULIN_DECAY_TAUS_MIN,
+                                       upto=s),
             start_index=s)
         for s, e in blocks
     ]
@@ -707,7 +885,8 @@ def weekly_drift_check(df):
 
 # --------------------------------------------------------------------------
 
-def run_mvp(df, split=DEFAULT_SPLIT, train_frac=0.75, seed=0, use_iob=False):
+def run_mvp(df, split=DEFAULT_SPLIT, train_frac=0.75, seed=0, use_iob=False,
+            use_cob=False):
     """End-to-end Stage A driver: split (drift-aware interleaved weeks by
     default), fit, one quick-look block-wise simulation, comparison tables.
     Returns the fitted pieces plus the full labeled frame and the holdout
@@ -716,10 +895,12 @@ def run_mvp(df, split=DEFAULT_SPLIT, train_frac=0.75, seed=0, use_iob=False):
     history) lives in `stage_a_metrics.evaluate`, which consumes this
     result.
 
-    `use_iob` appends the app-displayed IOB to the hazard basis -- meant
-    for dense-DD cohorts (cohort B), where flagged-on and flagged-off runs
-    on the same cohort give the exact with/without comparison. The recorded
-    feature list carries the flag's effect, so history rows self-document."""
+    `use_iob` / `use_cob` append the app-displayed IOB / COB to the hazard
+    basis -- meant for dense-DD cohorts (cohort B), where flagged-on and
+    flagged-off runs on the same cohort give the exact with/without
+    comparison (the displayed-state A/B against the it08 decay proxies). The
+    recorded feature list carries the flags' effect, so history rows
+    self-document."""
     rng = np.random.default_rng(seed)
 
     validate_tick_frame(df)
@@ -735,10 +916,11 @@ def run_mvp(df, split=DEFAULT_SPLIT, train_frac=0.75, seed=0, use_iob=False):
     blocks = holdout_blocks(mask)
     spans = block_spans(df, blocks)
 
-    features = FEATURES + ([IOB_FEATURE] if use_iob else [])
+    features = (FEATURES + ([IOB_FEATURE] if use_iob else [])
+                + ([COB_FEATURE] if use_cob else []))
     hazards = fit_hazards(train, features=features)
     reduced = [f for f in features if f not in SELF_EXCITATION_FEATURES]
-    marks = EmpiricalMarks(train)
+    marks = LinearMarks(train, features=features)
     meal_bolus_p = fit_meal_bolus_rate(train)
 
     simulated = simulate_blocks(df, blocks, hazards, marks, meal_bolus_p, rng)

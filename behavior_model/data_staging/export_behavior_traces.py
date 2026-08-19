@@ -32,8 +32,12 @@ never leave Databricks:
                 (user-initiated only -- autoboluses are the controller's
                 actions, not behavior, and would corrupt correction labels)
   dosing.csv  : _userId, dd_timestamp (user-local), reason,
-                insulin_on_board_raw, recommended_bolus_raw
-                (raw strings -- value shape is parsed locally)
+                insulin_on_board_raw, carbs_on_board_raw,
+                recommended_bolus_raw
+                (raw strings -- value shape is parsed locally;
+                carbsOnBoard verified 2026-08-19: materialized column,
+                ~complete coverage on the cohort-B windows, shape
+                {"time": ..., "amount": <g>})
 
 TZ semantics follow simulation/export/export_single_user_day.py: one
 per-user offset (latest non-NULL timezoneOffset), because per-row offsets
@@ -310,6 +314,7 @@ def run(spark, output_dir=OUTPUT_DIR, n_users=N_EXPORT_USERS):
         TRY_CAST(time_string AS TIMESTAMP) AS dd_utc,
         reason,
         insulinOnBoard,
+        carbsOnBoard,
         recommendedBolus,
         ROW_NUMBER() OVER (
           PARTITION BY _userId, time_string, reason
@@ -325,6 +330,7 @@ def run(spark, output_dir=OUTPUT_DIR, n_users=N_EXPORT_USERS):
       TIMESTAMPADD(MINUTE, u.tz_offset_min, d.dd_utc) AS dd_timestamp,
       d.reason,
       d.insulinOnBoard AS insulin_on_board_raw,
+      d.carbsOnBoard AS carbs_on_board_raw,
       d.recommendedBolus AS recommended_bolus_raw
     FROM deduped d
     INNER JOIN _bm_picked p

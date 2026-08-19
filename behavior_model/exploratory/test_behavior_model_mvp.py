@@ -29,8 +29,13 @@ from behavior_model_mvp import (
     TICK_MINUTES,
     TICKS_PER_DAY,
     IOB_FEATURE,
-    EmpiricalMarks,
+    CARB_DECAY_FEATURES,
+    CARB_DECAY_TAUS_MIN,
+    INSULIN_DECAY_FEATURES,
+    INSULIN_DECAY_TAUS_MIN,
     EventHistory,
+    LinearMarks,
+    seeded_decay,
     add_features,
     block_gap_minutes,
     block_spans,
@@ -57,6 +62,7 @@ def _blank_frame(n, start="2025-01-01"):
         "timestamp": ts,
         "cgm": 120.0,
         "iob": 0.0,
+        "cob": np.nan,
         "recommended_bolus": np.nan,
         "carb_meal_time": pd.NaT,
         "carb_entry_time": pd.NaT,
@@ -156,10 +162,22 @@ def make_synthetic(days=120, seed=1):
     era = slice(10 * TICKS_PER_DAY, min(20 * TICKS_PER_DAY, n))
     iob_uploaded[era] = iob[era]
 
+    # displayed COB, same era-bound upload window as iob: a decayed sum of
+    # recent entered carbs while the direct uploader ran, NaN elsewhere
+    cob_uploaded = np.full(n, np.nan)
+    cob_run = 0.0
+    for i in range(n):
+        if i:
+            cob_run = cob_run * 0.97 + (
+                0.0 if np.isnan(carb_g[i - 1]) else carb_g[i - 1])
+        if era.start <= i < era.stop:
+            cob_uploaded[i] = cob_run
+
     return pd.DataFrame({
         "timestamp": ts,
         "cgm": cgm_displayed,
         "iob": iob_uploaded,
+        "cob": cob_uploaded,
         "recommended_bolus": recommended,
         "carb_meal_time": meal_time,
         "carb_entry_time": entry_time,
@@ -263,6 +281,33 @@ def test_feature_parity():
             assert df[count_col].iloc[i] == n_2h, f"{count_col} mismatch at tick {i}"
 
 
+def test_decay_states():
+    """Decay features: a brute-force recomputation (one-tick visibility,
+    exp(-age/tau) magnitude weights) matches add_features row-for-row, and
+    the closed-form block seeding agrees with the stepped state at a seam."""
+    df = add_features(label_events(make_synthetic(days=30)),
+                      cgm_fill_value=SYNTH_CGM_FILL)
+    for family, taus, mag_col in [
+        (CARB_DECAY_FEATURES, CARB_DECAY_TAUS_MIN, "carb_entry_g"),
+        (INSULIN_DECAY_FEATURES, INSULIN_DECAY_TAUS_MIN, "bolus_u"),
+    ]:
+        mags = df[mag_col].fillna(0.0).to_numpy(dtype=float)
+        idx = np.flatnonzero(mags)
+        for i in (0, 100, 1500, len(df) - 1):
+            past = idx[idx < i]
+            for col, tau in zip(family, taus):
+                expect = float(np.sum(
+                    mags[past] * np.exp(-(i - past) * TICK_MINUTES / tau)))
+                got = float(df[col].iloc[i])
+                assert np.isclose(got, expect, rtol=1e-6, atol=1e-9), (col, i)
+
+    mags = df["bolus_u"].fillna(0.0).to_numpy(dtype=float)
+    seam = 5000
+    seeded = seeded_decay(mags, INSULIN_DECAY_TAUS_MIN, upto=seam)
+    for v, col in zip(seeded.values(), INSULIN_DECAY_FEATURES):
+        assert np.isclose(v, df[col].iloc[seam], rtol=1e-9, atol=1e-12)
+
+
 def test_event_history():
     """Visibility lag and retraction semantics of the shared history, at
     both lags in use: the correction lag (association window) and the bolus
@@ -291,13 +336,49 @@ def test_event_history():
         ((EXCITATION_TICKS + 1) * TICK_MINUTES, 0.0)
 
 
-def test_correction_mark_ratio():
-    """The delivered/recommended ratio path, deterministically."""
-    df = _blank_frame(300)
-    df.loc[100, "bolus_u"] = 2.0
-    df.loc[100, "recommended_bolus"] = 1.0
-    marks = EmpiricalMarks(add_features(label_events(df), cgm_fill_value=120.0))
-    assert marks.sample_correction_units(3.0, np.random.default_rng(0)) == 6.0
+def test_linear_marks_fallback():
+    """Below the events-per-parameter floor the mark model is intercept-only,
+    and intercept-only + resampled residuals reproduces the train values
+    EXACTLY (the old empirical resampler as the nested degenerate case)."""
+    df = _blank_frame(600)
+    pool = [1.0, 2.5, 4.0]
+    for tick, units in zip([100, 200, 300], pool):
+        df.loc[tick, "bolus_u"] = units
+    marks = LinearMarks(add_features(label_events(df), cgm_fill_value=120.0))
+    rng = np.random.default_rng(0)
+    feats = {f: 0.0 for f in marks.features}
+    draws = [marks.sample_correction_units(feats, rng) for _ in range(60)]
+    assert all(any(np.isclose(d, u) for u in pool) for d in draws)
+    assert len({round(d, 6) for d in draws}) == len(pool)
+    # no positive carb entries anywhere -> grams and meal-bolus units NaN
+    assert np.isnan(marks.sample_grams(feats, rng))
+    assert np.isnan(marks.sample_meal_bolus_units(feats, rng))
+
+
+def test_linear_marks_conditional():
+    """With enough positives the units model recovers a CGM-dependent dose,
+    and the train-support clamp bounds out-of-support extrapolation."""
+    n = 6000
+    df = _blank_frame(n)
+    cgm = 150 + 80 * np.sin(np.arange(n) / 40.0)
+    df["cgm"] = cgm
+    ticks = np.arange(50, n - 50, 20)
+    df.loc[ticks, "bolus_u"] = np.exp(0.01 * (cgm[ticks] - 150.0))
+    feat = add_features(label_events(df), cgm_fill_value=120.0)
+    marks = LinearMarks(feat)
+    rng = np.random.default_rng(0)
+    base = {f: float(feat.loc[ticks[5], f]) for f in marks.features}
+
+    def mean_draw(cgm_value, k=40):
+        feats = dict(base, cgm_filled=cgm_value)
+        return np.mean([marks.sample_correction_units(feats, rng)
+                        for _ in range(k)])
+
+    ratio = mean_draw(200.0) / mean_draw(100.0)
+    assert 2.0 < ratio < 3.7, f"expected ~e dose ratio per 100 mg/dL, got {ratio:.2f}"
+    # far out of training support: the clamped conditional mean pins the
+    # sample near the largest train dose instead of extrapolating
+    assert mean_draw(5000.0) <= df["bolus_u"].max() * 1.05
 
 
 def test_no_future_leakage():
@@ -393,7 +474,7 @@ def test_run_mvp_smoke():
         ratio = sim / real
         assert 1 / 3 < ratio < 3, f"{metric}: sim/real = {ratio:.2f}"
 
-    # the delivered/recommended mark model must actually produce numbers
+    # the conditional linear mark model must actually produce numbers
     corr_marks = res["simulated"].loc[
         res["simulated"]["event"] == "correction", "mark"].to_numpy(dtype=float)
     assert len(corr_marks) > 0
@@ -546,8 +627,10 @@ def test_user_sets():
 TESTS = [
     test_validate_tick_frame,
     test_label_events_two_clock,
+    test_decay_states,
     test_event_history,
-    test_correction_mark_ratio,
+    test_linear_marks_fallback,
+    test_linear_marks_conditional,
     test_feature_parity,
     test_no_future_leakage,
     test_clock_crossfit,

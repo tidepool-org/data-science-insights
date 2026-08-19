@@ -227,13 +227,16 @@ METRIC_INFO = {
                                 "failure mode.",
     "ks_carb_grams": "KS distance between simulated and real holdout "
                      "carb-gram distributions — mark fidelity of the "
-                     "empirical resampler.",
+                     "conditional linear grams model (positives-only OLS "
+                     "on log grams + resampled residuals).",
     "ks_corr_units": "KS distance between simulated and real correction "
-                     "units. NaN when marks are uncomputable (sparse "
-                     "recommended_bolus).",
+                     "units — mark fidelity of the conditional linear "
+                     "units model (absolute units, no recommended-bolus "
+                     "dependence).",
     "nan_corr_mark_frac": "Fraction of simulated correction marks that are "
-                          "NaN — the recommended-bolus coverage gap (≈1 for "
-                          "HK-path users).",
+                          "NaN — nonzero only when the training segment "
+                          "had no positive corrections to fit the mark "
+                          "model on.",
 }
 FIT_SUFFIX_INFO = {
     "_holdout_nll": "Mean per-tick log loss of the {event} hazard on the "
@@ -655,7 +658,7 @@ def _run_replicate(payload, k, base_seed):
     results are identical however replicates are distributed over
     processes."""
     with warnings.catch_warnings():
-        # sparse-recommendation NaN marks surface as nan_corr_mark_frac,
+        # zero-positive-corrections NaN marks surface as nan_corr_mark_frac,
         # not as n_sims repeated warnings
         warnings.simplefilter("ignore")
         sim = simulate_blocks(

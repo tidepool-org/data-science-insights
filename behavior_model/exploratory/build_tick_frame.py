@@ -21,8 +21,10 @@ Assembly conventions:
     Entries missing entry_time are DROPPED with a printed count; the export's
     user selection makes these rare by construction.
   - Boluses: nearest tick, same-tick units summed.
-  - iob: latest reason='loop' dosing decision in each bucket, parsed from the
-    raw string; NaN between decisions (add_features forward-fills).
+  - iob / cob: latest reason='loop' dosing decision in each bucket, parsed
+    from the raw strings; NaN between decisions (add_features forward-fills).
+    cob (Loop's carbsOnBoard) exists only in exports from 2026-08-19 on --
+    older exports (cohort A) get an all-NaN column.
   - recommended_bolus: latest 'loop' decision per bucket; at bolus ticks the
     nearest 'normalBolus' decision within ±1 tick wins -- that is the number
     the user actually saw when bolusing.
@@ -133,6 +135,14 @@ def build_user_frame(cgm, carbs, boluses, dosing):
         _latest_per_bucket(loop_dd, "dd_timestamp", "iob"))
     frame["recommended_bolus"] = frame["timestamp"].map(
         _latest_per_bucket(loop_dd, "dd_timestamp", "rec"))
+    # carbs_on_board_raw exists only in exports from 2026-08-19 on (cohort A
+    # predates it); the contract column is always present, NaN when absent
+    if "carbs_on_board_raw" in loop_dd.columns:
+        loop_dd["cob"] = loop_dd["carbs_on_board_raw"].map(parse_units)
+        frame["cob"] = frame["timestamp"].map(
+            _latest_per_bucket(loop_dd, "dd_timestamp", "cob"))
+    else:
+        frame["cob"] = np.nan
 
     b = boluses.dropna(subset=["bolus_timestamp", "bolus_units"]).copy()
     b["tick"] = b["bolus_timestamp"].dt.round(TICK)
@@ -208,7 +218,7 @@ def load_streams(data_dir):
 
 
 def _user_report(uid, per_user, out_dir, run_model, n_sims, split, sim_jobs=1,
-                 use_iob=False):
+                 use_iob=False, use_cob=False):
     """Build/validate/run/score one user; writes the per-user outputs.
     Returns (metrics_df|None, config|None, roc_df|None, captured_log) --
     stdout is captured so parallel workers' logs print atomically, in one
@@ -222,12 +232,13 @@ def _user_report(uid, per_user, out_dir, run_model, n_sims, split, sim_jobs=1,
         n_days = len(frame) / (24 * 60 // TICK_MINUTES)
         print(f"  tick frame: {len(frame)} ticks ({n_days:.0f} days), "
               f"CGM coverage {frame['cgm'].notna().mean():.1%}, "
-              f"iob coverage {frame['iob'].notna().mean():.1%}")
+              f"iob coverage {frame['iob'].notna().mean():.1%}, "
+              f"cob coverage {frame['cob'].notna().mean():.1%}")
 
         if not run_model:
             return None, None, None, buf.getvalue()
 
-        res = run_mvp(frame, split=split, use_iob=use_iob)
+        res = run_mvp(frame, split=split, use_iob=use_iob, use_cob=use_cob)
         print(f"\n  split: {res['split']}")
         print("\n  weekly drift (inspect BEFORE trusting the time split):")
         print(res["drift"].to_string())
@@ -256,7 +267,7 @@ def _user_report(uid, per_user, out_dir, run_model, n_sims, split, sim_jobs=1,
 
         config = {"split": res["split"],
                   "features": res["hazards"]["features"],
-                  "use_iob": use_iob,
+                  "use_iob": use_iob, "use_cob": use_cob,
                   "n_sims": n_sims, "base_seed": BASE_SEED_DEFAULT}
     return metrics, config, roc, buf.getvalue()
 
@@ -268,7 +279,7 @@ def default_jobs():
 def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
                 only_user=None, run_model=True, label=None,
                 n_sims=N_SIMS_DEFAULT, split=DEFAULT_SPLIT, note="",
-                jobs=None, user_set="all", use_iob=False):
+                jobs=None, user_set="all", use_iob=False, use_cob=False):
     """Two-level parallelism against a total process budget `jobs`
     (None -> cores minus JOBS_RESERVED_CORES): users fan out across
     processes (the natural grain -- saturates any machine once the cohort
@@ -305,7 +316,7 @@ def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
         for uid in uids:
             metrics, config, roc, log = _user_report(
                 uid, per_user[uid], out_dir, run_model, n_sims, split,
-                sim_jobs=sim_jobs, use_iob=use_iob)
+                sim_jobs=sim_jobs, use_iob=use_iob, use_cob=use_cob)
             print(log, end="")
             results[uid] = {"metrics": metrics, "config": config, "roc": roc}
     else:
@@ -314,7 +325,8 @@ def run_stage_a(data_dir=DEFAULT_DATA_DIR, out_dir=DEFAULT_OUT_DIR,
         with ProcessPoolExecutor(max_workers=user_workers) as pool:
             futures = {
                 pool.submit(_user_report, uid, per_user[uid], out_dir,
-                            run_model, n_sims, split, sim_jobs, use_iob): uid
+                            run_model, n_sims, split, sim_jobs, use_iob,
+                            use_cob): uid
                 for uid in uids
             }
             for fut in as_completed(futures):
@@ -371,6 +383,11 @@ if __name__ == "__main__":
                              "basis (dense-DD cohorts only; run the same "
                              "cohort with and without under different "
                              "labels for the A/B comparison)")
+    parser.add_argument("--cob-feature", action="store_true",
+                        help="append the app-displayed COB (Loop's "
+                             "carbsOnBoard) to the hazard basis -- needs an "
+                             "export with carbs_on_board_raw (2026-08-19+); "
+                             "same A/B protocol as --iob-feature")
     parser.add_argument("--jobs", type=int, default=None,
                         help="total process budget (default: cores minus "
                              f"{JOBS_RESERVED_CORES}); split across users, "
@@ -381,4 +398,4 @@ if __name__ == "__main__":
                 run_model=not args.no_run, label=args.label,
                 n_sims=args.n_sims, split=args.split, note=args.note,
                 jobs=args.jobs, user_set=args.user_set,
-                use_iob=args.iob_feature)
+                use_iob=args.iob_feature, use_cob=args.cob_feature)

@@ -24,13 +24,13 @@ deliberate MVP shortcut:
 * the hazards see DISPLAY-clamped CGM (CGM_DISPLAY_RANGE = 40-400, what a
   real sensor shows): without the clamp, closed-loop glucose can leave the
   training support and the linear logits extrapolate into event cascades.
-* meal boluses: a carb entry whose meal-bolus coin lands True delivers
-  grams/CIR (stand-in for the app's recommended meal bolus -- the Swift API
-  runs in autobolus mode, which exposes no manual recommendation).
-* correction marks: delivered = ratio x recommended when the train ratio
-  pool and a controller recommendation both exist; otherwise resampled
-  ABSOLUTE units from the user's own train corrections (cohort A's
-  recommended_bolus is sparse, so the ratio pool is usually empty).
+* marks: grams, correction units, and (since it08) meal-bolus units come
+  from the Stage A conditional linear mark models (LinearMarks -- log-scale
+  OLS on the hazard basis, fit on positive ticks only), evaluated on the
+  same per-tick feature dict the hazards see, so mark sizes respond to
+  simulated glucose/history state. The modeled meal-bolus dose replaces the
+  earlier grams/CIR stand-in; a dose is coupled to its same-tick grams draw
+  only through shared conditioning, not a per-tick grams term.
 * 1-tick display skew: the simulator updates patient before sensor, so the
   hazard at tick t sees the sensor value from t-5min. At fit time the
   hazard at t sees the reading AT t.
@@ -83,9 +83,11 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from behavior_model_mvp import (
-    ASSOCIATION_TICKS, BOLUS_VISIBILITY_TICKS, DELTA_WINDOW_MINUTES,
-    IOB_FEATURE, MEAL_WINDOWS, TICK_MINUTES, TICKS_PER_DAY, EventHistory,
-    _hazard, hourly_clock_logits, run_mvp, validate_tick_frame,
+    ASSOCIATION_TICKS, BOLUS_VISIBILITY_TICKS, CARB_DECAY_FEATURES,
+    CARB_DECAY_TAUS_MIN, COB_FEATURE, DELTA_WINDOW_MINUTES,
+    INSULIN_DECAY_FEATURES, INSULIN_DECAY_TAUS_MIN, IOB_FEATURE,
+    TICK_MINUTES, TICKS_PER_DAY, DecayedMagnitude, EventHistory, _hazard,
+    hourly_clock_logits, run_mvp, validate_tick_frame,
 )
 from build_tick_frame import (build_user_frame, default_jobs, load_streams,
                               user_sets)
@@ -143,36 +145,32 @@ class StageBBehavior:
     CGM supplied by the caller (the simulator) instead of the real record.
 
     Keeps the same event histories, arbitration, retraction, and mark
-    sampling as the Stage A rollout; the only new logic is the absolute-units
-    correction fallback and the incremental cgm_filled/delta_30 state.
+    sampling as the Stage A rollout; the only new logic is the incremental
+    cgm_filled/delta_30 state.
     """
 
     def __init__(self, hazards, marks, meal_bolus_p, clock_logits,
-                 cgm_fill_value, correction_units_pool, seed=0):
+                 cgm_fill_value, seed=0):
         self.features_order = list(hazards["features"])
         self.models = hazards["models"]
         self.marks = marks
         self.meal_bolus_p = meal_bolus_p
         self.clock_logits = clock_logits
         self.fill_value = float(cgm_fill_value)
-        self.correction_units_pool = np.asarray(correction_units_pool, dtype=float)
         self.rng = np.random.default_rng(seed)
 
         self.i = 0
         self.corr_hist = EventHistory(ASSOCIATION_TICKS)
         self.bolus_hist = EventHistory(BOLUS_VISIBILITY_TICKS)
+        self.carb_state = DecayedMagnitude(CARB_DECAY_TAUS_MIN)
+        self.insulin_state = DecayedMagnitude(INSULIN_DECAY_TAUS_MIN)
         self.filled_ring = []          # cgm_filled values, current tick last
         self.last_filled = None
         self.last_carb_tick = None
         self.corr_row_by_tick = {}
         self.log = []                  # EVENT_LOG_COLUMNS rows
 
-    @staticmethod
-    def in_meal_window(timestamp):
-        hour = timestamp.hour + timestamp.minute / 60.0
-        return any(lo <= hour < hi for lo, hi in MEAL_WINDOWS)
-
-    def _feature_vector(self, timestamp, displayed_cgm, iob):
+    def _features(self, timestamp, displayed_cgm, iob, cob=np.nan):
         missing = 0.0 if _finite(displayed_cgm) else 1.0
         if _finite(displayed_cgm):
             filled = float(displayed_cgm)
@@ -197,6 +195,10 @@ class StageBBehavior:
             "clock_carb": self.clock_logits["is_carb_entry"][hour],
             "clock_corr": self.clock_logits["is_correction"][hour],
             IOB_FEATURE: float(iob) if _finite(iob) else 0.0,
+            # endogenous COB source (the swift controller's own number) is a
+            # Stage B iteration item; until a use_cob model is served here
+            # this stays a placeholder the default basis never reads
+            COB_FEATURE: float(cob) if _finite(cob) else 0.0,
         }
         for hist, (mins_col, count_col) in [
             (self.corr_hist, ("mins_since_correction", "n_corrections_2h")),
@@ -205,45 +207,53 @@ class StageBBehavior:
             m, n = hist.features(self.i)
             feats[mins_col] = m
             feats[count_col] = n
-        return np.array([feats[f] for f in self.features_order], dtype=float)
+        for state, family in [(self.carb_state, CARB_DECAY_FEATURES),
+                              (self.insulin_state, INSULIN_DECAY_FEATURES)]:
+            for f, v in zip(family, state.values()):
+                feats[f] = v
+        return feats
 
-    def _sample_abs_correction(self):
-        if len(self.correction_units_pool) == 0:
-            return np.nan
-        return float(self.rng.choice(self.correction_units_pool))
-
-    def step(self, timestamp, displayed_cgm, recommended_bolus=np.nan,
-             iob=np.nan):
-        """Advance one tick; returns {"carb": (grams, latency, bolused)|None,
-        "bolus": units|None} for the caller to inject into the simulator."""
+    def step(self, timestamp, displayed_cgm, iob=np.nan, cob=np.nan):
+        """Advance one tick; returns
+        {"carb": (grams, latency, meal_bolus_u)|None, "bolus": units|None}
+        for the caller to inject into the simulator. meal_bolus_u is the
+        MODELED meal-bolus dose (NaN when the entry goes unbolused), from
+        the same mark model the decay state uses -- what the state sees is
+        what the patient delivers."""
         i = self.i
-        x = self._feature_vector(timestamp, displayed_cgm, iob)
-        actions = {"carb": None, "bolus": None, "carb_row": None}
+        feats = self._features(timestamp, displayed_cgm, iob, cob)
+        x = np.array([feats[f] for f in self.features_order], dtype=float)
+        actions = {"carb": None, "bolus": None}
         bolus_this_tick = False
+        carb_mag = 0.0
+        insulin_mag = 0.0
 
         if self.rng.random() < _hazard(self.models["is_carb_entry"], x):
-            grams = self.marks.sample_grams(self.in_meal_window(timestamp),
-                                            self.rng)
+            grams = self.marks.sample_grams(feats, self.rng)
             latency = self.marks.sample_latency(self.rng)
             bolused = self.rng.random() < self.meal_bolus_p
-            self.log.append([timestamp, "carb_entry", grams, latency,
-                             bolused, np.nan])
-            self.last_carb_tick = i
+            mb_units = np.nan
             if bolused:
                 self.bolus_hist.record(i)
                 bolus_this_tick = True
+                mb_units = self.marks.sample_meal_bolus_units(feats, self.rng)
+                if np.isfinite(mb_units):
+                    insulin_mag += mb_units
+            self.log.append([timestamp, "carb_entry", grams, latency,
+                             bolused, mb_units])
+            self.last_carb_tick = i
+            if np.isfinite(grams):
+                carb_mag = grams
             for t in self.corr_hist.retract(max(i - ASSOCIATION_TICKS, 0)):
                 idx = self.corr_row_by_tick.pop(t)
                 self.log[idx][1] = "meal_bolus"
             if np.isfinite(grams):
-                actions["carb"] = (float(grams), float(latency), bool(bolused))
-                actions["carb_row"] = len(self.log) - 1
+                actions["carb"] = (float(grams), float(latency), mb_units)
 
         if self.rng.random() < _hazard(self.models["is_correction"], x):
-            units = self.marks.sample_correction_units(recommended_bolus,
-                                                       self.rng)
-            if not np.isfinite(units):
-                units = self._sample_abs_correction()
+            units = self.marks.sample_correction_units(feats, self.rng)
+            if np.isfinite(units):
+                insulin_mag += units
             if (self.last_carb_tick is not None
                     and i - self.last_carb_tick <= ASSOCIATION_TICKS):
                 self.log.append([timestamp, "meal_bolus", units, np.nan,
@@ -258,6 +268,8 @@ class StageBBehavior:
             if np.isfinite(units) and units > 0:
                 actions["bolus"] = float(units)
 
+        self.carb_state.step(carb_mag)
+        self.insulin_state.step(insulin_mag)
         self.i += 1
         return actions
 
@@ -291,20 +303,6 @@ class HazardBehaviorPatient(VirtualPatient):
             return None
         return float(np.clip(bg, *CGM_DISPLAY_RANGE))
 
-    def _manual_recommendation(self):
-        """Last manual bolus recommendation the app displayed, if any --
-        autobolus-mode Swift output usually has none."""
-        recs = getattr(self.controller_ref, "recommendations", None)
-        if isinstance(recs, dict):
-            manual = recs.get("manual")
-            if isinstance(manual, dict) and _finite(manual.get("amount")):
-                return float(manual["amount"])
-        return np.nan
-
-    def _current_cir(self):
-        return float(self.pump.pump_config.carb_ratio_schedule
-                     .get_state().value)
-
     def _deliver_user_bolus(self, time, units):
         """Add a user-initiated bolus to patient + pump timelines, merging
         with any bolus already scheduled for this tick (e.g. an autobolus the
@@ -332,12 +330,10 @@ class HazardBehaviorPatient(VirtualPatient):
     def get_user_inputs(self):
         t = self.time
         iob_seen = self.iob_current if _finite(self.iob_current) else np.nan
-        actions = self.behavior.step(
-            t, self._displayed_cgm(),
-            recommended_bolus=self._manual_recommendation(), iob=iob_seen)
+        actions = self.behavior.step(t, self._displayed_cgm(), iob=iob_seen)
 
         if actions["carb"] is not None:
-            grams, latency, bolused = actions["carb"]
+            grams, latency, meal_bolus_u = actions["carb"]
             # Loop sees the entry NOW (entry clock): reported carb at t
             self.pump.carb_event_timeline.add_event(
                 t, Carb(grams, "g", CARB_ABSORB_MINUTES))
@@ -348,9 +344,7 @@ class HazardBehaviorPatient(VirtualPatient):
             meal_time = max(
                 t, t - datetime.timedelta(minutes=TICK_MINUTES * offset_ticks))
             self._add_true_carb(meal_time, grams)
-            if bolused:
-                meal_bolus_u = grams / self._current_cir()
-                self.behavior.log[actions["carb_row"]][-1] = meal_bolus_u
+            if np.isfinite(meal_bolus_u) and meal_bolus_u > 0:
                 self._deliver_user_bolus(t, meal_bolus_u)
 
         if actions["bolus"] is not None:
@@ -378,14 +372,12 @@ def assemble_engine(result, seed=0):
         assert np.allclose(expected, rebuilt), (
             f"train/serve skew: rebuilt {col} does not match the fitted frame")
 
-    corr_pool = train.loc[train["is_correction"], "bolus_u"].dropna().to_numpy()
     return StageBBehavior(
         hazards=result["hazards"],
         marks=result["marks"],
         meal_bolus_p=result["meal_bolus_p"],
         clock_logits=clock_logits,
         cgm_fill_value=train["cgm"].median(),
-        correction_units_pool=corr_pool,
         seed=seed,
     )
 
@@ -416,7 +408,7 @@ def estimate_patient_settings(train):
     """Size the virtual patient to the behavior-model user with standard
     clinical rules on their observed bolus totals.
 
-    The empirical marks (correction units, meal grams) are scaled to the
+    The mark models (correction units, meal grams) are scaled to the
     REAL user's physiology; dropping them into the canonical risk patient
     (ISF 150, CIR 20, basal 0.3 -- a very insulin-sensitive patient) makes
     every resampled correction ~4x too strong and the closed loop diverges.
