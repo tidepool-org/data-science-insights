@@ -114,7 +114,14 @@ def build_dashboard(history_path=DEFAULT_HISTORY, out_path=None):
     roc_path = os.path.join(os.path.dirname(os.path.abspath(history_path)),
                             ROC_FILENAME)
     roc = pd.read_csv(roc_path) if os.path.exists(roc_path) else None
-    html = _TEMPLATE.replace("__DATA__", json.dumps(_payload(hist, roc)))
+    payload = _payload(hist, roc)
+    # link the Stage B closed-loop dashboard when its outputs exist
+    # (outputs/stage_b/ is a sibling of this dashboard's outputs root)
+    stage_b_path = os.path.join(
+        os.path.dirname(os.path.abspath(history_path)), "..", "stage_b",
+        "dashboard.html")
+    payload["stage_b"] = os.path.exists(stage_b_path)
+    html = _TEMPLATE.replace("__DATA__", json.dumps(payload))
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w") as f:
         f.write(html)
@@ -300,6 +307,8 @@ function renderSub() {
   const sets = DATA.user_sets || {};
   const train = sets.train || [], dev = sets.dev || [];
   let strip = `traces: <a href="../traces_index.html">cohort index</a>`;
+  if (DATA.stage_b)
+    strip += ` · stage B: <a href="../../stage_b/dashboard.html">closed-loop dashboard</a>`;
   if (train.length || dev.length) {
     // train/dev columns in span-rank order (the user_sets parity rule);
     // history users missing from users.csv (stale export) keep their links

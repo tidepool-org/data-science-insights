@@ -2,6 +2,48 @@
 
 ## Current state (as of 2026-08-18)
 
+**Stage B integration prototype landed (2026-08-18)**: the behavior model now
+drives a **closed-loop physiology simulation** — `exploratory/stage_b_closed_loop.py`
+runs the fitted Stage A hazards inside the Tidepool data-science-simulator with
+the **Swift Loop controller** (LoopAlgorithmToPython dylib, autobolus mode).
+The handoff §9 Stage B gate is answered: the simulator **does support mid-run
+event injection** — `VirtualPatient.get_user_inputs` is called every 5-min tick
+before the controller runs, and the patient/pump event timelines accept
+current- and future-dated events mid-run. `StageBBehavior` is a stepwise port
+of `simulate_behavior` (same `EventHistory` instances, same clock logits, same
+marks/arbitration/retraction; a train/serve self-check asserts the rebuilt
+clock features reproduce the fitted frame's holdout columns), and
+`HazardBehaviorPatient` overrides `get_user_inputs` to inject sampled events:
+reported carb to the pump at the entry tick (entry-clock semantics — Loop sees
+it immediately), physiologic carb at entry − latency (pre-logged meals
+scheduled at their future tick; retrospective ones clamped to now), correction
+boluses to patient+pump merged with any same-tick autobolus. Two closed-loop
+divergence modes were found and fixed: hazards must see **display-clamped CGM**
+(40–400, what a real sensor shows) or simulated glucose leaves the training
+support and the linear logits cascade; and the **physiology must be sized to
+the user** (rule-of-thumb 1800/500/50% from their bolus totals) or their
+empirical correction/meal marks are mis-scaled ~4× against the canonical
+patient. With both, a multi-day run is stable and the simulated entry and
+correction rates land within a few percent of the user's real rates
+(numbers in git-ignored `outputs/stage_b/<uid>/`). **Review dashboard**:
+`stage_b_closed_loop.py` is a cohort driver (`--user-set all|train|dev`,
+`--jobs` fan-out per user, engine seed = base + users.csv position so jobs
+never change a number) and finishes by building
+`outputs/stage_b/dashboard.html` (`stage_b_dashboard.py`) — cohort
+sim-vs-real rate dumbbells (open = real, filled = sim, per the shared
+vocabulary) + a per-user summary table up top, then collapsible per-user
+sections (settings chips, glucose trace + event lanes, hour-of-day
+real-vs-sim rates, full metric table); the Stage A dashboard links strip
+gains a "stage B: closed-loop dashboard" link when it exists. Environment: the
+**tidepool-data-science-simulator-swift** conda env is the only one that runs
+this (simulator installed editable, statsmodels added, dylib built via
+`LoopAlgorithmToPython/build.sh`). Known prototype gaps (documented in the
+module docstring): rule-of-thumb physiology with no glucose floor or
+counterregulation (one huge empirical meal draw → physically impossible
+excursion), grams/CIR stand-in for meal boluses, 1-tick display skew, and an
+entered-carbs-only world in which user-scaled insulin runs the virtual patient
+low — the model reproduces *entered* carbs while real TDD covers all eating.
+
 **Stage A runs on the 20-user cohort** (top-20 span-ranked candidates; the first two
 users keep their pseudonymous ids from the 2-user era), scored by a **metric suite +
 iteration history** (`exploratory/stage_a_metrics.py`) so model iterations are
@@ -166,7 +208,12 @@ constants per the 2026-08-18 external review) — the boxcar bolus pair landed a
 refractory meal-spacing effect, so the states test whether kernel shape adds
 anything beyond it, especially on the still-under-produced correction rate;
 (2) Q11a–c results (Databricks, pending) decide whether a both-worlds
-(dense-IOB + entry-clock) export is possible. RESOLVED 2026-08-18: richer
+(dense-IOB + entry-clock) export is possible; (3) Stage B iteration, now that
+the plumbing prototype works end to end — fit the physiology to the user
+instead of rule-of-thumb sizing, real meal-bolus recommendations (a second
+Swift call in manual mode), the `use_iob` basis with the simulator's own
+endogenous IOB (the banked it06_b finding), and cohort-B users whose
+autobolus-era behavior matches the simulated controller. RESOLVED 2026-08-18: richer
 clock (`it03_clock24` — Jeffreys-smoothed, train-cross-fitted empirical hourly
 clock logits, `hourly_clock_logits` / `crossfit_train_clock`); the IOB decision
 (`it04_no_iob` — feature dropped, era-bound DDs confirmed by Q10, §6 column
@@ -221,6 +268,15 @@ behavior_model/
 │   ├── plot_stage_a.py                 # Stage A plots: train/holdout split + sim overlay,
 │   │                                   #   holdout diurnal real-vs-sim, holdout decision trace
 │   │                                   #   (real vs simulated events on the same glucose)
+│   ├── stage_b_closed_loop.py          # Stage B prototype: StageBBehavior (stepwise rollout
+│   │                                   #   engine) + HazardBehaviorPatient driving the
+│   │                                   #   data-science-simulator with Swift Loop; cohort driver
+│   │                                   #   (--user-set / --jobs, per-user seeds jobs-invariant);
+│   │                                   #   swift env only → outputs/stage_b/<uid>/ (git-ignored)
+│   ├── stage_b_dashboard.py            # Stage B review dashboard: cohort rate dumbbells +
+│   │                                   #   summary table + per-user drill-down (trace, diurnal,
+│   │                                   #   metrics); auto-built after cohort runs; linked from
+│   │                                   #   the Stage A dashboard links strip
 │   ├── test_behavior_model_mvp.py      # direct-call test runner (no pytest) + synthetic generator
 │   ├── test_stage_a_metrics.py         # direct-call tests for the metric suite + history
 │   ├── p0_timestamp_verification.sql   # Databricks read-only queries (results stay off-repo)

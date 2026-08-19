@@ -744,6 +744,80 @@ refutation-first agents running mutations in the conda env): 9 findings, 6 confi
   and IOB becomes endogenous. Behavior-side insulin recency stays covered by
   the bolus-occurrence features, which the rollout CAN update.
 
+## 2026-08-18 — Stage B integration: behavior model drives the closed-loop simulator
+
+- **Three-repo stack validated** (owner added data-science-simulator,
+  LoopAlgorithmToPython, data-science-models as working directories): the
+  `tidepool-data-science-simulator-swift` conda env is the Stage B runtime.
+  Setup work: rebuilt the LoopAlgorithmToPython dylib (the copy shipped in
+  `loop_to_python_api/` was stale and lacked the `getLoopRecommendations`
+  symbol; `swift build -c release` against the pinned LoopAlgorithm revision,
+  then copied per build.sh), pip-installed the simulator editable (fixed a
+  `vizualization` → `visualization` typo in its setup.py that broke install),
+  added statsmodels to the env. Simulator test suite and the dylib's python
+  tests pass. Caveat: the REBUILT dylib crashes `get_active_carbs` /
+  `get_active_insulin` (force-unwrap of nil against the pinned LoopAlgorithm)
+  — unused by the simulator path, but their tests now fail; the old dylib
+  predated `getLoopRecommendations`, so there was no all-green build to keep.
+- **Simulator-repo fixes** (in data-science-simulator, uncommitted): the
+  `VirtualPatient.add_event` carb branch added carbs to the BOLUS timeline;
+  multi-day Swift runs were impossible — the settings schedules were
+  projected over a fixed 2-day window anchored at construction
+  (`sensitivityTimelineEndsTooEarly` after ~2 days), and once that window
+  slid, the unbounded growing glucose history the swift controller passed
+  tripped `sensitivityTimelineStartsTooLate`. Fixed by anchoring the
+  schedule projection to current sim time (`get_loop_swift_inputs(now)`) and
+  bounding glucose history to the controller's `num_hours_history` like every
+  other input stream.
+- **Handoff §9 Q3 RESOLVED — mid-run event injection: yes.** The simulator's
+  `VirtualPatient.get_user_inputs` hook runs every 5-min tick before the
+  controller, and the patient/pump event timelines accept current- and
+  future-dated events mid-run (`VirtualPatientModel` already injects meals
+  this way).
+- **`stage_b_closed_loop.py` landed**: `StageBBehavior` — a stepwise port of
+  `simulate_behavior` (same EventHistory/marks/arbitration/retraction, same
+  clock logits, with a train/serve assert against the fitted frame) fed by
+  simulated CGM one tick at a time — plus `HazardBehaviorPatient`, which
+  injects sampled events with entry-clock semantics (reported carb to pump at
+  the entry tick; physiologic carb at entry − latency, future-scheduled when
+  pre-logged, clamped to now when retrospective; corrections merged with
+  same-tick autoboluses). Two closed-loop divergence modes found and fixed:
+  (1) hazards must see **display-clamped CGM** (40–400) — first run, a huge
+  empirical meal draw pushed simulated glucose far outside training support
+  and the linear logits extrapolated into an event cascade (glucose → −4000);
+  (2) **physiology must be user-sized** — the canonical risk patient (ISF
+  150) makes the user's empirical correction marks ~4× too strong; crude
+  1800/500/50% rules on their bolus totals stabilize it. Final 7-day run:
+  simulated carb-entry and correction rates within a few percent of the
+  user's real rates, deterministic under the seed; numbers and the trace
+  figure in git-ignored `outputs/stage_b/<uid>/`.
+- **Stage B review dashboard** (same session, per owner request): mirror of
+  the Stage A review surfaces for the closed-loop runs.
+  `stage_b_closed_loop.py` became a cohort driver — `--user-set
+  all|train|dev`, users fan out across processes (`--jobs`, default cores−2),
+  per-user engine seed = base seed + users.csv position so `--jobs` never
+  changes a number — writing per-user outputs (results, event log, trace
+  figure, NEW hour-of-day real-vs-sim diurnal figure) plus
+  `cohort_summary.csv`, then auto-building `outputs/stage_b/dashboard.html`
+  via the new `stage_b_dashboard.py`: cohort sim-vs-real rate dumbbells
+  (open = real, filled = sim; real-vs-sim is never a hue) and a summary
+  table (rates + ratios, TIR/lows, est. TDD, train/dev membership, span-rank
+  order, not-run users listed) up top, collapsible per-user sections
+  (settings chips, embedded figures, full metric table) below. Shares the
+  trace pages' CSS/glyph vocabulary (`trace_browser`/`plot_traces` imports);
+  self-contained HTML, numbers stay local. The Stage A dashboard links strip
+  gains a "stage B: closed-loop dashboard" link when the file exists.
+- **Stage B iteration targets exposed by the run** (beyond plumbing): the
+  linear physiology has no glucose floor or counterregulation, so one giant
+  empirical entry (~280 g rows exist in this user's record) produces a
+  physically impossible excursion that dominates glycemic summaries; the
+  entered-carbs-only world runs low under user-scaled insulin (the model
+  reproduces *entered* carbs while the user's real TDD covers all eating —
+  an NMA-adjacent observation); meal boluses are a grams/CIR stand-in
+  (autobolus mode exposes no manual recommendation; a second Swift call in
+  manual mode would give the real one); and the it06_b banked IOB feature can
+  now be endogenous via the simulator's own IOB.
+
 ## Pending / In Progress
 
 - Stage A iteration, in order — each recorded via `build_tick_frame.py --label itNN_…
@@ -765,6 +839,13 @@ refutation-first agents running mutations in the conda env): 9 findings, 6 confi
   not excitatory, on the carb side). P3 replication is
   satisfied by the 20-user cohort (`it02_users20`).
 - Handoff §9 open questions: intended use; which curated cohort (engagement-screening
-  bias?); does the physiology simulator support mid-run event injection (Stage B gate).
+  bias?). RESOLVED 2026-08-18: the physiology simulator supports mid-run event
+  injection (Stage B gate — see the Stage B integration entry).
+- Stage B iteration (plumbing works, see 2026-08-18 entry): fit physiology to
+  the user (replace 1800/500/50% rules), real meal-bolus recommendations via a
+  second Swift call in manual mode, endogenous-IOB basis (banked it06_b
+  finding), cohort-B users (autobolus-era behavior matches the simulated
+  controller), and a physiology model with a glucose floor / plausible
+  response to extreme meal marks.
 - Later: promote the four raw-BDDP extractions (entry-clock carbs, classified boluses,
   IOB/recommendation series, event-grain user boluses) into `device_data_curation`.
