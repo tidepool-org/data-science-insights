@@ -48,6 +48,21 @@ DURABILITY_ADOPT_DAY = date(2024, 6, 15)
 IR1002_START = date(2024, 9, 2)
 IR1002_DAYS = 28
 
+# IR-6B (preset dose-response) window: 28 days, disjoint from every other
+# fixture window. The length is pinned from both sides exactly like
+# IR1002_START: at least 28 days of daily dosing so every user anchors a
+# candidate 28-day window with 100% dosing-day coverage (test_analysis_6_3a
+# pins those two funnel stages exactly against the full Loop-user count), and
+# at most ~35 days so no stable-AB segment (needs a fully-AB 14-day window
+# starting ≥28 days after first AB) and no durability outcome (needs ≥56 days
+# follow-up; test_analysis_8_7 pins eligible users at exactly 2) can form.
+# All-AB from day 0, so no TB→AB transition segment forms either (seg1 would
+# be 100% AB; the validity box needs <30%) — these users reach only the
+# IR-1002 universes (as additional guardrail-group members; every IR-2/IR-3
+# assertion is per-user or relative) and IR-6B's C2 series.
+IR6B_START = date(2024, 11, 4)
+IR6B_DAYS = 28
+
 DEFAULT_VERSION = "3.2.0"
 MMOL_PER_MGDL = 1.0 / 18.018
 TZ_OFFSET_MIN = -300  # UTC-5 (EST); single TZ for all synthetic users
@@ -178,6 +193,30 @@ def _cbg_rows(user_id, day, mgdl_values, version=DEFAULT_VERSION):
             origin=_origin(version),
         )
         for i in range(288)
+    ]
+
+
+def _cbg_rows_with_gaps(user_id, day, mgdl_values, version=DEFAULT_VERSION):
+    """Like _cbg_rows, but a None entry emits NO reading at that index.
+
+    Used by IR-6B archetypes to knock readings out of a specific clock span
+    (e.g. the 30-minute starting-glucose lookback) while the rest of the day
+    keeps the exact 5-minute cadence. Still demands a full 288-slot list so
+    the index↔time-of-day arithmetic stays explicit at the call site.
+    """
+    if len(mgdl_values) != 288:
+        raise ValueError(f"need 288 cbg slots per day, got {len(mgdl_values)}")
+    base_dt = datetime(day.year, day.month, day.day, 0, 0, 0)
+    return [
+        _row(
+            _userId=user_id,
+            time_string=_iso(base_dt + timedelta(minutes=5 * i)),
+            type="cbg",
+            value=mgdl_values[i] * MMOL_PER_MGDL,
+            origin=_origin(version),
+        )
+        for i in range(288)
+        if mgdl_values[i] is not None
     ]
 
 
@@ -921,6 +960,226 @@ def _archetype_ir1002_both(user_id="int_user_32"):
 
 
 # ---------------------------------------------------------------------------
+# IR-6B dose-response archetypes (int_user_33..40; analysis_ir-6b)
+# ---------------------------------------------------------------------------
+#
+# Every user runs IR6B_DAYS all-autobolus days (10 automated boluses/day) in
+# the disjoint IR6B window — see the IR6B_START comment for why exactly 28
+# days and why all-AB. Preset activations build known IR-6B episodes: an
+# episode's outcome window is [t0 - 1h, t0 + duration + 3h) and the CGM grid
+# is 5-minute, so index = (hour*60 + minute) / 5 within a day:
+#
+#   09:00 → 108    09:30 → 114    09:55 → 119    10:00 → 120
+#   12:00 → 144    12:30 → 150    13:00 → 156    15:00 → 180
+#
+# A 10:00 + 1h activation spans indices 108..167 (60 readings; pre 108..119,
+# during 120..131, post 132..167); a 10:00 + 2h activation spans 108..179
+# (72 readings). The 09:55 reading (index 119) is the starting-glucose anchor
+# for a 10:00 activation. Engineered values stay ≥2 mg/dL clear of the
+# 38/70/180/250/500 band edges (the mmol round-trip is inexact) and ≥54 so no
+# hypo events form anywhere in the IR-6B fixture.
+
+
+def _ir6b_dosing_rows(user_id):
+    """10 automated boluses on each of the IR6B_DAYS days: every day is an
+    eligible AB day (≥3 automated boluses, version 3.2.0, adult), and
+    dosing-day coverage is 100% for the 6-3a candidate-window funnel."""
+    rows = []
+    for day_index in range(IR6B_DAYS):
+        day = IR6B_START + timedelta(days=day_index)
+        rows.extend(_autobolus_day_rows(user_id, day, n_events=10))
+    return rows
+
+
+def _archetype_ir6b_dose_response(user_id="int_user_33"):
+    """Four C2 activations pinning IR-6B's per-episode band counts, the
+    count-pooled user cell, the starting-glucose bins and the missing-anchor
+    exclusion (test_analysis_ir_6b cases 1-3). All at 10:00, own target
+    100–120 (midpoint 110), on separate days so filter 3 never binds.
+
+    day 2  A1  needs 50%,  1 h: the six 09:30–09:55 readings are 62 (so the
+               anchor is 62 → bin <70) and six post readings are 200 →
+               n_below/n_in/n_above = 6/48/6 of 60 (TB70 10%, TIR 80%, TAR 10%).
+    day 5  A2  needs 150%, 1 h: six post readings at 200 → 0/54/6 of 60
+               (TAR 10%); anchor 100 → bin 70-180.
+    day 8  A3  needs 150%, 2 h: six pre readings at 260 (anchor 260 → bin
+               >250; also n_above250 = 6) + twelve post readings at 200 →
+               0/54/18 of 72 (TAR 25%). Pooled with A2 at the 150% level:
+               TAR = (6+18)*100/132 = 18.18%, deliberately distinct from the
+               mean of the two episode TARs (10+25)/2 = 17.5 — pinning
+               reading-count pooling over percentage averaging.
+    day 11 A4  needs 90%,  1 h: the 09:30–09:55 readings are NOT emitted, so
+               no reading falls in the 30-minute lookback → filter 6 drops
+               the episode while its 54 of 60 window readings (90%) still
+               clear the 70% coverage gate — the anchor alone is missing.
+               Level 90 must therefore appear in no user cell.
+    """
+    rows = _ir6b_dosing_rows(user_id)
+
+    # day 2 — A1 (needs 50%)
+    values = [100.0] * 288
+    for index in range(114, 120):   # 09:30–09:55: six 62s in the pre hour
+        values[index] = 62.0
+    for index in range(150, 156):   # 12:30–12:55: six 200s in the post arm
+        values[index] = 200.0
+    rows.extend(_cbg_rows(user_id, IR6B_START + timedelta(days=2), values))
+    rows.append(_ir1002_override(
+        user_id, 2, start=IR6B_START, preset="NeedsHalf",
+        br_sf=0.5, cr_isf_sf=2.0, duration_seconds=3600,
+    ))
+
+    # day 5 — A2 (needs 150%, 1 h)
+    values = [100.0] * 288
+    for index in range(150, 156):   # 12:30–12:55: six 200s in the post arm
+        values[index] = 200.0
+    rows.extend(_cbg_rows(user_id, IR6B_START + timedelta(days=5), values))
+    rows.append(_ir1002_override(
+        user_id, 5, start=IR6B_START, preset="NeedsOneFifty",
+        br_sf=1.5, cr_isf_sf=round(1 / 1.5, 4), duration_seconds=3600,
+    ))
+
+    # day 8 — A3 (needs 150%, 2 h — a longer window at the same level)
+    values = [100.0] * 288
+    for index in range(114, 120):   # 09:30–09:55: six 260s (anchor >250)
+        values[index] = 260.0
+    for index in range(150, 162):   # 12:30–13:25: twelve 200s in the post arm
+        values[index] = 200.0
+    rows.extend(_cbg_rows(user_id, IR6B_START + timedelta(days=8), values))
+    rows.append(_ir1002_override(
+        user_id, 8, start=IR6B_START, preset="NeedsOneFifty",
+        br_sf=1.5, cr_isf_sf=round(1 / 1.5, 4), duration_seconds=7200,
+    ))
+
+    # day 11 — A4 (needs 90%, no starting-glucose anchor)
+    values = [100.0] * 288
+    for index in range(114, 120):   # 09:30–09:55: no readings at all
+        values[index] = None
+    rows.extend(_cbg_rows_with_gaps(user_id, IR6B_START + timedelta(days=11), values))
+    rows.append(_ir1002_override(
+        user_id, 11, start=IR6B_START, preset="NeedsNinety",
+        br_sf=0.9, cr_isf_sf=round(1 / 0.9, 4), duration_seconds=3600,
+    ))
+    return rows
+
+
+def _archetype_ir6b_filter_mechanics(user_id="int_user_34"):
+    """Filter-3/filter-4 mechanics plus the indefinite-truncated episode
+    (test_analysis_ir_6b case 4). The day-3/6/7/20 activations run at needs
+    80% and the day-13/14 boundary pair at needs 60%, so each concept owns
+    its own exposure level.
+
+    day 3       two compliant activations (10:00 and 13:00, 1 h each) → both
+                fail filter 3 (a second activation of any kind spoils the
+                user-day).
+    days 6/7    22:00 + 1 h, then 01:00 + 1 h the next day: the gap from the
+                day-6 capped end (23:00) to the day-7 start (01:00) is 2 h,
+                under the 4 h full-disjointness floor — the two hypothetical
+                windows overlap on [00:00, 02:00), so filter 4 (settled
+                2026-08-25, MC: SYMMETRIC) drops BOTH. The pre-tightening
+                rule kept the day-7 episode; this pair is the regression
+                case for the symmetric drop.
+    days 13/14  the boundary pair (plan 9.A case 4): 20:00 + 1 h, then
+                01:00 + 1 h the next day — exactly 4 h from the capped end
+                (21:00) to the next start, so the hypothetical windows TOUCH
+                at day-14 midnight ([19:00, 00:00) then [00:00, 05:00)) and
+                half-open disjointness keeps BOTH.
+    day 20      10:00 with duration NULL (indefinite): no later override and
+                dosing ends day 27, so the staged effective duration is the
+                end-of-data clip — midnight after the last dosing day minus
+                t0 = 7 d 14 h = 655,200 s > 24 h → is_truncated. The episode
+                keeps its pre hour and first 24 h and gets NO post arm:
+                window = [09:00 day 20, 10:00 day 21), n_pre/n_during/n_post
+                = 12/288/0 of 300 readings.
+
+    CBG: flat 100 on days 13, 14, 20 and 21 only — exactly the days the
+    surviving windows touch (non-survivors never reach the CGM join).
+    """
+    rows = _ir6b_dosing_rows(user_id)
+    for day_index in (13, 14, 20, 21):
+        rows.extend(_cbg_rows(user_id, IR6B_START + timedelta(days=day_index),
+                              [100.0] * 288))
+    rows.append(_ir1002_override(
+        user_id, 3, hour=10, start=IR6B_START, preset="PairFirst",
+        br_sf=0.8, cr_isf_sf=1.25, duration_seconds=3600,
+    ))
+    rows.append(_ir1002_override(
+        user_id, 3, hour=13, start=IR6B_START, preset="PairSecond",
+        br_sf=0.8, cr_isf_sf=1.25, duration_seconds=3600,
+    ))
+    rows.append(_ir1002_override(
+        user_id, 6, hour=22, start=IR6B_START, preset="CrowdedPrior",
+        br_sf=0.8, cr_isf_sf=1.25, duration_seconds=3600,
+    ))
+    rows.append(_ir1002_override(
+        user_id, 7, hour=1, start=IR6B_START, preset="CrowdedNext",
+        br_sf=0.8, cr_isf_sf=1.25, duration_seconds=3600,
+    ))
+    rows.append(_ir1002_override(
+        user_id, 13, hour=20, start=IR6B_START, preset="BoundaryFirst",
+        br_sf=0.6, cr_isf_sf=round(1 / 0.6, 4), duration_seconds=3600,
+    ))
+    rows.append(_ir1002_override(
+        user_id, 14, hour=1, start=IR6B_START, preset="BoundarySecond",
+        br_sf=0.6, cr_isf_sf=round(1 / 0.6, 4), duration_seconds=3600,
+    ))
+    rows.append(_ir1002_override(
+        user_id, 20, hour=10, start=IR6B_START, preset="Indefinite",
+        br_sf=0.8, cr_isf_sf=1.25, duration_seconds=None,
+    ))
+    return rows
+
+
+def _archetype_ir6b_c2_exclusions(user_id="int_user_35"):
+    """C2 exclusion paths (test_analysis_ir_6b case 5): three activations,
+    only the third a C2 member.
+
+    day 2  P violation: own target low 40 < 67 mg/dL (needs 100%, in bounds).
+    day 5  M violation: needs 180% with own target low 100 < 110; needs stays
+           within [15%, 200%] so this is NOT also a P violation (mirrors
+           int_user_32's day-6 activation).
+    day 8  compliant at needs 120%: the user's only C2 episode.
+
+    The violating activations are qualifying and all-days-AB, so their
+    exclusion is attributable to the violation flags alone — and because
+    IR-6B's candidate set requires (in_c1 OR in_c2), they never enter the
+    episode frame at all; the test pins their staged flags directly. This
+    user lands in guardrail group `both` for IR-2 (not asserted there;
+    the IR-2 partition check is relative)."""
+    rows = _ir6b_dosing_rows(user_id)
+    rows.extend(_cbg_rows(user_id, IR6B_START + timedelta(days=8), [100.0] * 288))
+    rows.append(_ir1002_override(
+        user_id, 2, start=IR6B_START, preset="LowTarget",
+        target_low_mgdl=40.0, target_high_mgdl=120.0, duration_seconds=3600,
+    ))
+    rows.append(_ir1002_override(
+        user_id, 5, start=IR6B_START, preset="HighNeeds",
+        br_sf=1.8, cr_isf_sf=round(1 / 1.8, 4),
+        target_low_mgdl=100.0, target_high_mgdl=130.0, duration_seconds=3600,
+    ))
+    rows.append(_ir1002_override(
+        user_id, 8, start=IR6B_START, preset="Compliant120",
+        br_sf=1.2, cr_isf_sf=round(1 / 1.2, 4), duration_seconds=3600,
+    ))
+    return rows
+
+
+def _archetype_ir6b_line_level_user(user_id):
+    """Minimal C2 contributor for the line-eligibility gate
+    (test_analysis_ir_6b case 6): one compliant 1 h activation on day 3 at
+    needs 50%, flat-100 CBG on that day only. Five of these (int_user_36..40)
+    plus int_user_33's day-2 activation put six users at the 50% level
+    (≥ MIN_USERS_FOR_LINE = 5), while every other needs level in the fixture
+    carries at most three users."""
+    rows = _ir6b_dosing_rows(user_id)
+    rows.extend(_cbg_rows(user_id, IR6B_START + timedelta(days=3), [100.0] * 288))
+    rows.append(_ir1002_override(
+        user_id, 3, start=IR6B_START, preset="NeedsHalf",
+        br_sf=0.5, cr_isf_sf=2.0, duration_seconds=3600,
+    ))
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Top-level fixture composition
 # ---------------------------------------------------------------------------
 
@@ -959,6 +1218,20 @@ ARCHETYPES = {
     "int_user_30": _archetype_ir1002_multiday_span,
     "int_user_31": _archetype_ir1002_indeterminate,
     "int_user_32": _archetype_ir1002_both,
+    # IR-6B dose-response (analysis_ir-6b). All-AB disjoint window — see
+    # IR6B_START. These users also flow into the IR-1002 universes (the
+    # IR-2/IR-3 cohorts grow, which is safe: every IR-2/IR-3 assertion is
+    # per-user or relative) and into 6-3a's Loop-user stages (relative too).
+    "int_user_33": _archetype_ir6b_dose_response,
+    "int_user_34": _archetype_ir6b_filter_mechanics,
+    "int_user_35": _archetype_ir6b_c2_exclusions,
+    # Five interchangeable single-activation users sharing the 50% needs
+    # level; the lambdas exist only to bind each user id to the shared builder.
+    "int_user_36": lambda: _archetype_ir6b_line_level_user("int_user_36"),
+    "int_user_37": lambda: _archetype_ir6b_line_level_user("int_user_37"),
+    "int_user_38": lambda: _archetype_ir6b_line_level_user("int_user_38"),
+    "int_user_39": lambda: _archetype_ir6b_line_level_user("int_user_39"),
+    "int_user_40": lambda: _archetype_ir6b_line_level_user("int_user_40"),
     # TODO: int_user_07, 10, 11, 17, 18 — see archetypes.md for the full catalog.
 }
 
@@ -1020,6 +1293,17 @@ _DEMOGRAPHICS = {
     "int_user_30": {"gender": "F", "age_years": 45, "yld_years": 20},
     "int_user_31": {"gender": "M", "age_years": 52, "yld_years": 24},
     "int_user_32": {"gender": "F", "age_years": 31, "yld_years": 8},
+    # IR-6B dose-response archetypes — all adults so the age gate never binds
+    # (dob is back-computed from SEG1_START, so ages read ~1y older by the
+    # IR6B window; still nowhere near the <6 cutoff).
+    "int_user_33": {"gender": "F", "age_years": 36, "yld_years": 12},
+    "int_user_34": {"gender": "M", "age_years": 42, "yld_years": 18},
+    "int_user_35": {"gender": "F", "age_years": 27, "yld_years": 5},
+    "int_user_36": {"gender": "M", "age_years": 33, "yld_years": 9},
+    "int_user_37": {"gender": "F", "age_years": 39, "yld_years": 14},
+    "int_user_38": {"gender": "M", "age_years": 48, "yld_years": 22},
+    "int_user_39": {"gender": "F", "age_years": 26, "yld_years": 4},
+    "int_user_40": {"gender": "M", "age_years": 55, "yld_years": 30},
 }
 
 

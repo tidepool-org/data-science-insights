@@ -13,7 +13,8 @@ durability users span a separate later window starting `STABLE_START =
 version filtering.
 
 **Implementation status** — implemented (in `ARCHETYPES` dict):
-01, 02, 03, 04, 05, 06, 08, 09, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23.
+01, 02, 03, 04, 05, 06, 08, 09, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24,
+25, 26–32 (IR-1002), 33–40 (IR-6B).
 Planned but not implemented (no test currently needs them): 07, 10, 11, 17, 18.
 
 ## Transition cohort
@@ -82,6 +83,48 @@ Guardrail bounds under test: target within [67, 250] mg/dL, insulin needs within
 | `int_user_31` | Mitigation indeterminate, M 52y/24y dx | Needs 180%, no preset target, and no pumpSettings record at all → unresolvable lower bound; sets `is_m_indeterminate`, not `is_m_violation` | `compliant` (+ `depends_on_indeterminate`) |
 | `int_user_32` | Both bounds violated, F 31y/8y dx | Separate activations: a P-violating target (40 mg/dL) and an M-violating combination (needs 180%, own target low 100). Neither violates both alone, so this pins the union-across-activations rollup | `both` |
 
+## IR-6B dose-response cohort (C2)
+
+All eight run `IR6B_DAYS = 28` all-autobolus days (10 automated boluses/day)
+starting `IR6B_START = 2024-11-04`, in a window disjoint from every other
+fixture window. The length is pinned from both sides exactly like the IR-1002
+window: ≥28 days of daily dosing so every user anchors a candidate 28-day
+window with 100% dosing-day coverage (test_analysis_6_3a pins those stages
+against the full Loop-user count), ≤~35 days so no stable-AB segment and no
+durability outcome can form (test_analysis_8_7 pins eligible users at exactly
+2). Being all-AB from day 0 they also fail the TB→AB validity box (seg1 needs
+<30% AB), so they enter no §8 analysis cohort.
+
+These users DO flow into the IR-1002 universes: each has eligible AB days, so
+the IR-2 cohort and the IR-3 activation set grow (int_user_35 lands in
+guardrail group `both`; 33/34/36–40 in `compliant`). That is safe because
+every IR-2/IR-3 assertion is per-user (26–32 only) or relative — but any
+future ABSOLUTE pin on those cohorts must count these users too. Conversely,
+test_analysis_ir_6b pins the IR-6B funnel absolutely, so ANY archetype change
+that adds/removes preset activations (in any window) requires re-deriving the
+funnel table in that test's docstring.
+
+C1 coverage needs no new archetype: int_user_08's 2-activations-per-day shape
+supplies C1a/C1b candidates that all fail IR-6B's single-activation-day
+filter, and int_user_09's lone seg2 Workout (2024-01-17, a full-CBG day) is
+the fixture's single retained C1b episode — also a C2 member, pinning the
+by-design series overlap.
+
+Episode geometry: window = [t0 − 1h, t0 + duration + 3h) on a 5-minute CGM
+grid (a truncated episode's window is [t0 − 1h, t0 + 24h)); activations
+start on the hour so index = (hour·60 + minute)/5. Filter 4 requires FULL
+window disjointness (settled 2026-08-25, MC): at least 4 h from one capped
+activation end to the next start, and a clashing pair drops symmetrically.
+All engineered CGM values sit ≥2 mg/dL from the 38/70/180/250/500 band
+edges (mmol round-trip is inexact) and ≥54 so no hypo events form.
+
+| _userId | Archetype | What makes it interesting | IR-6B role |
+|---|---|---|---|
+| `int_user_33` | Dose-response C2 user, F 36y/12y dx | Four 10:00 activations: day 2 needs 50% (six pre 62s → anchor 62, bin <70; six post 200s → bands 6/48/6 of 60), day 5 needs 150% ×1h (0/54/6, anchor 100), day 8 needs 150% ×2h (0/54/18 of 72, six 260s → anchor 260, bin >250), day 11 needs 90% with the 09:30–09:55 readings never emitted → no anchor, filter 6 drops it at 90% coverage. Pooling at level 150: TAR = 24·100/132 = 18.18% ≠ 17.5% mean-of-percentages. | Cases 1–3: band counts, count-pooling, starting bins, filt6-vs-filt7 funnel |
+| `int_user_34` | Filter mechanics, M 42y/18y dx | Day 3: two activations on one day → both fail filter 3. Days 6/7 (22:00 then 01:00): 2 h from capped end to next start < the 4 h disjointness floor → windows overlap on [00:00, 02:00) and filter 4 drops BOTH (symmetric; the pre-tightening rule kept the day-7 one). Days 13/14 (20:00 then 01:00, needs 60%): the boundary pair at exactly 4 h — windows touch at day-14 midnight, half-open disjoint, both survive (plan 9.A case 4). Day 20: indefinite activation (stated duration NULL) clipped to end-of-data (655,200 s > 24 h) → truncated: pre 12 / during 288 / post 0 of 300 readings. Non-boundary activations at needs 80%. CBG only on days 13/14/20/21. | Case 4: filters 3–4 (symmetric drop + 4 h boundary), 24 h truncation, no post arm |
+| `int_user_35` | C2 exclusion paths, F 27y/5y dx | Day 2: P violation (own target low 40 < 67). Day 5: M violation (needs 180% with own target low 100 < 110; not a P violation). Day 8: compliant at needs 120% — the only C2 episode. The violators are qualifying + all-days-AB, so exclusion is attributable to the violation flags alone; they never enter the episode frame (membership needs in_c1 OR in_c2). IR-2 group: `both`. | Case 5: P/M exclusion from C2 |
+| `int_user_36`–`int_user_40` | Line-level users (M/F, adults) | One compliant 1 h activation each on day 3 at needs 50%, flat-100 CBG that day only. With int_user_33's day-2 activation the 50% level holds 6 users ≥ MIN_USERS_FOR_LINE = 5; every other needs level has ≤3 users. | Case 6: line eligibility |
+
 ## Filter-coverage matrix
 
 | Filter | Exercised by |
@@ -97,3 +140,10 @@ Guardrail bounds under test: target within [67, 250] mg/dL, insulin needs within
 | Activation precedes first eligible AB day (not qualifying, IR-1002) | int_user_29 |
 | Multiday activation spans a non-AB day (drop from IR-3) | int_user_30 |
 | Mitigation lower bound unresolvable (indeterminate, IR-1002) | int_user_31 |
+| Two activations on one user-day (IR-6B filter 3) | int_user_34 (also int_user_08's pairs) |
+| Window disjointness < 4 h → symmetric pair drop (IR-6B filter 4) | int_user_34 days 6/7 |
+| Window disjointness at exactly 4 h → both survive (IR-6B filter 4 boundary) | int_user_34 days 13/14 |
+| No CGM in the 30-min starting-glucose lookback (IR-6B filter 6) | int_user_33 |
+| Indefinite activation truncated at 24 h, no post arm (IR-6B) | int_user_34 |
+| P / M violation excludes activation from C2 (IR-6B) | int_user_35 |
+| Median-line eligibility ≥5 users at one exposure level (IR-6B) | int_user_36–40 (+33) |
