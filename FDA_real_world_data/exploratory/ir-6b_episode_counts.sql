@@ -11,7 +11,13 @@
 --
 --   C1  the preset activations of the PLN-1001 / RPT-1001 TRANSITION analysis,
 --       split TB vs AB by which segment of the user's rank-1 window the
---       activation's day falls in (seg1 = TB; seg2 + seg3 = AB). FDA's IR#6
+--       activation's day falls in (seg1 = TB; seg2 + seg3 = AB).
+--       SUPERSEDED 2026-08-26 (MC): the analysis's REPORT series C1b is
+--       now seg2 only (symmetric fortnights); seg3 stays in the analysis
+--       machinery under transition_phase_extended = 'AB2', outside the
+--       report series. This scoping SQL keeps the original seg1..seg3
+--       window as run; re-running it returns LARGER C1b counts than the
+--       analysis by the seg3 share. FDA's IR#6
 --       was asked about these subjects, so this is the first cut and the
 --       primary SE evidence; the TB-vs-AB contrast is the comparison the
 --       question turns on.

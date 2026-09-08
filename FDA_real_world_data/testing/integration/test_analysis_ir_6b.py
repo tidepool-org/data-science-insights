@@ -14,13 +14,16 @@ are exercised by the PRE-EXISTING transition archetypes:
 - int_user_08 (2 preset activations per activation day) supplies C1a and C1b
   CANDIDATES that all fail filter 3 — so C1a has zero retained episodes. The
   run completing on this fixture is therefore the regression test for the v2
-  fix to create_c1_comparison_figure, whose v1 crashed on an empty series.
+  fix to create_c1_comparison_figure, whose v1 crashed on an empty series,
+  and for the empty temp-basal panel of create_c1_dose_response_figure.
 - int_user_09 (one seg2-only Workout on 2024-01-17 10:00, a full-CBG day)
   supplies the fixture's single retained C1b episode, which is also a C2
   member (the legitimate series overlap).
 
 CANDIDATE SET (filter 1; update if any archetype gains/loses activations):
-int_user_08 18 (6 seg1 → C1a only; 12 seg2+seg3 → C1b and C2), int_user_09 1
+int_user_08 18 (6 seg1 → C1a only; 6 seg2 → C1b and C2; 6 seg3 → C2 only —
+seg3 left the transition window with the seg2-only redefinition,
+MC 2026-08-26), int_user_09 1
 (C1b and C2), int_user_26 2, int_user_29 1 (PreAB is not qualifying),
 int_user_30 1 (Overnight fails all-days-AB), int_user_33 4, int_user_34 7
 (day-3 pair, day-6/7 pair, day-13/14 boundary pair, day-20 indefinite),
@@ -41,8 +44,9 @@ int_user_34's day-20 activation (a C2 member).
   C1a finite      6 → 6 → 0 → 0 → 0 → 0 → 0   users 1 → 0
                   (int_user_08's seg1 pairs all fail filter 3)
   C1a indefinite  all zero
-  C1b finite      13 → 13 → 1 → 1 → 1 → 1 → 1  users 2 → 1
-                  (u08's 12 fail filter 3; u09's lone Workout survives)
+  C1b finite      7 → 7 → 1 → 1 → 1 → 1 → 1   users 2 → 1
+                  (u08's 6 seg2 activations fail filter 3; u09's lone
+                  Workout survives; u08's seg3 six are C2-only now)
   C1b indefinite  all zero
   C2  finite      33 → 33 → 19 → 17 → 17 → 16 → 16  users 13 → 12
                   (33 = 34 C2 members − the indefinite one; −12 u08 and
@@ -335,7 +339,7 @@ try:
             #                           users_retained)
             ("C1a", "finite"):     (6, 6, 0, 0, 0, 0, 0, 1, 0),
             ("C1a", "indefinite"): (0, 0, 0, 0, 0, 0, 0, 0, 0),
-            ("C1b", "finite"):     (13, 13, 1, 1, 1, 1, 1, 2, 1),
+            ("C1b", "finite"):     (7, 7, 1, 1, 1, 1, 1, 2, 1),
             ("C1b", "indefinite"): (0, 0, 0, 0, 0, 0, 0, 0, 0),
             ("C2", "finite"):      (33, 33, 19, 17, 17, 16, 16, 13, 12),
             ("C2", "indefinite"):  (1, 1, 1, 1, 1, 1, 1, 1, 1),
@@ -700,28 +704,85 @@ try:
             "table_summary_tar_target.csv",
             "table_summary_tb70_target_low.csv",
             "table_data_checks.csv",
+            # plotted-line values — the machine-checkable record of every
+            # bucket point the figures draw, all three series
+            "table_line_buckets_needs.csv",
+            "table_line_buckets_target.csv",
+            "table_line_buckets_target_low.csv",
+            # distinct users / episodes per (series, axis) — the quotable
+            # union counts (the funnel's per-kind user rows sum above them)
+            "table_series_retained_counts.csv",
         )
         expected_figures = (
-            "figure_tb70_vs_needs.png",
-            "figure_tb70_vs_needs_during.png",
-            "figure_tir_vs_needs.png",
-            "figure_tir_vs_needs_during.png",
-            "figure_tar_vs_needs.png",
-            "figure_tar_vs_needs_during.png",
-            "figure_tb70_vs_target.png",
-            "figure_tb70_vs_target_during.png",
-            "figure_tir_vs_target.png",
-            "figure_tir_vs_target_during.png",
-            "figure_tar_vs_target.png",
-            "figure_tar_vs_target_during.png",
-            "figure_tb70_vs_target_low.png",
+            # transition-cohort dose-response (leads the suite; the empty-C1a
+            # fixture exercises its empty-panel path)
+            "figure_c1_tb70_vs_needs.png",
+            "figure_c1_tir_vs_needs.png",
+            "figure_c1_tar_vs_needs.png",
+            "figure_c1_tb70_vs_target.png",
+            "figure_c1_tir_vs_target.png",
+            "figure_c1_tar_vs_target.png",
             "figure_c1_tb_vs_ab.png",
+            # C2 faceted primaries + combined single-panel companions
+            "figure_tb70_vs_needs.png",
+            "figure_tir_vs_needs.png",
+            "figure_tar_vs_needs.png",
+            "figure_tb70_vs_target.png",
+            "figure_tir_vs_target.png",
+            "figure_tar_vs_target.png",
+            "figure_tb70_vs_needs_combined.png",
+            "figure_tir_vs_needs_combined.png",
+            "figure_tar_vs_needs_combined.png",
+            "figure_tb70_vs_target_combined.png",
+            "figure_tir_vs_target_combined.png",
+            "figure_tar_vs_target_combined.png",
         )
+        if analysis_ir_6b.GENERATE_SET_ASIDE_FIGURES:
+            expected_figures += (
+                "figure_tb70_vs_needs_during.png",
+                "figure_tir_vs_needs_during.png",
+                "figure_tar_vs_needs_during.png",
+                "figure_tb70_vs_target_during.png",
+                "figure_tir_vs_target_during.png",
+                "figure_tar_vs_target_during.png",
+                "figure_tb70_vs_target_low.png",
+            )
         for name in expected_tables + expected_figures:
             path = os.path.join(output_dir, name)
             assert os.path.exists(path), f"missing expected output: {name}"
         print(f"PASS: case 7 — all {len(expected_tables)} tables and "
               f"{len(expected_figures)} figures written")
+
+        # ── Case 7b: the bucket CSV carries ALL series, not just C2 ──────
+        # C1a retains zero episodes so it contributes no rows; int_user_09's
+        # lone retained C1b episode must produce C1b rows (one user, so
+        # every C1b bucket row has n_users == 1). A regression to the old
+        # C2-only slice would make the series set {"C2"} and fail here.
+        import pandas as pd
+        buckets_needs = pd.read_csv(
+            os.path.join(output_dir, "table_line_buckets_needs.csv"))
+        assert set(buckets_needs["series"]) == {"C1b", "C2"}, \
+            sorted(set(buckets_needs["series"]))
+        c1b_rows = buckets_needs[buckets_needs["series"] == "C1b"]
+        assert (c1b_rows["n_users"] == 1).all(), c1b_rows.to_string()
+        print("PASS: case 7b — line-bucket CSV carries C1b and C2 rows "
+              "(C1a empty), C1b bucket rows all single-user")
+
+        # ── Case 7c: the retained-counts table reports DISTINCT users ────
+        # The funnel's C2 needs rows say 12 users retained via finite
+        # activations and 1 via the indefinite one — but that one user
+        # (int_user_34) also retains finite episodes, so the union is 12.
+        # A regression to summing per-kind rows would report 13 here.
+        series_counts = pd.read_csv(
+            os.path.join(output_dir, "table_series_retained_counts.csv"))
+        by_key = series_counts.set_index(["series", "axis"])
+        assert by_key.loc[("C2", "needs"), "distinct_users"] == 12
+        assert by_key.loc[("C1b", "needs"), "distinct_users"] == 1
+        assert by_key.loc[("C1a", "needs"), "distinct_users"] == 0
+        # episodes: 16 finite + 1 indefinite (u34 day-20, truncated) = 17
+        assert by_key.loc[("C2", "needs"), "episodes"] == 17
+        print("PASS: case 7c — retained-counts table: C2 needs 12 distinct "
+              "users (not the per-kind sum 13), C1b 1, C1a 0, 17 episodes")
 
         print("\nAll integration assertions for analysis IR-6B passed.")
 finally:

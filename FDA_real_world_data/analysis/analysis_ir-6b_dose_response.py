@@ -10,10 +10,15 @@ decisions, Phase 0 scoping results): Drive
 TWO GRAINS, reported as three series:
   C1a / C1b  the preset activations of the PLN-1001 / RPT-1001 transition
              analysis, split temp-basal vs autobolus by which segment of the
-             user's rank-1 window the activation's day falls in (seg1 = TB;
-             seg2 + seg3 = AB). Phase 0 showed C1 retains too few episodes
-             for per-level curves, so C1 is presented as dots plus a pooled
-             TB-vs-AB comparison.
+             user's rank-1 window the activation's day falls in — the
+             SYMMETRIC fortnight pair seg1 = TB | seg2 = AB (settled
+             2026-08-26, MC, superseding plan decision D10). Seg3, the
+             second autobolus fortnight, stays outside the report series;
+             its rows carry transition_phase_extended = 'AB2' so the data
+             and machinery remain one filter away. C1 gets per-phase
+             dose-response figures — all starting bins on one panel per
+             phase, dots carrying the evidence — plus the pooled TB-vs-AB
+             comparison.
   C2         all preset activations during AB days meeting the guardrails
              and mitigation, per activation from the staged IR-1002 flags
              (is_qualifying AND is_all_days_ab AND no P violation AND no M
@@ -71,6 +76,7 @@ Run on Databricks (Run-file or %run), like the other analyses.
 =============================================================================
 """
 
+import hashlib
 import os
 import shutil
 import sys
@@ -193,7 +199,10 @@ def round_half_up(values, decimals=0):
 
 # =============================================================================
 # Episode construction (mirrors the verified Phase 0 SQL, exploratory/
-# ir-6b_episode_counts.sql — one row out per filter-1..5 survivor)
+# ir-6b_episode_counts.sql — one row out per filter-1..5 survivor — EXCEPT
+# the C1 REPORT series: seg2-only since 2026-08-26 (seg3 rides along as
+# transition_phase_extended='AB2'), while the Phase 0 SQL still counts
+# C1b over the original seg1..seg3 span; see its header note)
 # =============================================================================
 
 def build_episode_frames(spark):
@@ -251,17 +260,32 @@ def build_episode_frames(spark):
           (o.stated_duration IS NULL)                       AS is_indefinite,
           (o.duration > {max_duration_seconds})             AS is_truncated,
 
-          -- grain memberships
+          -- grain memberships. The REPORT's transition cohort is the
+          -- SYMMETRIC fortnight pair seg1 (temp basal) | seg2 (first
+          -- autobolus fortnight) — settled 2026-08-26 (MC, supersedes plan
+          -- decision D10). Seg3, the second autobolus fortnight, stays OUT
+          -- of the report series but its label rides on every row
+          -- (transition_phase_extended = 'AB2'), so a seg3 cut is a
+          -- one-line filter — data and machinery retained (MC).
           (tc._userId IS NOT NULL
              AND o.override_day BETWEEN tc.tb_to_ab_seg1_start
-                                    AND tc.tb_to_ab_seg3_end) AS in_c1,
+                                    AND tc.tb_to_ab_seg2_end) AS in_c1,
           CASE
             WHEN tc._userId IS NULL THEN NULL
             WHEN o.override_day BETWEEN tc.tb_to_ab_seg1_start
                                     AND tc.tb_to_ab_seg1_end THEN 'TB'
             WHEN o.override_day BETWEEN tc.tb_to_ab_seg2_start
-                                    AND tc.tb_to_ab_seg3_end THEN 'AB'
+                                    AND tc.tb_to_ab_seg2_end THEN 'AB'
           END                                               AS transition_phase,
+          CASE
+            WHEN tc._userId IS NULL THEN NULL
+            WHEN o.override_day BETWEEN tc.tb_to_ab_seg1_start
+                                    AND tc.tb_to_ab_seg1_end THEN 'TB'
+            WHEN o.override_day BETWEEN tc.tb_to_ab_seg2_start
+                                    AND tc.tb_to_ab_seg2_end THEN 'AB'
+            WHEN o.override_day BETWEEN tc.tb_to_ab_seg3_start
+                                    AND tc.tb_to_ab_seg3_end THEN 'AB2'
+          END                                               AS transition_phase_extended,
           COALESCE(f.is_qualifying AND f.is_all_days_ab
                      AND NOT f.is_p_violation
                      AND NOT f.is_m_violation
@@ -465,7 +489,8 @@ def build_episode_frames(spark):
           s._userId,
           CAST(s.t0 AS STRING)                              AS t0,
           s.is_indefinite, s.is_truncated,
-          s.in_c1, s.transition_phase, s.in_c2, s.in_c2_base,
+          s.in_c1, s.transition_phase, s.transition_phase_extended,
+          s.in_c2, s.in_c2_base,
           s.needs_fraction, s.needs_source,
           s.target_low, s.target_high, s.target_midpoint,
           s.duration_seconds,
@@ -1190,6 +1215,30 @@ AXIS_LABELS = {
 }
 
 
+def _metric_short(metric_label):
+    """'TB70 — time below 70 mg/dL (%)' -> 'TB70' — titles use the short
+    name; the y-axis label keeps the full definition."""
+    return metric_label.split(" — ")[0]
+
+
+def _axis_phrase(axis):
+    """The axis label as a mid-sentence phrase: first letter lowercased,
+    everything else kept — a bare .lower() would mangle 'mg/dL'."""
+    label = AXIS_LABELS[axis]
+    return label[0].lower() + label[1:]
+
+
+def _bucket_width_label(axis):
+    """Legend text for the bucket width, in the axis's own unit — '20%-wide'
+    on the needs axis but '20 mg/dL-wide' on the target axes. Returns None
+    when the axis draws distinct-level lines instead of buckets."""
+    width = LINE_BUCKET_WIDTH.get(axis)
+    if width is None:
+        return None
+    unit = "%" if axis == "needs" else " mg/dL"
+    return f"{width}{unit}-wide"
+
+
 def build_line_buckets(cells, axis, metric_key, during=False):
     """The aggregation behind each panel's median line when bucketing is on:
     per (series, starting bin, bucket of LINE_BUCKET_WIDTH), pool each user's
@@ -1260,10 +1309,11 @@ def create_primary_figure(cells, summary, metric_key, metric_label, axis,
     glucose bin (settled 2026-08-25, MC, after the single-panel overlay proved
     unreadable on real data). Per panel: that bin's C2 per-user dots (size =
     pooled CGM hours), the median-across-users line CONNECTING ONLY the
-    levels with >= MIN_USERS_FOR_LINE users in that bin (thin levels appear
+    levels with >= MIN_USERS_FOR_LINE users in that bin (small_n levels appear
     as small open markers, never on the line), the interquartile band across
     users, and the activation-pooled weighted mean as a dashed companion.
-    C1 does not appear here — its evidence is the dedicated TB-vs-AB figure.
+    C1 does not appear here — its evidence is the per-phase dose-response
+    figures (create_c1_dose_response_figure) and the TB-vs-AB comparison.
     """
     value_column = f"{metric_key}_during" if during else metric_key
     median_column = (f"{metric_key}_during_median" if during
@@ -1305,21 +1355,27 @@ def create_primary_figure(cells, summary, metric_key, metric_label, axis,
             else:
                 confident = line["n_users"] >= MIN_USERS_FOR_LINE
         supported = line[confident]
-        thin = line[~confident]
+        small_n = line[~confident]
 
-        if len(supported) >= 2:
+        # line, IQR band and weighted mean run through EVERY bucket (MC,
+        # 2026-08-26 — one treatment across all figures); the marker encodes
+        # support: filled at >= MIN_USERS_FOR_LINE users, open circle below.
+        # The "sparse" note is for panels with no buckets at all.
+        if len(line):
             if not during:
-                ax.fill_between(supported[x_column],
-                                supported[q1_col], supported[q3_col],
+                ax.fill_between(line[x_column],
+                                line[q1_col], line[q3_col],
                                 color=line_color, alpha=0.15, zorder=1)
-            ax.plot(supported[x_column], supported[median_col],
-                    color=line_color, linewidth=2.4, marker="o",
-                    markersize=5, zorder=4)
+            ax.plot(line[x_column], line[median_col],
+                    color=line_color, linewidth=2.4, zorder=4)
+            if len(supported):
+                ax.scatter(supported[x_column], supported[median_col],
+                           s=25, color=line_color, zorder=5)
             # the dashed weighted mean: bucket mode pools it for either
             # window variant; the distinct-level summary only carries the
             # full-window one, so skip it on during panels there
             if buckets is not None or not during:
-                ax.plot(supported[x_column], supported[wmean_col],
+                ax.plot(line[x_column], line[wmean_col],
                         color=COLORS_SECONDARY, linewidth=1.6,
                         linestyle="--", marker="s", markersize=4,
                         alpha=0.85, zorder=3)
@@ -1327,10 +1383,10 @@ def create_primary_figure(cells, summary, metric_key, metric_label, axis,
             ax.annotate("sparse — read with n", xy=(0.05, 0.05),
                         xycoords="axes fraction", fontsize=FONT["annotation"],
                         color="#B0413E", style="italic")
-        if len(thin):
-            ax.scatter(thin[x_column], thin[median_col], s=16,
+        if len(small_n):
+            ax.scatter(small_n[x_column], small_n[median_col], s=16,
                        facecolor="white", edgecolor=line_color,
-                       linewidths=1.0, zorder=5)
+                       linewidths=1.0, zorder=6)
 
         ax.set_title(f"Start {bin_value} mg/dL", fontsize=FONT["title"])
         ax.set_xlabel(AXIS_LABELS[axis], fontsize=FONT["tick"])
@@ -1341,10 +1397,10 @@ def create_primary_figure(cells, summary, metric_key, metric_label, axis,
     legend_handles = [
         Line2D([], [], color=line_color, linewidth=2.4, marker="o",
                markersize=5,
-               label=(f"median across users, {LINE_BUCKET_WIDTH[axis]}%-wide "
-                      f"buckets with ≥{MIN_USERS_FOR_LINE} users"
+               label=(f"median across users, {_bucket_width_label(axis)} "
+                      "buckets"
                       if LINE_BUCKET_WIDTH.get(axis) else
-                      f"median across users (levels with ≥{MIN_USERS_FOR_LINE} users)")),
+                      "median across users per level")),
         plt.Rectangle((0, 0), 1, 1, facecolor=line_color, alpha=0.15,
                       label="IQR (Q1–Q3) across users"),
         Line2D([], [], color=COLORS_SECONDARY, linewidth=1.6, linestyle="--",
@@ -1354,37 +1410,39 @@ def create_primary_figure(cells, summary, metric_key, metric_label, axis,
                label="one user at one setting (size = CGM hours)"),
         Line2D([], [], marker="o", linestyle="", markersize=5,
                markerfacecolor="white", markeredgecolor=line_color,
-               label=(f"bucket with <{MIN_USERS_FOR_LINE} users (not on the line)"
+               label=(f"open marker: bucket with <{MIN_USERS_FOR_LINE} users"
                       if LINE_BUCKET_WIDTH.get(axis) else
-                      f"level with <{MIN_USERS_FOR_LINE} users (not on the line)")),
+                      f"open marker: level with <{MIN_USERS_FOR_LINE} users")),
     ]
     fig.legend(handles=legend_handles, loc="lower center",
                ncol=len(legend_handles), fontsize=FONT["legend"],
                frameon=False, bbox_to_anchor=(0.5, -0.02))
     fig.suptitle(
-        f"{metric_label} vs {AXIS_LABELS[axis].lower()}, by starting glucose"
-        f" — {SERIES_LABELS['C2']}"
-        f"{' (during-preset readings only)' if during else ''}",
+        f"{_metric_short(metric_label)} vs {_axis_phrase(axis)}, "
+        "by starting glucose"
+        f"{' — during preset only' if during else ''}",
         fontsize=FONT["suptitle"])
-    fig.tight_layout(rect=[0, 0.05, 1, 0.93])
+    fig.tight_layout(rect=[0, 0.05, 1, 0.95])
     return fig
 
 
-def create_combined_figure(cells, metric_key, metric_label, axis):
-    """The companion single-panel view (MC, 2026-08-25): all four starting-
-    glucose bins on one plot, C2 only. Dots are per-user cells COLORED by
-    starting bin; lines are the same bucketed medians the facet panels draw
-    (supported buckets only, thin buckets as open markers in the bin's
-    color). No C1 overlay, no bands — the facet figures carry those."""
-    fig, ax = plt.subplots(figsize=(12, 6.8))
-    _reference_lines(ax, metric_key, axis, annotate_ada=True)
-
-    c2_cells = cells[cells["series"] == "C2"]
-    buckets = build_line_buckets(c2_cells, axis, metric_key)
-
+def _draw_bin_colored_panel(ax, series_cells, axis, metric_key):
+    """Draw ONE series' dose-response content on one axes, all starting bins
+    together: per-user dots at exact settings (size = pooled CGM hours,
+    colored by starting bin) and the bucketed per-bin medians. The line runs
+    through EVERY bucket median (MC, 2026-08-26 — one treatment across all
+    figures), with the marker encoding support: filled at
+    >= MIN_USERS_FOR_LINE users, open circle below.
+    Returns {starting_bin: {"has_dots", "line_drawn", "small_n_drawn"}} so each
+    caller can build an honest legend from what actually rendered."""
+    buckets = build_line_buckets(series_cells, axis, metric_key)
+    drawn = {}
     for bin_value in STARTING_BINS:
-        dots = c2_cells[c2_cells["starting_bin"] == bin_value].dropna(
+        dots = series_cells[series_cells["starting_bin"] == bin_value].dropna(
             subset=[metric_key])
+        info = {"has_dots": bool(len(dots)), "line_drawn": False,
+                "small_n_drawn": False}
+        drawn[bin_value] = info
         if len(dots):
             ax.scatter(dots["level"], dots[metric_key],
                        s=6 + 2.2 * np.sqrt(dots["valid_hours"]),
@@ -1394,22 +1452,48 @@ def create_combined_figure(cells, metric_key, metric_label, axis):
             continue
         line = buckets[buckets["starting_bin"] == bin_value].sort_values(
             "x_position")
+        if not len(line):
+            continue
         supported = line[line["line_supported"]]
-        thin = line[~line["line_supported"]]
-        if len(supported) >= 2:
-            ax.plot(supported["x_position"], supported["median"],
-                    color=BIN_COLORS[bin_value], linewidth=2.4, marker="o",
-                    markersize=5, zorder=4,
+        small_n = line[~line["line_supported"]]
+        ax.plot(line["x_position"], line["median"],
+                color=BIN_COLORS[bin_value], linewidth=2.4, zorder=3)
+        if len(supported):
+            ax.scatter(supported["x_position"], supported["median"],
+                       s=25, color=BIN_COLORS[bin_value], zorder=4)
+        info["line_drawn"] = True
+        if len(small_n):
+            ax.scatter(small_n["x_position"], small_n["median"], s=16,
+                       facecolor="white", edgecolor=BIN_COLORS[bin_value],
+                       linewidths=1.0, zorder=5)
+            info["small_n_drawn"] = True
+    return drawn
+
+
+def create_combined_figure(cells, metric_key, metric_label, axis):
+    """The companion single-panel view (MC, 2026-08-25): all four starting-
+    glucose bins on one plot, C2 only. Dots are per-user cells COLORED by
+    starting bin; lines are the same bucketed medians the facet panels draw
+    (through every bucket, <5-user buckets as open circles in the bin's
+    color). No C1 overlay, no bands — the facet figures carry those."""
+    fig, ax = plt.subplots(figsize=(12, 6.8))
+    _reference_lines(ax, metric_key, axis, annotate_ada=True)
+
+    ax.set_title(
+        f"{_metric_short(metric_label)} vs {_axis_phrase(axis)} — "
+        "all starting-glucose bins", fontsize=FONT["title"])
+    drawn = _draw_bin_colored_panel(
+        ax, cells[cells["series"] == "C2"], axis, metric_key)
+    for bin_value in STARTING_BINS:
+        if drawn[bin_value]["line_drawn"]:
+            ax.plot([], [], color=BIN_COLORS[bin_value], linewidth=2.4,
+                    marker="o", markersize=5,
                     label=f"start {bin_value} mg/dL")
-        elif len(dots):
+        elif drawn[bin_value]["has_dots"]:
             # dots-only bin: claim the legend entry so the color is decodable
             ax.plot([], [], color=BIN_COLORS[bin_value], linewidth=2.4,
                     marker="o", markersize=5,
                     label=f"start {bin_value} mg/dL (dots only)")
-        if len(thin):
-            ax.scatter(thin["x_position"], thin["median"], s=16,
-                       facecolor="white", edgecolor=BIN_COLORS[bin_value],
-                       linewidths=1.0, zorder=5)
 
     width = LINE_BUCKET_WIDTH.get(axis)
     ax.plot([], [], color="#666666", linewidth=0, marker="o", markersize=5,
@@ -1417,18 +1501,99 @@ def create_combined_figure(cells, metric_key, metric_label, axis):
             label=(f"open marker: bucket has <{MIN_USERS_FOR_LINE} users"
                    if width else
                    f"open marker: level has <{MIN_USERS_FOR_LINE} users"))
+    ax.plot([], [], color="#888888", linewidth=0, marker="o", markersize=6,
+            markerfacecolor="#888888", markeredgecolor="none", alpha=0.6,
+            label="dot = one user at one setting (size = CGM hours)")
     ax.set_xlabel(AXIS_LABELS[axis], fontsize=FONT["axis_label"])
     ax.set_ylabel(metric_label, fontsize=FONT["axis_label"])
-    ax.set_title(
-        f"{metric_label} vs {AXIS_LABELS[axis].lower()} — all starting-"
-        f"glucose bins, one panel\n({SERIES_LABELS['C2']} only)\n"
-        + (f"lines = median across users over {width}%-wide buckets; "
-           if width else "lines = median across users per level; ")
-        + "dots = one user at one setting, colored by starting glucose",
-        fontsize=FONT["title"])
     ax.tick_params(labelsize=FONT["tick"])
     ax.legend(fontsize=FONT["legend"], loc="best", frameon=False)
     fig.tight_layout()
+    return fig
+
+
+C1_PHASE_TITLES = {"C1a": "Temp-basal phase", "C1b": "Autobolus phase"}
+
+
+def create_c1_dose_response_figure(cells, metric_key, metric_label, axis):
+    """The transition cohort's dose-response view (MC, 2026-08-25: metrics as
+    a function of the preset settings must be SHOWN for C1 even though the
+    cohort is small). One panel per transition phase (temp basal | autobolus);
+    within a panel all starting-glucose bins share the axes as bin-colored
+    dots, because ~2-dozen users cannot also be faceted by bin. The per-bin
+    median line runs through EVERY bucket (MC, 2026-08-26 — the C2 figures'
+    >= MIN_USERS_FOR_LINE gate left these lines fragmentary at this n), with
+    the marker encoding support: filled at >= MIN_USERS_FOR_LINE users, open
+    circle below. The per-user dots remain the primary evidence."""
+    # narrow-ish canvas (MC, 2026-08-26): the page scales figures to text
+    # width, so a smaller width-to-height ratio renders LARGER in the doc
+    fig, axes = plt.subplots(1, 2, figsize=(11, 6.4), sharey=True)
+    bins_present = set()
+    bins_with_line = set()
+    any_small_n_drawn = False
+    for panel_index, (ax, series_key) in enumerate(zip(axes, ["C1a", "C1b"])):
+        _reference_lines(ax, metric_key, axis, annotate_ada=(panel_index == 1))
+        series_cells = cells[cells["series"] == series_key]
+        drawn = _draw_bin_colored_panel(ax, series_cells, axis, metric_key)
+        bins_present.update(
+            bin_value for bin_value, info in drawn.items()
+            if info["has_dots"] or info["line_drawn"])
+        bins_with_line.update(
+            bin_value for bin_value, info in drawn.items()
+            if info["line_drawn"])
+        any_small_n_drawn = any_small_n_drawn or any(
+            info["small_n_drawn"] for info in drawn.values())
+        # counts for the panel title: users once each; activations only from
+        # the real-bin rows (the pooled ALL_BINS rows would double-count)
+        real_bin_cells = series_cells[series_cells["starting_bin"] != ALL_BINS]
+        n_users = real_bin_cells["_userId"].nunique()
+        n_activations = int(real_bin_cells["n_episodes"].sum())
+        ax.set_title(
+            f"{C1_PHASE_TITLES[series_key]} "
+            f"({n_users} users, {n_activations} activations)",
+            fontsize=FONT["title"])
+        ax.set_xlabel(AXIS_LABELS[axis], fontsize=FONT["tick"])
+        ax.tick_params(labelsize=FONT["tick"])
+    axes[0].set_ylabel(metric_label, fontsize=FONT["axis_label"])
+
+    # each bin's handle mirrors what that bin rendered: a line-with-dot
+    # where its bucket-median line drew (the lines ARE bin-colored, so a
+    # separate generic "median line" swatch matched nothing in the plot),
+    # a dot-only handle for dots-only bins. Line semantics (median across
+    # users per bucket) live in the report captions.
+    legend_handles = [
+        Line2D([], [], color=BIN_COLORS[bin_value], linewidth=2.4,
+               marker="o", markersize=5,
+               label=f"start {bin_value} mg/dL")
+        if bin_value in bins_with_line else
+        Line2D([], [], marker="o", linestyle="", markersize=7,
+               markerfacecolor=BIN_COLORS[bin_value], markeredgecolor="none",
+               alpha=0.6, label=f"start {bin_value} mg/dL (dots only)")
+        for bin_value in STARTING_BINS if bin_value in bins_present]
+    # explainer entries appear only for elements that actually rendered
+    if any_small_n_drawn:
+        legend_handles.append(
+            Line2D([], [], marker="o", linestyle="", markersize=5,
+                   markerfacecolor="white", markeredgecolor="#555555",
+                   label=f"open marker: <{MIN_USERS_FOR_LINE}-user bucket"))
+    legend_handles.append(
+        Line2D([], [], marker="o", linestyle="", markersize=6,
+               markerfacecolor="#888888", markeredgecolor="none", alpha=0.6,
+               label="dot: one user at one setting (size = CGM hours)"))
+    # two legend COLUMNS (matplotlib fills column-major): the bin swatches
+    # stacked in one, the three explainers in the other. Keeping the legend
+    # narrower than the panels matters — a legend row wider than the canvas
+    # inflates the tight save bbox, and the page then scales the whole
+    # figure back down to fit text width
+    fig.legend(handles=legend_handles, loc="lower center", ncol=2,
+               fontsize=FONT["legend"], frameon=False,
+               bbox_to_anchor=(0.5, -0.04))
+    # brief one-line title (MC, 2026-08-26): identifiable standalone, but
+    # explainers live in the legend and the full name in the report caption
+    fig.suptitle(
+        f"Transition cohort — {_metric_short(metric_label)} vs "
+        f"{_axis_phrase(axis)}", fontsize=FONT["suptitle"])
+    fig.tight_layout(rect=[0, 0.13, 1, 0.96])
     return fig
 
 
@@ -1471,10 +1636,9 @@ def create_c1_comparison_figure(episodes):
     fig.legend(handles=handles, loc="lower center", ncol=2,
                fontsize=FONT["legend"], frameon=False,
                bbox_to_anchor=(0.5, -0.02))
-    fig.suptitle("Transition cohort: glycemia around isolated preset "
-                 "activations, temp basal vs autobolus (per user, all "
-                 "activations pooled)", fontsize=FONT["suptitle"])
-    fig.tight_layout(rect=[0, 0.03, 1, 0.94])
+    fig.suptitle("Transition cohort — temp basal vs autobolus, "
+                 "all activations pooled", fontsize=FONT["suptitle"])
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
     return fig
 
 
@@ -1483,27 +1647,61 @@ def create_c1_comparison_figure(episodes):
 # =============================================================================
 # Everything a figure needs is written once per analysis run to
 # {output_dir}/intermediate/ as CSV; rebuild_figures() reloads them and
-# regenerates every figure in seconds, no cluster required. These files stay
-# on Databricks with the rest of the outputs — they carry per-episode rows
-# with raw user ids and are never exported off the platform.
+# regenerates every figure in seconds, no cluster required — on Databricks
+# or on a laptop after downloading the output directory. `_userId` is
+# PSEUDONYMIZED in every intermediate CSV (MC, 2026-08-26) so the download
+# never carries the raw identifier; see _pseudonymize_user_ids.
 
 INTERMEDIATE_FILES = (["episodes.csv"]
                       + [f"cells_{axis}.csv" for axis in AXES]
                       + [f"summary_{axis}.csv" for axis in AXES])
 
+# Deterministic salted SHA-256, truncated — the export_user_day_analysis_ready
+# convention: stable across runs so re-exports stay joinable to each other,
+# traceback possible by recomputing the hash on the staging tables (which
+# keep the raw id), and the column NAME stays `_userId` so nothing downstream
+# changes. The salt lives in source (not a secret): it removes the direct
+# identifier but is not irreversible against a known-id dictionary.
+USERID_SALT = "ir6b-intermediates-v1"
+
+
+def _pseudonymize_user_ids(frame):
+    """Return a copy of `frame` with `_userId` replaced by its salted hash.
+    Grouping, uniqueness and per-user pooling are hash-invariant, so every
+    figure built from pseudonymized intermediates is identical to one built
+    from the raw frames."""
+    hashed = frame["_userId"].map(
+        lambda user_id: hashlib.sha256(
+            (USERID_SALT + str(user_id)).encode()).hexdigest()[:16])
+    return frame.assign(_userId=hashed)
+
 
 def write_intermediates(episodes, cells, summary, output_dir):
     intermediate_dir = f"{output_dir}/intermediate"
     os.makedirs(intermediate_dir, exist_ok=True)
-    episodes.to_csv(f"{intermediate_dir}/episodes.csv", index=False)
+    _pseudonymize_user_ids(episodes).to_csv(
+        f"{intermediate_dir}/episodes.csv", index=False)
     for axis in AXES:
-        cells[axis].to_csv(f"{intermediate_dir}/cells_{axis}.csv", index=False)
+        _pseudonymize_user_ids(cells[axis]).to_csv(
+            f"{intermediate_dir}/cells_{axis}.csv", index=False)
+        # the level summaries carry no user column — written as computed
         summary[axis].to_csv(f"{intermediate_dir}/summary_{axis}.csv", index=False)
-    print(f"   {len(INTERMEDIATE_FILES)} files -> {intermediate_dir}/")
+    print(f"   {len(INTERMEDIATE_FILES)} files -> {intermediate_dir}/ "
+          "(_userId pseudonymized)")
 
 
 def write_figures(episodes, cells, summary, output_dir):
+    # C1 leads (MC, 2026-08-25): FDA's IR-6 request is about the transition
+    # subjects, so the transition-cohort figures come first — dose-response
+    # per phase, then the pooled TB-vs-AB comparison, then the C2 suite.
     figures = []
+    for axis in PRIMARY_AXES:
+        for metric_key, _, metric_label in METRICS:
+            figures.append((create_c1_dose_response_figure(
+                cells[axis], metric_key, metric_label, axis),
+                f"figure_c1_{metric_key}_vs_{axis}.png"))
+    figures.append((create_c1_comparison_figure(episodes),
+                    "figure_c1_tb_vs_ab.png"))
     for axis in PRIMARY_AXES:
         for metric_key, _, metric_label in METRICS:
             figures.append((create_primary_figure(
@@ -1524,14 +1722,32 @@ def write_figures(episodes, cells, summary, output_dir):
             figures.append((create_combined_figure(
                 cells[axis], metric_key, metric_label, axis),
                 f"figure_{metric_key}_vs_{axis}_combined.png"))
-    figures.append((create_c1_comparison_figure(episodes),
-                    "figure_c1_tb_vs_ab.png"))
+    # Distinct retained users and episodes per (series, axis), from the same
+    # cells the figures draw — the exported, machine-checkable source for the
+    # report's per-series counts. The funnel's users_retained is per duration
+    # kind, and summing its finite and indefinite rows overcounts any user
+    # who retains both kinds; this union count is the quotable one.
+    count_rows = []
+    for axis in PRIMARY_AXES:
+        real_bin_cells = cells[axis][cells[axis]["starting_bin"] != ALL_BINS]
+        for series_key, _ in SERIES:
+            series_cells = real_bin_cells[real_bin_cells["series"] == series_key]
+            count_rows.append({
+                "series": series_key,
+                "axis": axis,
+                "distinct_users": int(series_cells["_userId"].nunique()),
+                "episodes": int(series_cells["n_episodes"].sum()),
+            })
+    pd.DataFrame(count_rows).to_csv(
+        f"{output_dir}/table_series_retained_counts.csv", index=False)
+    print("   table_series_retained_counts.csv")
     for axis in AXES:
         if LINE_BUCKET_WIDTH.get(axis):
             bucket_frames = []
             for metric_key, _, _ in METRICS:
-                frame = build_line_buckets(
-                    cells[axis][cells[axis]["series"] == "C2"], axis, metric_key)
+                # all three series, so every plotted bucket value — the C1
+                # panels' included — stays machine-checkable from this CSV
+                frame = build_line_buckets(cells[axis], axis, metric_key)
                 if frame is not None and len(frame):
                     frame.insert(0, "metric", metric_key)
                     bucket_frames.append(frame)
