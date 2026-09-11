@@ -10,7 +10,7 @@ sys.path.insert(0, PROJECT_ROOT)   # run as `python tests/test_forecasters.py` f
 import numpy as np
 import pandas as pd
 
-from model.forecasters import (BatemanCurve, PersistenceForecaster, LoopExponentialInsulinCurve, LoopPiecewiseLinearCarbCurve,
+from model.forecasters import (loop_displayed_forecaster, BatemanCurve, PersistenceForecaster, LoopExponentialInsulinCurve, LoopPiecewiseLinearCarbCurve,
                          LOOP_INSULIN_PRESETS, loop_full_forecaster, loop_static_forecaster)
 from model.settings import MMOL_L_TO_MG_DL, TherapySettings, parse_raw_settings
 
@@ -178,6 +178,33 @@ def check_displayed_forecast():
     assert pred[30][2] == 125.0 and pred[180][6] == 70.0 and np.isnan(pred[30][0])
     comps = LoopDisplayedForecaster().predict_components(out, horizons=(30,))
     assert comps["displayed_effect"][30][2] == 25.0 and not comps["carb_effect"][30].any()
+    # the meal channel: the stored forecast holds neither the meal entered at the decision nor the bolus that follows.
+    # A 20 g entry at the 00:10 origin (ISF 50, CR 10; meal time = entry time) adds 100 x G(h); a 1 U bolus 5 min later
+    # subtracts 50 x F(h - 5); the 00:30 bolus is 20 min after that origin, outside the 15-min window, and does not count
+    dosed = out.assign(bolus_u=0.0, carb_entry_g=0.0, carb_meal_time=pd.NaT)
+    dosed.loc[2, "carb_entry_g"] = 20.0
+    dosed.loc[2, "carb_meal_time"] = dosed.loc[2, "timestamp"]
+    dosed.loc[3, "bolus_u"] = 1.0
+    dosed.loc[6, "bolus_u"] = 2.0
+    curve, carb_curve = LoopExponentialInsulinCurve(360, 75), LoopPiecewiseLinearCarbCurve(180)
+    with_dose = LoopDisplayedForecaster(isf=50.0, carb_ratio=10.0, insulin_curve=curve, carb_curve=carb_curve, dose_channel="meal")
+    comps = with_dose.predict_components(dosed, horizons=(30, 180))
+    carb_30 = 100.0 * float(carb_curve.cumulative_fraction(30))
+    assert carb_30 > 0 and np.isclose(comps["carb_effect"][30][2], carb_30), "the entry at the origin, full curve from the origin"
+    assert np.isclose(comps["carb_effect"][30][4], 100.0 * float(carb_curve.cumulative_fraction(40) - carb_curve.cumulative_fraction(10))), "10 min after the entry"
+    assert comps["carb_effect"][30][5] == 0.0, "15 min after the entry: outside the meal window"
+    assert np.isclose(comps["carb_effect"][30][0], 100.0 * float(carb_curve.cumulative_fraction(20))), "10 min BEFORE the entry: the meal lands 10 min into the horizon"
+    assert comps["carb_effect"][30][1] > comps["carb_effect"][30][0], "5 min before the entry sees more of the meal by 30 min than 10 min before"
+    assert with_dose.key == "loop_displayed_meal"
+    assert loop_displayed_forecaster(50.0, 10.0, dose_channel="meal").carb_curve.absorption_time == 270.0, "the bolus-screen curve: 1.5 x 180 min"
+    expect_30, expect_180 = 50.0 * float(curve.cumulative_fraction(25)), 50.0 * float(curve.cumulative_fraction(175))
+    assert expect_30 > 0 and np.isclose(comps["delivered_dose_effect"][30][2], expect_30)
+    assert np.isclose(comps["delivered_dose_effect"][180][2], expect_180)
+    assert comps["delivered_dose_effect"][30][0] == 0.0, "the 00:15 bolus is 15 min after the 00:00 origin: outside the window"
+    assert np.isclose(comps["delivered_dose_effect"][30][3], 50.0 * float(curve.cumulative_fraction(30))), "own-tick bolus, offset 0"
+    assert np.isclose(comps["displayed_effect"][30][2], 25.0), "the forecast term stays the stored pre-meal predicted change"
+    assert np.isclose(with_dose.predict_all(dosed, horizons=(30,))[30][2], 125.0 + carb_30 - expect_30), "stored + meal - dose"
+    assert "delivered_dose_effect" not in LoopDisplayedForecaster().predict_components(dosed, horizons=(30,))
     print("displayed forecast ok")
 
 

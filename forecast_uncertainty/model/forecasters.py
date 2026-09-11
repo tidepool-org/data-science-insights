@@ -41,6 +41,15 @@ DEFAULT_INSULIN_PRESET = "rapid_acting_adult"
 LOOP_INSULIN_DELAY_MIN = 10.0      # LoopKit ExponentialInsulinModel delay
 LOOP_CARB_DELAY_MIN = 10.0         # LoopKit CarbMath default delay
 LOOP_CARB_ABSORPTION_MIN = 180.0   # Loop's default (medium) absorption time; the export carries no per-entry value
+DOSE_CHANNEL_WINDOW_MIN = 15       # user boluses delivered within this many minutes at or after a bolus-time decision are the
+                                   # dose that decision was about (interval_in_the_loop.md, problem 1)
+MEAL_CHANNEL_ENTRY_MIN = 10        # carb entries within this many minutes EITHER SIDE of a bolus-time origin are the meal that
+                                   # decision was about: the entry is saved with the bolus, 0-5 min after the glucose sample the
+                                   # origin tick is anchored on, so it usually lands in the next tick (checked 2026-09-08)
+MEAL_CHANNEL_ABSORPTION_OVERRUN = 1.5   # LoopKit CarbMath dynamic absorption: until absorption is observed, a fresh entry is forecast
+                                        # on its curve stretched to this multiple of its absorption time (the maximum absorption time);
+                                        # the bolus screen shows exactly that, so the meal channel uses it (checked against the Swift port)
+DOSE_CHANNELS = ("none", "meal")
 
 # Loop's adaptive terms, from the LoopAlgorithm Swift package (Sources/LoopAlgorithm, pinned in LoopAlgorithmToPython):
 #   GlucoseMath.momentumDataInterval / momentumDuration, linearMomentumEffect's guards and 4 mg/dL/min cap;
@@ -56,7 +65,8 @@ RETROSPECTIVE_WINDOW_MIN = 35            # combinedSums(of: 30 min × 1.01) keep
 RETROSPECTIVE_EFFECT_DURATION_MIN = 60   # StandardRetrospectiveCorrection.effectDuration: velocity decays to zero
 # Signed contribution of each named component to predicted glucose.
 COMPONENT_SIGNS = {"carb_effect": 1.0, "insulin_effect": -1.0, "momentum_effect": 1.0, "retrospective_effect": 1.0,
-                   "displayed_effect": 1.0}      # displayed_effect: Loop's exported forecast minus the origin CGM
+                   "displayed_effect": 1.0,      # displayed_effect: Loop's exported forecast minus the origin CGM
+                   "delivered_dose_effect": -1.0}  # the meal channel: the effect of the bolus delivered right after a bolus-time decision
 
 # Bateman (biexponential) insulin defaults = PalermInsulinModel in data-science-models treatment_models.py.
 BATEMAN_INSULIN_TAUS = (55.0, 70.0)
@@ -134,12 +144,13 @@ class SuperpositionForecaster:
     """Static two-curve forecast. `isf` (mg/dL per U) and `carb_ratio` (g per U) may be scalars or
     arrays aligned to the rows of the frame passed to predict_all (per-origin therapy settings)."""
 
-    def __init__(self, insulin_curve, carb_curve, isf, carb_ratio, name):
+    def __init__(self, insulin_curve, carb_curve, isf, carb_ratio, name, key):
         self.insulin_curve = insulin_curve
         self.carb_curve = carb_curve
         self.isf = isf
         self.carb_ratio = carb_ratio
-        self.name = name
+        self.name = name    # descriptive: curves and insulin preset (run_meta.json)
+        self.key = key      # the FORECAST_TERMS key, written to the residual tables' `forecaster` column
 
     @staticmethod
     def _effect_windows(event_times, amounts, curve, known_from_times, frame_times, horizons):
@@ -292,7 +303,7 @@ def loop_static_forecaster(isf, carb_ratio, insulin_preset=DEFAULT_INSULIN_PRESE
     duration, peak = LOOP_INSULIN_PRESETS[insulin_preset]
     return SuperpositionForecaster(
         LoopExponentialInsulinCurve(duration, peak), LoopPiecewiseLinearCarbCurve(carb_absorption_min),
-        isf, carb_ratio, name=f"loop_static_{insulin_preset}")
+        isf, carb_ratio, name=f"loop_static_{insulin_preset}", key="loop_static")
 
 
 def loop_full_forecaster(isf, carb_ratio, insulin_preset=DEFAULT_INSULIN_PRESET,
@@ -301,19 +312,20 @@ def loop_full_forecaster(isf, carb_ratio, insulin_preset=DEFAULT_INSULIN_PRESET,
     duration, peak = LOOP_INSULIN_PRESETS[insulin_preset]
     return LoopFullForecaster(
         LoopExponentialInsulinCurve(duration, peak), LoopPiecewiseLinearCarbCurve(carb_absorption_min),
-        isf, carb_ratio, name=f"loop_full_{insulin_preset}")
+        isf, carb_ratio, name=f"loop_full_{insulin_preset}", key="loop_full")
 
 
 def two_curve_forecaster(isf, carb_ratio, insulin_taus=BATEMAN_INSULIN_TAUS, carb_taus=BATEMAN_CARB_TAUS):
     """Biexponential (Bateman) carb + insulin curves -- the comparison forecaster."""
     return SuperpositionForecaster(BatemanCurve(*insulin_taus), BatemanCurve(*carb_taus),
-                                   isf, carb_ratio, name="two_curve_bateman")
+                                   isf, carb_ratio, name="two_curve_bateman", key="two_curve")
 
 
 class PersistenceForecaster:
     """Rung zero of the ladder: predicted glucose at every horizon equals the origin CGM. Both effect
     components are zero, so the location model's component features drop out for this forecaster."""
     name = "persistence"
+    key = "persistence"
 
     def predict_components(self, frame, horizons=HORIZONS_MIN):
         zeros = np.zeros(len(frame))
@@ -336,10 +348,82 @@ LOOP_PRESET_FORECASTERS = ("loop_static", "loop_full")     # factories that take
 
 class LoopDisplayedForecaster:
     """Loop's own forecast as the app computed it, read from the frame's displayed_forecast_<h> columns
-    (model/loop_forecasts.py attaches them from the dosing-decision export). Its single component is the
+    (model/loop_forecasts.py attaches them from the dosing-decision export). Its forecast component is the
     forecast minus the origin CGM; carb and insulin components are zero so the residual-table columns exist.
-    Origins without a decision in their tick have NaN and drop out."""
+    Origins without a decision in their tick have NaN and drop out.
+
+    Meal channel (bolus-time decisions). The stored bolus-time forecast (normalBolus / watchBolus) is Loop's forecast
+    at the moment of the decision WITHOUT the meal being entered and WITHOUT the bolus about to be given: on the export
+    its predicted change does not move with the grams entered at the decision, nor with whether a bolus followed, and
+    the reconstructed carb and bolus components get coefficients near zero (checked 2026-09-08). With
+    dose_channel="meal" the forecaster adds what Loop's bolus screen adds, through Loop's own curves and the user's
+    settings: the effect of the carb entries within MEAL_CHANNEL_ENTRY_MIN either side of the origin, from their meal
+    time (carb_effect), and the effect of the user's boluses delivered within DOSE_CHANNEL_WINDOW_MIN at or after it
+    (delivered_dose_effect):
+        predicted = cgm0 + displayed_effect + carb_effect - delivered_dose_effect,
+    so the residual is the forecast error given the meal and the dose actually given, while the location's forecast
+    term, displayed_effect_pred, stays the pre-meal predicted change, and the meal's modelled effect is a second forecast
+    term (FORECAST_TERMS["loop_displayed_meal"]) so the location may correct the carb model but never the dose. A
+    candidate dose then enters an interval the same mechanical way (titration/): stored forecast + carb effect - dose ×
+    unit effect, with the location read at the pre-meal state (interval_in_the_loop.md, problem 1)."""
     name = "loop_displayed"
+    key = "loop_displayed"
+
+    def __init__(self, isf=None, carb_ratio=None, insulin_curve=None, carb_curve=None, dose_channel="none"):
+        if dose_channel not in DOSE_CHANNELS:
+            raise ValueError(f"dose_channel must be one of {DOSE_CHANNELS}, got {dose_channel!r}")
+        if dose_channel == "meal" and any(v is None for v in (isf, carb_ratio, insulin_curve, carb_curve)):
+            raise ValueError("the meal channel needs the user's ISF and carb ratio and Loop's insulin and carb curves")
+        self.isf = isf
+        self.carb_ratio = carb_ratio
+        self.insulin_curve = insulin_curve
+        self.carb_curve = carb_curve
+        self.dose_channel = dose_channel
+        if dose_channel == "meal":
+            self.name = self.key = "loop_displayed_meal"     # its own FORECAST_TERMS: the stored change and the meal's effect
+
+    def delivered_dose_effect(self, frame, horizons):
+        """mg/dL lowered by horizon h from the user's boluses in the ticks 0 .. DOSE_CHANNEL_WINDOW_MIN after each
+        origin: Σ_δ bolus(t + δ) × ISF(t) × F(h − δ), F the curve's cumulative fraction (zero inside its delay)."""
+        n = len(frame)
+        bolus = frame["bolus_u"].fillna(0.0).to_numpy(dtype=float) if "bolus_u" in frame else np.zeros(n)
+        isf = np.broadcast_to(np.asarray(self.isf, dtype=float), (n,))
+        out = {h: np.zeros(n) for h in horizons}
+        for offset_ticks in range(DOSE_CHANNEL_WINDOW_MIN // TICK_MINUTES):
+            later = np.zeros(n)
+            later[:n - offset_ticks] = bolus[offset_ticks:]            # the bolus offset_ticks after each origin
+            for h in horizons:
+                minutes_acting = h - offset_ticks * TICK_MINUTES
+                if minutes_acting > 0:
+                    out[h] += later * isf * float(self.insulin_curve.cumulative_fraction(minutes_acting))
+        return out
+
+    def meal_carb_effect(self, frame, horizons):
+        """mg/dL raised between the origin t and t + h by the carb entries in the ticks within MEAL_CHANNEL_ENTRY_MIN either
+        side of t: Σ grams × ISF(t) / CR(t) × [G(h − m) − G(−m)], m the entry's meal time relative to t (Loop starts the
+        carb curve at the meal time; the entry tick when the frame has no meal time), G zero for negative arguments."""
+        n = len(frame)
+        grams = frame["carb_entry_g"].fillna(0.0).to_numpy(dtype=float) if "carb_entry_g" in frame else np.zeros(n)
+        origin_ns = frame["timestamp"].values.astype("datetime64[ns]").astype("int64")
+        meal_ns = (frame["carb_meal_time"].values.astype("datetime64[ns]").astype("int64") if "carb_meal_time" in frame
+                   else origin_ns.copy())
+        meal_ns = np.where(np.isnan(frame["carb_meal_time"].values.astype(float)) if "carb_meal_time" in frame else False, origin_ns, meal_ns)
+        per_gram = np.broadcast_to(np.asarray(self.isf, dtype=float), (n,)) / np.broadcast_to(np.asarray(self.carb_ratio, dtype=float), (n,))
+        out = {h: np.zeros(n) for h in horizons}
+        window_ticks = MEAL_CHANNEL_ENTRY_MIN // TICK_MINUTES
+        for k in range(-window_ticks, window_ticks + 1):                 # the entry k ticks after each origin (k < 0: before)
+            entry_grams, entry_meal_ns = np.zeros(n), origin_ns.copy()
+            if k >= 0:
+                entry_grams[:n - k] = grams[k:]
+                entry_meal_ns[:n - k] = meal_ns[k:]
+            else:
+                entry_grams[-k:] = grams[:n + k]
+                entry_meal_ns[-k:] = meal_ns[:n + k]
+            meal_offset_min = (entry_meal_ns - origin_ns) / 60e9                # meal time relative to the origin
+            already = self.carb_curve.cumulative_fraction(-meal_offset_min)     # absorbed before the origin (0 if the meal is later)
+            for h in horizons:
+                out[h] += entry_grams * per_gram * (self.carb_curve.cumulative_fraction(h - meal_offset_min) - already)
+        return out
 
     def predict_components(self, frame, horizons=HORIZONS_MIN):
         cgm0 = frame["cgm"].values.astype(float)
@@ -349,16 +433,25 @@ class LoopDisplayedForecaster:
             column = f"displayed_forecast_{h}"
             values = frame[column].values.astype(float) if column in frame else np.full(len(frame), np.nan)
             displayed[h] = values - cgm0
-        return {"carb_effect": {h: zeros.copy() for h in horizons}, "insulin_effect": {h: zeros.copy() for h in horizons},
-                "displayed_effect": displayed}
+        components = {"carb_effect": {h: zeros.copy() for h in horizons}, "insulin_effect": {h: zeros.copy() for h in horizons},
+                      "displayed_effect": displayed}
+        if self.dose_channel == "meal":
+            components["carb_effect"] = self.meal_carb_effect(frame, horizons)             # signed +1
+            components["delivered_dose_effect"] = self.delivered_dose_effect(frame, horizons)   # signed -1
+        return components
 
     def predict_all(self, frame, horizons=HORIZONS_MIN):
         return combine_components(frame["cgm"].values.astype(float), self.predict_components(frame, horizons), horizons)
 
 
-def loop_displayed_forecaster(isf=None, carb_ratio=None, **_):
-    """Same factory signature as the others; therapy settings play no part in Loop's exported forecast."""
-    return LoopDisplayedForecaster()
+def loop_displayed_forecaster(isf=None, carb_ratio=None, insulin_preset=DEFAULT_INSULIN_PRESET, dose_channel="none",
+                              carb_absorption_min=LOOP_CARB_ABSORPTION_MIN, **_):
+    """Same factory signature as the others. Therapy settings play no part in Loop's exported forecast itself;
+    the settings and Loop's curves serve only the meal channel, whose carb curve is the entry's absorption time
+    stretched by MEAL_CHANNEL_ABSORPTION_OVERRUN, as Loop's bolus screen forecasts a fresh entry."""
+    duration, peak = LOOP_INSULIN_PRESETS[insulin_preset]
+    return LoopDisplayedForecaster(isf, carb_ratio, LoopExponentialInsulinCurve(duration, peak),
+                                   LoopPiecewiseLinearCarbCurve(carb_absorption_min * MEAL_CHANNEL_ABSORPTION_OVERRUN), dose_channel)
 
 
 FORECASTER_FACTORIES["loop_displayed"] = loop_displayed_forecaster

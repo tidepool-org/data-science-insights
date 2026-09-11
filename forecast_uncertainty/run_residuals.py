@@ -3,10 +3,10 @@
 Writes everything plot_residuals.py needs into --out-dir; does no plotting itself.
 
 Run in the tidepool-data-science-simulator-dev env from this directory:
-    python run_residuals.py [--data-dir ...] [--out-dir outputs]
-    python evaluation/plot_residuals.py [--out-dir outputs]
+    python run_residuals.py --forecaster loop_displayed [--forecast-reason series|bolus_time] [--dose-channel none|meal]
+        -> outputs/runs/<run>/ (project_paths.run_dir); python evaluation/plot_residuals.py [--out-dir outputs/runs/<run>]
 
-Console output may show counts; outputs/ is git-ignored. Never copy counts into repo docs.
+Console output may show counts; outputs/ (project_paths.py) is git-ignored. Never copy counts into repo docs.
 
 Artifacts written to --out-dir:
     residuals.parquet          all users, train + holdout rows
@@ -33,13 +33,14 @@ import pandas as pd
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "behavior_model", "exploratory"))
 from build_tick_frame import build_user_frame, load_streams  # noqa: E402
-from model.forecasters import DEFAULT_INSULIN_PRESET, FORECASTER_FACTORIES, LOOP_PRESET_FORECASTERS  # noqa: E402
+from model.forecasters import DEFAULT_INSULIN_PRESET, DOSE_CHANNELS, FORECASTER_FACTORIES, LOOP_PRESET_FORECASTERS  # noqa: E402
 from model.insulin_delivery import attach_controller_insulin, load_insulin_delivery  # noqa: E402
 from model.loop_forecasts import FORECAST_REASON_SETS, attach_displayed_forecasts, load_loop_forecasts  # noqa: E402
 from model.residuals import build_residual_table  # noqa: E402
 from model.scale_model import (coverage_table, fit_scale_model, interval,  # noqa: E402
                          model_columns, standardized_quantiles)
 from model.settings import build_therapy_settings  # noqa: E402
+from project_paths import run_dir  # noqa: E402
 
 DEFAULT_DATA_DIR = os.path.join(HERE, "..", "behavior_model", "data", "behavior_traces_b")
 APPLY_TZ_OFFSET = True   # build_user_frame expects user-local times; confirm run_stage_a does not already shift
@@ -116,22 +117,9 @@ def hour_counts(per_user):
     return rows
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
-    parser.add_argument("--out-dir", default=os.path.join(HERE, "outputs"))
-    parser.add_argument("--example-user", default=None,
-                        help="_userId to keep for the trace figure (default: median tick count)")
-    parser.add_argument("--skip-plot-data", action="store_true",
-                        help="skip the per-hour stream QC and the example user's frame (figures 01-07, 17-18); "
-                             "the tables, model internals and run_meta.json are always written")
-    parser.add_argument("--forecast-reason", default="series", choices=sorted(FORECAST_REASON_SETS),
-                        help="loop_displayed only: series = the 5-min loop decisions; bolus_time = normalBolus/watchBolus decisions")
-    parser.add_argument("--forecaster", default=DEFAULT_FORECASTER, choices=sorted(FORECASTER_FACTORIES),
-                        help="loop_static = Loop's static curves; loop_full = + momentum and RC; loop_displayed = Loop's exported forecast; two_curve = Bateman; persistence")
-    args = parser.parse_args()
-    os.makedirs(args.out_dir, exist_ok=True)
-
+def build_residuals(args):
+    """Load the streams, build every user's frame and residual table, write residuals.parquet and
+    therapy_settings_used.csv; returns (residuals, settings_used, qc_rows, example, forecaster_name) for the fitting stage."""
     streams = load_streams(args.data_dir)
     basal_all, autobolus_all = load_insulin_delivery(args.data_dir)
     forecasts_all = load_loop_forecasts(args.data_dir, FORECAST_REASON_SETS[args.forecast_reason])
@@ -169,6 +157,8 @@ def main():
         carb_ratio = user_settings.carb_ratio_at(frame["timestamp"])
         if args.forecaster in LOOP_PRESET_FORECASTERS:
             forecaster = factory(isf, carb_ratio, insulin_preset=user_settings.insulin_preset)
+        elif args.forecaster == "loop_displayed":
+            forecaster = factory(isf, carb_ratio, insulin_preset=user_settings.insulin_preset, dose_channel=args.dose_channel)
         else:
             forecaster = factory(isf, carb_ratio)      # two_curve ignores the preset; persistence ignores everything
         settings_rows.append({
@@ -191,6 +181,44 @@ def main():
     residuals.to_parquet(os.path.join(args.out_dir, "residuals.parquet"), index=False)
     settings_used = pd.DataFrame(settings_rows)
     settings_used.to_csv(os.path.join(args.out_dir, "therapy_settings_used.csv"), index=False)
+    return residuals, settings_used, qc_rows, example, forecaster.name
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
+    parser.add_argument("--out-dir", default=None, help="default: outputs/runs/<run> from project_paths.run_dir(forecaster, forecast_reason, dose_channel)")
+    parser.add_argument("--example-user", default=None,
+                        help="_userId to keep for the trace figure (default: median tick count)")
+    parser.add_argument("--skip-plot-data", action="store_true",
+                        help="skip the per-hour stream QC and the example user's frame (figures 01-07, 17-18); "
+                             "the tables, model internals and run_meta.json are always written")
+    parser.add_argument("--forecast-reason", default="series", choices=sorted(FORECAST_REASON_SETS),
+                        help="loop_displayed only: series = the 5-min loop decisions; bolus_time = normalBolus/watchBolus decisions")
+    parser.add_argument("--dose-channel", default="none", choices=DOSE_CHANNELS,
+                        help="loop_displayed at bolus-time decisions: 'meal' adds to the stored (pre-meal) forecast the effect of the carbs "
+                             "entered at the decision and subtracts the effect of the bolus delivered after it, both through Loop's curves and "
+                             "the user's settings -- the mechanistic dose channel of interval_in_the_loop.md")
+    parser.add_argument("--forecaster", default=DEFAULT_FORECASTER, choices=sorted(FORECASTER_FACTORIES),
+                        help="loop_static = Loop's static curves; loop_full = + momentum and RC; loop_displayed = Loop's exported forecast; two_curve = Bateman; persistence")
+    parser.add_argument("--fit-only", action="store_true",
+                        help="resume from <out-dir>/residuals.parquet and therapy_settings_used.csv: skip the stream loading and the "
+                             "per-user residual building; refit the models and rewrite the holdout table, model internals and run_meta.json")
+    args = parser.parse_args()
+    if args.out_dir is None:
+        args.out_dir = run_dir(args.forecaster, args.forecast_reason if args.forecaster == "loop_displayed" else None,
+                               args.dose_channel if args.forecaster == "loop_displayed" else None)
+    if args.dose_channel != "none" and args.forecaster != "loop_displayed":
+        raise SystemExit("--dose-channel applies to --forecaster loop_displayed only")
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    if args.fit_only:
+        residuals = pd.read_parquet(os.path.join(args.out_dir, "residuals.parquet"))
+        settings_used = pd.read_csv(os.path.join(args.out_dir, "therapy_settings_used.csv"))
+        qc_rows, example, forecaster_name = [], ExampleTracker(None), None
+        print(f"fit only: {len(residuals):,} residual rows read from {args.out_dir}")
+    else:
+        residuals, settings_used, qc_rows, example, forecaster_name = build_residuals(args)
     print(f"\nforecaster: {args.forecaster}; therapy settings sources: "
           f"{sorted(settings_used['source'].unique().tolist())}")
     if (settings_used["source"] == "carb_ratio_proxy").any():
@@ -251,7 +279,9 @@ def main():
         "alpha": ALPHA,
         "nominal": 1.0 - ALPHA,
         "forecaster": args.forecaster,
+        "forecaster_name": forecaster_name,   # descriptive name (curves, insulin preset) of the last user's forecaster; None on --fit-only
         "forecast_reason": args.forecast_reason if args.forecaster == "loop_displayed" else None,
+        "dose_channel": args.dose_channel if args.forecaster == "loop_displayed" else None,
         "therapy_settings_sources": sorted(settings_used["source"].unique().tolist()),
         "holdout_rows_dropped_missing_features": dropped,
         "location_features": model["location_features"],

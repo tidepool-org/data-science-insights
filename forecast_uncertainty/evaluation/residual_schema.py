@@ -31,6 +31,7 @@ LADDER = [
     ("location_forecast_iob", "+ insulin on board × ISF in the location"),
     ("full", "+ level, momentum and meal-clock features (full shared set)"),
     ("location_no_insulin", "full, with the insulin terms (IOB × ISF, recent bolus) out of the location"),
+    ("location_no_insulin_channel", "the dose channel out of the location: insulin component unshrunk, dose terms out (reconstructed forecasters)"),
 ]
 
 DAY_PICK_HORIZON = 60          # horizon whose rows define a day's completeness / carb entries
@@ -42,7 +43,8 @@ TICKS_PER_DAY = 288
 # these core columns plus the forecaster's model features (see evaluation_columns), and the two id-like string
 # columns become categoricals. Never run several full loads at once.
 EVALUATION_CORE_COLUMNS = ["_userId", "forecaster", "holdout", "origin_index", "timestamp", "hour_local", "horizon_min",
-                           "cgm0", "predicted", "predicted_change", "realized", "residual", "minutes_since_carb_entry"]
+                           "cgm0", "predicted", "predicted_change", "realized", "residual",
+                           "minutes_since_carb_entry", "minutes_since_bolus", "prior_change_30"]   # the last four feed the origin states
 CATEGORY_COLUMNS = ["_userId", "forecaster"]
 
 
@@ -56,21 +58,26 @@ def table_forecaster(out_dir, name="residuals.parquet"):
 
 
 def evaluation_columns(out_dir, extra=()):
-    """Core columns plus every candidate model feature for the table's forecaster."""
-    from model.scale_model import model_features
-    return sorted(set(EVALUATION_CORE_COLUMNS) | set(model_features(table_forecaster(out_dir))) | set(extra))
+    """Core columns plus every candidate model feature for the table's forecaster, plus the derived features
+    (computed by load_table from their stored sources, which the core columns carry)."""
+    from model.scale_model import DERIVED_FEATURES, model_features
+    return sorted(set(EVALUATION_CORE_COLUMNS) | set(model_features(table_forecaster(out_dir))) | set(DERIVED_FEATURES) | set(extra))
 
 
 def load_table(out_dir, name, columns=None):
     """Read one output table; `columns` restricts the read (the memory-safe way to load the residual table)."""
+    from model.scale_model import DERIVED_FEATURES, add_derived_features, derived_source
     path = os.path.join(out_dir, name)
     if not os.path.exists(path):
         raise SystemExit(f"{path} not found -- run run_residuals.py first")
-    table = pd.read_parquet(path, columns=columns)
+    derived = [c for c in (columns or []) if c in DERIVED_FEATURES]
+    forecaster = table_forecaster(out_dir, name) if derived else ""
+    stored = None if columns is None else sorted((set(columns) - set(derived)) | {derived_source(d, forecaster) for d in derived} | ({"forecaster"} if derived else set()))
+    table = pd.read_parquet(path, columns=stored)
     for column in CATEGORY_COLUMNS:
         if column in table.columns:
             table[column] = table[column].astype("category")
-    return table
+    return add_derived_features(table, derived if columns is not None else None)
 
 
 def derive_z(df):

@@ -1,9 +1,9 @@
 """Figures for the residual / coverage backtest. Reads what run_residuals.py wrote.
 
-    python run_residuals.py         --out-dir outputs
-    python evaluation/evaluate_distribution.py --out-dir outputs      # figures 12-14
-    python evaluation/compare_models.py        --out-dir outputs      # figure 15
-    python evaluation/plot_residuals.py        --out-dir outputs [--nominal 0.95] [--only 05,16]
+    python run_residuals.py         --out-dir outputs/runs/<run>
+    python evaluation/evaluate_distribution.py --out-dir outputs/runs/<run>      # figures 12-14
+    python evaluation/compare_models.py        --out-dir outputs/runs/<run>      # figure 15
+    python evaluation/plot_residuals.py        --out-dir outputs/runs/<run> [--nominal 0.95] [--only 05,16]
 
 Required: residuals.parquet, holdout_intervals.parquet (figures 03-07, 11, 16).
 Optional: stream_hours.csv, example_frame.csv, run_meta.json (figures 01-02),
@@ -27,7 +27,8 @@ import os
 import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PROJECT_ROOT)   # run as `python evaluation/<script>.py` from anywhere
+sys.path.insert(0, PROJECT_ROOT)
+from project_paths import BOLUS_TIME_RUN, PERSISTENCE_RUN, PRIMARY_RUN  # noqa: E402   # run as `python evaluation/<script>.py` from anywhere
 import argparse
 import json
 
@@ -38,6 +39,7 @@ import matplotlib
 matplotlib.use("Agg")  # no display in the dev env
 import matplotlib.pyplot as plt  # noqa: E402
 
+from model.origin_states import INTERVENTION_STATES, STATE_LABELS, intervention_state  # noqa: E402
 from model.scale_model import GLUCOSE_FLOOR_MG_DL  # noqa: E402
 from evaluation.residual_schema import (DAY_LADDER_TABLE, HOLDOUT_TABLE, LADDER, RESIDUAL_TABLE,  # noqa: E402
                                         block_bootstrap_coverage, choose_day,
@@ -50,14 +52,19 @@ COMPARISON_NOMINAL = 0.95            # compare_models.py scores coverage_at_95 a
 PREDICTED_CHANGE_BINS = [-200, -40, -20, -10, 10, 20, 40, 200]   # mg/dL over the horizon, figure 16
 RIBBON_HORIZONS = (60, 180)                    # figure 17: one ribbon panel per horizon
 LADDER_HORIZON = 180                           # figure 19 default: one ribbon per ladder rung at this horizon
-EVENT_WINDOW_MIN = 60                          # figure 21: origins this soon after a carb entry / bolus
+# one colour per intervention state of the origin-state taxonomy (model/origin_states.py), figures 21-23
+STATE_COLOURS = {"post_carb_early": "tab:red", "post_carb_late": "tab:orange", "post_bolus_no_carb": "tab:blue", "quiet": "tab:green"}
 FAN_ORIGIN_LOCAL_HOURS = (6.5, 9.0, 13.5, 19.0)   # figure 18: origins on the ribbon day
-# model_comparison.csv coverage columns shown in figure 15's third panel: (column, legend label, marker).
+# model_comparison.csv coverage columns shown in figures 15 and 20: (column, legend label, marker). The four origin
+# states of model/origin_states.py (known at the origin, defined for every forecaster), then the forecaster-dependent
+# forecast-direction diagnostic (undefined for persistence, whose predicted change is zero).
 CONDITIONAL_COVERAGE_COLUMNS = [("coverage_at_95", "pooled", "o"),
-                                ("cov95_post_meal", "post-meal", "s"),
-                                ("cov95_other", "other", "D"),
-                                ("cov95_predicted_rise", "predicted rise", "^"),
-                                ("cov95_predicted_fall", "predicted fall", "v")]
+                                ("cov95_post_carb_early", "post-carb, 0-60 min", "s"),
+                                ("cov95_post_carb_late", "post-carb, 60-180 min", "D"),
+                                ("cov95_post_bolus_no_carb", "post-bolus, no carb", "P"),
+                                ("cov95_quiet", "quiet", "X"),
+                                ("cov95_predicted_rise", "predicted rise (forecast direction)", "^"),
+                                ("cov95_predicted_fall", "predicted fall (forecast direction)", "v")]
 
 
 def _save(fig, ctx, name):
@@ -794,24 +801,17 @@ def fig_ladder_summary(ctx):
 def fig_point_forecast_error(ctx):
     """Mean absolute error of the two POINT forecasts by horizon, no interval model involved: persistence (glucose
     stays where it is) against Loop's DISPLAYED forecast (dosingDecision.bgForecast, as the app computed it), on
-    origin sets: all origins, and within EVENT_WINDOW_MIN after a carb entry, after a bolus, after either. The bias panels show predicted − realized: positive means the forecast overshot. Needs outputs_persistence/ and outputs_loop_displayed/."""
+    origin sets: all origins and the four intervention states of the origin-state taxonomy. The bias panels show predicted − realized: positive means the forecast overshot. Needs outputs_persistence/ and outputs_loop_displayed/."""
     pers = ctx.get("persistence_residuals")
     displayed = ctx.get("loop_displayed_residuals")
     if pers is None or displayed is None:
-        return _skip("21_point_forecast_error", "outputs_persistence/ and outputs_loop_displayed/ residual tables")
+        return _skip("21_point_forecast_error", "the persistence and loop_displayed runs' residual tables")
     keys = ["_userId", "origin_index", "horizon_min"]
     state_columns = [c for c in ("minutes_since_carb_entry", "minutes_since_bolus") if c in pers.columns]
     state = pers[keys + ["residual"] + state_columns].rename(columns={"residual": "residual_pers"})
     both = state.merge(displayed[keys + ["residual"]].rename(columns={"residual": "residual_disp"}), on=keys)
-    since_carb = both["minutes_since_carb_entry"]
-    since_bolus = both["minutes_since_bolus"] if "minutes_since_bolus" in both else pd.Series(np.nan, index=both.index)
-    after_carb = (since_carb <= EVENT_WINDOW_MIN).to_numpy()
-    after_bolus = (since_bolus <= EVENT_WINDOW_MIN).to_numpy()
-    sets = [("all origins", np.ones(len(both), dtype=bool)),
-            (f"within {EVENT_WINDOW_MIN} min after a carb entry", after_carb),
-            (f"within {EVENT_WINDOW_MIN} min after a bolus", after_bolus),
-            (f"within {EVENT_WINDOW_MIN} min after either", after_carb | after_bolus)]
-    colours = ["0.5", "tab:red", "tab:blue", "tab:purple"]
+    sets = [("all origins", np.ones(len(both), dtype=bool))] + _state_sets(both)
+    colours = ["0.5"] + [STATE_COLOURS[s] for s in INTERVENTION_STATES]
     fig, axes = plt.subplots(2, 2, figsize=(12, 8.4))
 
     def draw(ax_mae, ax_bias, horizon_max, anchor_at_origin):
@@ -864,23 +864,21 @@ def fig_point_forecast_error(ctx):
     _save(fig, ctx, "21_point_forecast_error.png")
 
 
-# --- the forecast at the bolus decision (figure 22; needs outputs_loop_bolus_time/) ---------
+# --- the forecast at the bolus decision (figure 22; needs the loop_displayed_bolus_time run) ---------
 def fig_bolus_time_forecast(ctx):
     """Loop's BOLUS-TIME forecast (the normalBolus / watchBolus decisions: computed for the recommendation, with the
     carbs entered) against persistence from the same origins, by horizon: MAE, Loop's error relative to persistence
-    in percent, and bias (predicted − realized; positive = the forecast overshot). Sets: all bolus decisions; meal boluses (a carb entry within 10 min); correction boluses
-    (no carb entry in the previous three hours)."""
+    in percent, and bias (predicted − realized; positive = the forecast overshot). Sets: all bolus decisions and the four
+    intervention states at the decision (post-carb early = the meal bolus; quiet and post-bolus-no-carb = corrections)."""
     bolus = ctx.get("loop_bolus_time_residuals")
     pers = ctx.get("persistence_residuals")
     if bolus is None or pers is None:
-        return _skip("22_bolus_time_forecast", "outputs_loop_bolus_time/ and outputs_persistence/ residual tables")
+        return _skip("22_bolus_time_forecast", "the loop_displayed_bolus_time and persistence runs' residual tables")
     keys = ["_userId", "origin_index", "horizon_min"]
-    both = (bolus[keys + ["residual", "minutes_since_carb_entry", "carbs_entered_recent_g"]].rename(columns={"residual": "residual_disp"})
+    both = (bolus[keys + ["residual", "minutes_since_carb_entry", "minutes_since_bolus"]].rename(columns={"residual": "residual_disp"})
                  .merge(pers[keys + ["residual"]].rename(columns={"residual": "residual_pers"}), on=keys))
-    sets = [("all bolus decisions", np.ones(len(both), dtype=bool)),
-            ("meal bolus (carb entry within 10 min)", (both["minutes_since_carb_entry"] <= 10).to_numpy()),
-            ("correction bolus (no carbs in 3 h)", (both["carbs_entered_recent_g"] == 0).to_numpy())]
-    colours = ["0.5", "tab:red", "tab:blue"]
+    sets = [("all bolus decisions", np.ones(len(both), dtype=bool))] + _state_sets(both)
+    colours = ["0.5"] + [STATE_COLOURS[s] for s in INTERVENTION_STATES]
     fig, axes = plt.subplots(3, 1, figsize=(9, 13), sharex=True)
     for (label, mask), colour in zip(sets, colours):
         g = both[mask].groupby("horizon_min")
@@ -907,17 +905,16 @@ CORRELATION_HORIZONS = (30, 60, 180, 360)
 CORRELATION_BINS = 10                          # predicted-change quantile bins for the binned medians
 
 
+def _state_sets(table):
+    """(label, mask) per intervention state of the origin-state taxonomy: exclusive and exhaustive over the rows."""
+    since_bolus = table["minutes_since_bolus"] if "minutes_since_bolus" in table else pd.Series(np.nan, index=table.index)
+    state = intervention_state(table["minutes_since_carb_entry"], since_bolus)
+    return [(STATE_LABELS[s], (np.asarray(state) == s)) for s in INTERVENTION_STATES]
+
+
 def _origin_sets(table):
-    """Three DISJOINT origin sets from the meal clock: within EVENT_WINDOW_MIN after a carb entry; within it after a
-    bolus but with no carb entry that recent (correction-like); neither (quiet)."""
-    since_carb = table["minutes_since_carb_entry"].to_numpy()
-    since_bolus = table["minutes_since_bolus"].to_numpy() if "minutes_since_bolus" in table else np.full(len(table), np.nan)
-    after_carb = since_carb <= EVENT_WINDOW_MIN
-    after_bolus_only = (since_bolus <= EVENT_WINDOW_MIN) & ~after_carb
-    quiet = ~after_carb & ~after_bolus_only
-    return [(f"≤{EVENT_WINDOW_MIN} min after a carb entry", after_carb, "C1"),
-            (f"≤{EVENT_WINDOW_MIN} min after a bolus, no carb entry", after_bolus_only, "C2"),
-            ("neither (quiet)", quiet, "C0")]
+    """The intervention states as DISJOINT origin sets with their colours (figure 23)."""
+    return [(label, mask, STATE_COLOURS[s]) for (label, mask), s in zip(_state_sets(table), INTERVENTION_STATES)]
 
 
 def _covariance_decomposition(x, y, sets):
@@ -953,7 +950,7 @@ def fig_correlation_source(ctx):
     once mean reversion of the level, which Loop encodes through IOB, is taken out."""
     displayed = ctx.get("loop_displayed_residuals")
     if displayed is None:
-        return _skip("23_correlation_source", "outputs_loop_displayed/ residual table")
+        return _skip("23_correlation_source", "the loop_displayed run's residual table")
     needed = ["predicted_change", "residual", "horizon_min", "minutes_since_carb_entry"]
     table = displayed.dropna(subset=needed)
     horizons_all = sorted(table["horizon_min"].unique())
@@ -1040,7 +1037,7 @@ def fig_correlation_source(ctx):
         ax.plot(summary["horizon_min"], 100 * summary[f"share_{label}"], "o-", color=colour, label=label)
     ax.set_title("share of origins in each set (%)", fontsize=10); ax.set_xlabel("horizon (min)"); ax.legend(fontsize=7, frameon=False)
     fig.suptitle("Where the predicted-vs-realized correlation comes from: Loop's displayed forecast, series decisions, "
-                 "origin sets by the meal clock", y=0.995, fontsize=11)
+                 "by intervention state", y=0.995, fontsize=11)
     _save(fig, ctx, "23_correlation_source.png")
     summary.to_csv(os.path.join(ctx["fig_dir"], "23_correlation_source.csv"), index=False)
     print(summary.round(3).to_string(index=False))
@@ -1199,7 +1196,7 @@ def fig_event_fans(ctx):
     path over every clean candidate event dashed so the reader can judge whether this event's response is typical."""
     held = ctx.get("loop_displayed_holdout")
     if held is None:
-        return _skip("24_event_interval_fans", "outputs_loop_displayed/holdout_intervals.parquet")
+        return _skip("24_event_interval_fans", "the loop_displayed run's holdout_intervals.parquet")
     events = select_events(held)
     if events.empty:
         return _skip("24_event_interval_fans", "no clean carb-plus-bolus event in the holdout")
@@ -1255,7 +1252,7 @@ def fig_event_gallery(ctx):
     just before and shortly after the entry. Shows figure 24's event is not a lucky pick."""
     held = ctx.get("loop_displayed_holdout")
     if held is None:
-        return _skip("25_event_gallery", "outputs_loop_displayed/holdout_intervals.parquet")
+        return _skip("25_event_gallery", "the loop_displayed run's holdout_intervals.parquet")
     events = select_events(held)
     if events.empty:
         return _skip("25_event_gallery", "no clean carb-plus-bolus event in the holdout")
@@ -1397,7 +1394,7 @@ def load_context(args, wanted):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", default=os.path.join(PROJECT_ROOT, "outputs"))
+    parser.add_argument("--out-dir", default=PRIMARY_RUN)
     parser.add_argument("--fig-dir", default=None, help="default: <out-dir>/figures")
     parser.add_argument("--nominal", type=float, default=None,
                         help="nominal level; default reads alpha from run_meta.json (0.95)")
@@ -1410,11 +1407,11 @@ def main():
     parser.add_argument("--ladder-horizon", type=int, default=LADDER_HORIZON, help="figure 19: horizon in minutes")
     parser.add_argument("--compare-dirs", nargs="+", default=None,
                         help="figure 20: output dirs whose model_comparison.csv to overlay (default: --out-dir only)")
-    parser.add_argument("--persistence-dir", default=os.path.join(PROJECT_ROOT, "outputs_persistence"),
+    parser.add_argument("--persistence-dir", default=PERSISTENCE_RUN,
                         help="figure 21: the persistence forecaster's output directory")
-    parser.add_argument("--loop-displayed-dir", default=os.path.join(PROJECT_ROOT, "outputs_loop_displayed"),
+    parser.add_argument("--loop-displayed-dir", default=PRIMARY_RUN,
                         help="figure 21: the displayed-forecast run's output directory (optional)")
-    parser.add_argument("--loop-bolus-time-dir", default=os.path.join(PROJECT_ROOT, "outputs_loop_bolus_time"),
+    parser.add_argument("--loop-bolus-time-dir", default=BOLUS_TIME_RUN,
                         help="figure 22: the bolus-time-forecast run's output directory (optional)")
     parser.add_argument("--only", default=None,
                         help="comma-separated figure numbers, e.g. --only 05,16")

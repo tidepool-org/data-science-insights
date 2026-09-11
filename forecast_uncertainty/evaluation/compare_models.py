@@ -1,8 +1,8 @@
 """Nested location / scale specifications scored on identical rows and folds.
 
-    python run_residuals.py  --out-dir outputs
-    python evaluation/compare_models.py --out-dir outputs [--split both] [--max-train-rows 500000] [--specs a,b] [--jobs 6]
-    python evaluation/plot_residuals.py --out-dir outputs --only 15
+    python run_residuals.py  --out-dir outputs/runs/<run>
+    python evaluation/compare_models.py --out-dir outputs/runs/<run> [--split both] [--max-train-rows 500000] [--specs a,b] [--jobs 6]
+    python evaluation/plot_residuals.py --out-dir outputs/runs/<run> --only 15
 
 Each spec names a LOCATION feature subset and a SCALE feature subset of the forecaster's candidate set (its forecast
 terms + the shared state features; see specs_for); both sides use the same structure. Grouped ablations replace drop-one: collinear features removed one at a time
@@ -19,7 +19,8 @@ import os
 import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PROJECT_ROOT)   # run as `python evaluation/<script>.py` from anywhere
+sys.path.insert(0, PROJECT_ROOT)
+from project_paths import PRIMARY_RUN  # noqa: E402   # run as `python evaluation/<script>.py` from anywhere
 import argparse
 import multiprocessing
 
@@ -28,13 +29,13 @@ import pandas as pd
 
 from evaluation.evaluate_distribution import fold, fold_names, score_fold
 from evaluation.residual_schema import RESIDUAL_TABLE, load_table, evaluation_columns
+from model.origin_states import INTERVENTION_STATES, assign_origin_states, forecast_direction  # noqa: E402
 from model.scale_model import fit_scale_model, forecast_terms, forecaster_of, model_columns, model_features
 
 MEAL_FEATURES = ["carbs_recent_effect", "bolus_recent_effect"]
 MOMENTUM_FEATURES = ["prior_change_30"]
 INSULIN_FEATURES = ["iob_effect", "bolus_recent_effect"]   # the dose-magnitude terms (insulin in glucose units)
-LARGE_PREDICTED_CHANGE_MG_DL = 20.0
-POST_MEAL_MINUTES = 180
+RISE_FEATURE = "forecast_rise_pred"                          # derived: max(predicted change, 0) (scale_model.DERIVED_FEATURES)
 DEFAULT_JOBS = 2                 # folds run in parallel processes; each gets BLAS_THREADS_PER_JOB threads
 DEFAULT_MAX_TRAIN_ROWS = 400_000 # per fold; the unsampled train set (every training row × ~90 design columns) exhausts memory
 BLAS_THREADS_PER_JOB = 2
@@ -65,6 +66,17 @@ def specs_for(forecaster):
         "scale_horizon_only": (every, []),
         "scale_forecast_level": (every, terms + ["cgm0"]),
     })
+    if terms:
+        # the predicted-rise hinge (a derived feature: the positive part of the predicted change) on both sides, on the full
+        # model and on the titration spec -- for the predicted-rise under-coverage (history 2026-09-08)
+        specs["full_plus_rise"] = (every + [RISE_FEATURE], every + [RISE_FEATURE])
+        specs["location_no_insulin_plus_rise"] = (without(INSULIN_FEATURES) + [RISE_FEATURE], every + [RISE_FEATURE])
+    if "insulin_effect_pred" in terms:
+        # the whole dose channel out of the location (reconstructed forecasters only): the forecast's insulin
+        # component enters the centre at full strength (its coefficient fixed at zero) and the dose-magnitude
+        # state terms leave with it; the scale keeps everything. Against location_no_insulin, where that
+        # coefficient is free, this prices what titration gives up by holding the dose mechanistic.
+        specs["location_no_insulin_channel"] = (without(INSULIN_FEATURES + ["insulin_effect_pred"]), every)
     return {name: {"location": loc, "scale": sc} for name, (loc, sc) in specs.items()}
 
 
@@ -75,15 +87,19 @@ def spec_union(specs):
 
 
 def conditional_coverage(test_rows, pit, alpha=0.05):
-    """Coverage at 1 − alpha inside four origin states, computed from the per-row PIT."""
+    """Coverage at 1 − alpha inside each intervention state of the origin-state taxonomy (model/origin_states.py),
+    plus the forecaster-dependent forecast-direction diagnostic (NaN where a group is empty, e.g. persistence)."""
     covered = (pit >= alpha / 2) & (pit <= 1 - alpha / 2)
-    rows = test_rows.loc[pit.index]
-    post_meal = rows["minutes_since_carb_entry"] < POST_MEAL_MINUTES
-    big_rise = rows["predicted_change"] > LARGE_PREDICTED_CHANGE_MG_DL
-    big_fall = rows["predicted_change"] < -LARGE_PREDICTED_CHANGE_MG_DL
-    return {"cov95_post_meal": float(covered[post_meal].mean()), "cov95_other": float(covered[~post_meal].mean()),
-            "cov95_predicted_rise": float(covered[big_rise].mean()) if big_rise.any() else np.nan,
-            "cov95_predicted_fall": float(covered[big_fall].mean()) if big_fall.any() else np.nan}
+    rows = assign_origin_states(test_rows.loc[pit.index])
+    out = {}
+    for state in INTERVENTION_STATES:
+        inside = (rows["intervention_state"] == state).to_numpy()
+        out[f"cov95_{state}"] = float(covered[inside].mean()) if inside.any() else np.nan
+    direction = forecast_direction(rows["predicted_change"])
+    for name in ("predicted_rise", "predicted_fall"):
+        inside = (direction == name)
+        out[f"cov95_{name}"] = float(covered[inside].mean()) if inside.any() else np.nan
+    return out
 
 
 def run_fold(task):
@@ -98,9 +114,17 @@ def run_fold(task):
         del residuals
         if max_train_rows and len(train) > max_train_rows:
             train = train.sample(max_train_rows, random_state=0)
-        rows = []
+        rows, param_rows = [], []
         for spec in wanted:
-            model = fit_scale_model(train, location_features=specs[spec]["location"], scale_features=specs[spec]["scale"])
+            try:
+                model = fit_scale_model(train, location_features=specs[spec]["location"], scale_features=specs[spec]["scale"])
+            except (np.linalg.LinAlgError, ValueError) as error:       # one spec's numerical failure must not sink the fold
+                print(f"  {split}/{name}: {spec} FAILED ({error}); recorded as NaN", flush=True)
+                rows.append({"split": split, "fold": name, "spec": spec, "n_params": np.nan, "coverage_at_95": np.nan, "crps": np.nan,
+                             "error": str(error)})
+                continue
+            param_rows.extend({"split": split, "fold": name, "spec": spec, "term": term, "coef": float(coef)}
+                              for term, coef in model["location_fit"].params.items())
             scored, curve, _, pit = score_fold(model, test, columns=spec_union(specs))
             if scored is None:
                 continue
@@ -108,15 +132,15 @@ def run_fold(task):
             rows.append({"split": split, "fold": name, "spec": spec,
                          "n_params": int(model["location_fit"].params.size + model["scale_fit"].params.size),
                          "coverage_at_95": float(at95), **conditional_coverage(test, pit), **scored})
-        best = min(rows, key=lambda r: r["crps"])
+        best = min((r for r in rows if np.isfinite(r.get("crps", np.nan))), key=lambda r: r["crps"], default={"spec": "none", "crps": np.nan, "n_params": 0})
         print(f"  {split}/{name}: best CRPS = {best['spec']} ({best['crps']:.3f}, {best['n_params']} params)", flush=True)
-        return rows
-    return []
+        return rows, param_rows
+    return [], []
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", default=os.path.join(PROJECT_ROOT, "outputs"))
+    parser.add_argument("--out-dir", default=PRIMARY_RUN)
     parser.add_argument("--split", default="both", choices=["temporal", "louo", "both"])
     parser.add_argument("--max-train-rows", type=int, default=DEFAULT_MAX_TRAIN_ROWS,
                         help="subsample train rows per fold; the scale-model design matrix scales with this")
@@ -147,10 +171,14 @@ def main():
             results = pool.map(run_fold, tasks)
     else:
         results = [run_fold(task) for task in tasks]
-    rows = [row for fold_rows in results for row in fold_rows]
+    rows = [row for fold_rows, _ in results for row in fold_rows]
+    param_rows = [row for _, fold_params in results for row in fold_params]
 
     table = pd.DataFrame(rows)
     table.to_csv(os.path.join(args.out_dir, args.output), index=False)
+    # every location coefficient of every spec and fold (long form), beside the comparison table
+    stem, _ = os.path.splitext(args.output)
+    pd.DataFrame(param_rows).to_csv(os.path.join(args.out_dir, f"{stem}_location_params.csv"), index=False)
     for split in splits:
         sub = table[table["split"] == split]
         if sub.empty:
@@ -158,7 +186,7 @@ def main():
         summary = (sub.groupby("spec")
                    .agg(n_params=("n_params", "median"), crps=("crps", "median"), pit_ks=("pit_ks", "median"),
                         pit_mean=("pit_mean", "median"), cov95=("coverage_at_95", "median"),
-                        cov95_post_meal=("cov95_post_meal", "median"), cov95_other=("cov95_other", "median"),
+                        **{f"cov95_{s}": (f"cov95_{s}", "median") for s in INTERVENTION_STATES},
                         cov95_rise=("cov95_predicted_rise", "median"), cov95_fall=("cov95_predicted_fall", "median"))
                    .reindex([s for s in wanted if s in set(sub["spec"])]))
         if "full" in summary.index:

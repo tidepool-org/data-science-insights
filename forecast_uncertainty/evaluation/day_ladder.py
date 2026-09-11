@@ -1,7 +1,7 @@
 """Fit every ladder rung and draw its interval on ONE real holdout day (inputs for figure 19).
 
-    python run_residuals.py      --out-dir outputs
-    python evaluation/day_ladder.py --out-dir outputs [--ribbon-user u...] [--ribbon-date YYYY-MM-DD] [--max-train-rows 400000]
+    python run_residuals.py      --out-dir outputs/runs/<run>
+    python evaluation/day_ladder.py --out-dir outputs/runs/<run> [--ribbon-user u...] [--ribbon-date YYYY-MM-DD] [--max-train-rows 400000]
     python evaluation/plot_residuals.py --only 19
 
 The ladder (residual_schema.LADDER) goes from per-horizon constants to the full location + scale model. Each
@@ -19,6 +19,7 @@ import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
+from project_paths import PRIMARY_RUN  # noqa: E402
 
 import pandas as pd  # noqa: E402
 
@@ -47,7 +48,7 @@ def fit_rung(task):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", default=os.path.join(PROJECT_ROOT, "outputs"))
+    parser.add_argument("--out-dir", default=PRIMARY_RUN)
     parser.add_argument("--ribbon-user", default=None)
     parser.add_argument("--ribbon-date", default=None)
     parser.add_argument("--max-train-rows", type=int, default=400_000)

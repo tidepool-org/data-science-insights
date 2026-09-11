@@ -9,9 +9,12 @@ user's boluses alone, which is the pre-2026-09-04 behaviour; run_residuals.py pr
 Net basal per tick: for each user-day, one stream is used (HealthKit when it has rows that day, else Loop-direct).
 Delivered units per segment are rate × effective duration for HealthKit (effective = min(duration, gap to the next
 segment), as in no_meal_announcement's TDD calculation) and payload.deliveredUnits for Loop-direct. Scheduled units
-are the suppressed scheduled rate × the same duration; 'scheduled' segments are net zero by definition, and a
-temp segment without a scheduled rate is treated as net zero rather than as a full dose. The net units of each
-segment are spread over the 5-min ticks it overlaps in proportion to overlap. Negative values mean below schedule.
+are the suppressed scheduled rate × the same duration; 'scheduled' segments are net zero by definition. A temp segment
+without a scheduled rate takes the user's nearest-in-time scheduled rate (the schedule changes slowly): those segments
+are mostly zero-rate suspends whose `suppressed` field the upload dropped, and counting them as net zero instead of as
+withheld basal left the reconstructed IOB a quarter unit above Loop's, most for the users with the most such segments
+(2026-09-08). The net units of each segment are spread over the 5-min ticks it overlaps in proportion to overlap.
+Negative values mean below schedule.
 """
 import os
 
@@ -67,10 +70,10 @@ def net_basal_units_per_tick(user_basal, tick_times):
                          seg["delivered_units"].to_numpy(dtype=float),
                          seg["rate_u_per_h"].to_numpy(dtype=float) * hours)
     delivered = np.where(np.isnan(delivered), seg["rate_u_per_h"].to_numpy(dtype=float) * hours, delivered)
-    scheduled_rate = seg["scheduled_rate_u_per_h"].to_numpy(dtype=float)
+    scheduled_rate = seg["scheduled_rate_u_per_h"].ffill().bfill().to_numpy(dtype=float)   # nearest known schedule for segments without one
     is_scheduled = seg["delivery_type"].to_numpy() == "scheduled"
     scheduled = np.where(is_scheduled, delivered, scheduled_rate * hours)
-    net = np.where(np.isnan(scheduled) | np.isnan(delivered), 0.0, delivered - scheduled)
+    net = np.where(np.isnan(scheduled) | np.isnan(delivered), 0.0, delivered - scheduled)   # no schedule anywhere: net zero
 
     tick_ns = TICK_MINUTES * 60 * 1_000_000_000
     t0 = tick_times[0].value

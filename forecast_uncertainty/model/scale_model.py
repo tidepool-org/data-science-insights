@@ -29,8 +29,35 @@ FORECAST_TERMS = {
     "two_curve": ["carb_effect_pred", "insulin_effect_pred"],
     "loop_full": ["carb_effect_pred", "insulin_effect_pred", "momentum_effect_pred", "retrospective_effect_pred"],
     "loop_displayed": ["displayed_effect_pred"],                 # Loop's exported forecast minus the origin CGM
+    "loop_displayed_meal": ["displayed_effect_pred", "carb_effect_pred"],   # the meal channel: stored change + the meal's modelled effect
     "persistence": [],                                            # no forecast term: predicted change is zero
 }
+
+
+# DERIVED features: deterministic functions of stored columns, computed where a table is loaded (residual_schema.load_table)
+# so no table needs rebuilding. forecast_rise_pred = the positive part of the FORECAST TERM's predicted change: a hinge that
+# lets the location correct large predicted rises more than proportionally and the scale widen for them (the predicted-rise
+# under-coverage, history 2026-09-08). Its source is the forecast term Loop's displayed forecast supplies where there is one
+# (`displayed_effect_pred`, the stored predicted change -- for the meal channel that is the PRE-meal change, so a candidate
+# dose never passes through the hinge) and the full predicted change otherwise; on the series table the two coincide.
+DERIVED_FEATURES = {"forecast_rise_pred": (("displayed_effect_pred", "predicted_change"), lambda x: np.maximum(np.asarray(x, dtype=float), 0.0))}
+
+
+def derived_source(name, table_or_forecaster):
+    """The stored column a derived feature reads for this table (or forecaster key)."""
+    displayed_source, other_source = DERIVED_FEATURES[name][0]
+    key = table_or_forecaster if isinstance(table_or_forecaster, str) else (forecaster_of(table_or_forecaster) if "forecaster" in table_or_forecaster else "")
+    return displayed_source if key.startswith("loop_displayed") else other_source
+
+
+def add_derived_features(table, names=None):
+    """Add the derived feature columns (all, or `names`) whose source column the table carries; returns the table."""
+    for name in (names if names is not None else DERIVED_FEATURES):
+        if name in DERIVED_FEATURES and name not in table.columns:
+            source, function = derived_source(name, table), DERIVED_FEATURES[name][1]
+            if source in table.columns:
+                table[name] = function(table[source])
+    return table
 
 
 def forecaster_of(table):
@@ -49,8 +76,11 @@ def model_features(forecaster):
 
 HOUR_TERMS = "np.sin(2*np.pi*hour_local/24) + np.cos(2*np.pi*hour_local/24)"
 LOCATION_QUANTILE = 0.5
-LOCATION_FIT_THIN_TICKS = 12     # median regression is IRLS: fit on every 12th origin (hourly), predict on all
-LOCATION_MAX_ITER = 300          # IRLS oscillates on near-collinear designs; 300 iterations bound the cost
+LOCATION_FIT_THIN_TICKS = 12     # median regression is IRLS: fit on every 12th origin (hourly), predict on all -- only when the
+                                 # origins are dense; a table of sparse origins (bolus-time decisions) is used whole
+LOCATION_MAX_ITER = 1000         # IRLS on a 400k-row fold converges in about 500 iterations (probe 2026-09-08: 300 hit the cap and
+                                 # left coefficients up to 0.06 off; 1000 converges at +2 s per fit), so the cap is no longer binding
+LOCATION_MAX_ITER_FALLBACK = 300 # if IRLS diverges under the high cap (an SVD failure on one full-Loop fold, 2026-09-08), refit at the old cap
 LOCATION_P_TOL = 1e-4            # parameter tolerance: changes below 1e-4 mg/dL per unit are immaterial
 FLOOR_MG_DL = 1.0                # floor on |deviation| before the log
 GLUCOSE_FLOOR_MG_DL = 40.0       # lower bounds are clipped here: CGM never reads below it, so coverage is unaffected
@@ -73,11 +103,26 @@ def model_columns(location_features, scale_features):
     return sorted(set(location_features) | set(scale_features) | {"residual", "predicted", "horizon_min", "hour_local"})
 
 
+def origins_are_dense(rows):
+    """True when consecutive origins in the table sit closer than the thinning step (the 5-min series); a table of
+    sparse origins, like the bolus-time decisions, would lose most of its information to thinning."""
+    if "origin_index" not in rows or "_userId" not in rows:
+        return True
+    spacing = (rows.drop_duplicates(["_userId", "origin_index"]).sort_values(["_userId", "origin_index"])
+                   .groupby("_userId", observed=True)["origin_index"].diff().dropna())
+    return bool(spacing.empty or spacing.median() < LOCATION_FIT_THIN_TICKS)
+
+
 def fit_location_model(rows, features, interact_with_horizon=True):
-    """m(x, h) by median regression on a thinned origin grid (cheaper, and less autocorrelated)."""
-    thinned = rows[rows["origin_index"] % LOCATION_FIT_THIN_TICKS == 0] if "origin_index" in rows else rows
+    """m(x, h) by median regression on a thinned origin grid when the origins are dense (cheaper, and less
+    autocorrelated), on every row when they are sparse."""
+    thinned = rows[rows["origin_index"] % LOCATION_FIT_THIN_TICKS == 0] if origins_are_dense(rows) else rows
     formula = build_formula("residual", features, interact_with_horizon)
-    return smf.quantreg(formula, data=thinned).fit(q=LOCATION_QUANTILE, max_iter=LOCATION_MAX_ITER, p_tol=LOCATION_P_TOL)
+    try:
+        return smf.quantreg(formula, data=thinned).fit(q=LOCATION_QUANTILE, max_iter=LOCATION_MAX_ITER, p_tol=LOCATION_P_TOL)
+    except np.linalg.LinAlgError:
+        print(f"  location fit: IRLS diverged at {LOCATION_MAX_ITER} iterations; refitting at {LOCATION_MAX_ITER_FALLBACK}", flush=True)
+        return smf.quantreg(formula, data=thinned).fit(q=LOCATION_QUANTILE, max_iter=LOCATION_MAX_ITER_FALLBACK, p_tol=LOCATION_P_TOL)
 
 
 def fit_scale_model(table, location_features=None, scale_features=None, location_interaction=True,
@@ -109,6 +154,21 @@ def centre_and_scale(model, rows, scale_multiplier=1.0, bias_shift=0.0):
 def standardized_quantiles(model, alpha=0.05):
     grouped = model["standardized"].groupby("horizon_min")["standardized"]
     return pd.DataFrame({"q_lo": grouped.quantile(alpha / 2), "q_hi": grouped.quantile(1 - alpha / 2)})
+
+
+# One-sided FLOOR levels for a dosing gate: at level L the floor is the (1 - L) quantile of the standardized deviation,
+# so L = 0.5 is the calibrated centre (Loop's own rule applied to the debiased forecast), 0.975 is the lower edge of the
+# two-sided 95% band (the gate as first built), and the rest are risk tolerances in between.
+FLOOR_LEVELS = (0.5, 0.8, 0.9, 0.95, 0.975)
+
+
+def floor_column(level):
+    return f"floor_q_{level:g}"
+
+
+def standardized_floor_quantiles(model, levels=FLOOR_LEVELS):
+    grouped = model["standardized"].groupby("horizon_min")["standardized"]
+    return pd.DataFrame({floor_column(level): grouped.quantile(1 - level) for level in levels})
 
 
 def interval(model, table, alpha=0.05, scale_multiplier=1.0, bias_shift=0.0):

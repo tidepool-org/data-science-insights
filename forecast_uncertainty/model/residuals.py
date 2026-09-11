@@ -9,7 +9,7 @@ predicted_change = their signed sum), realized, residual.
 """
 import numpy as np
 import pandas as pd
-from model.forecasters import COMPONENT_SIGNS, HORIZONS_MIN, TICK_MINUTES, combine_components
+from model.forecasters import COMPONENT_SIGNS, DOSE_CHANNEL_WINDOW_MIN, HORIZONS_MIN, MEAL_CHANNEL_ENTRY_MIN, TICK_MINUTES, combine_components
 
 RECENT_WINDOW_MIN = 180            # window for recent carbs / boluses; also the cap on minutes since carb entry
 FRESH_RESIDUAL_HORIZON_MIN = 30    # the shortest-horizon forecast whose outcome is already known at the origin
@@ -65,6 +65,16 @@ def build_residual_table(frame, forecaster, isf, carb_ratio, horizons=HORIZONS_M
     entry_tick = pd.Series(np.where(frame["carb_entry_g"].fillna(0).values > 0, np.arange(n), np.nan)).ffill().values
     minutes_since_entry = (np.arange(n) - entry_tick) * TICK_MINUTES
     state["minutes_since_carb_entry"] = minutes_since_entry
+    # The user's boluses delivered in the ticks 0 .. DOSE_CHANNEL_WINDOW_MIN after the origin: the dose a decision's
+    # forecast did not include (the delivered dose channel conditions on it). Diagnostic column, not a model feature.
+    bolus_units = frame["bolus_u"].fillna(0).values.astype(float)
+    window_ticks = DOSE_CHANNEL_WINDOW_MIN // TICK_MINUTES
+    state["bolus_window_u"] = sum(np.concatenate([bolus_units[k:], np.zeros(k)]) for k in range(window_ticks))
+    # ... and the grams entered within MEAL_CHANNEL_ENTRY_MIN either side of the origin (the meal channel's meal). Diagnostic.
+    grams = frame["carb_entry_g"].fillna(0).values.astype(float)
+    meal_ticks = MEAL_CHANNEL_ENTRY_MIN // TICK_MINUTES
+    state["carb_window_g"] = sum(np.concatenate([grams[k:], np.zeros(k)]) if k >= 0 else np.concatenate([np.zeros(-k), grams[:k]])
+                                 for k in range(-meal_ticks, meal_ticks + 1))
     bolus_tick = pd.Series(np.where(frame["bolus_u"].fillna(0).values > 0, np.arange(n), np.nan)).ffill().values
     state["minutes_since_bolus"] = (np.arange(n) - bolus_tick) * TICK_MINUTES      # user boluses only; NaN before the first
     # Capped version for modelling: no entry yet, or an entry older than the window, both mean "not recent".
@@ -85,5 +95,5 @@ def build_residual_table(frame, forecaster, isf, carb_ratio, horizons=HORIZONS_M
         part["residual"] = part["realized"] - part["predicted"]
         parts.append(part)
     table = pd.concat(parts, ignore_index=True)
-    table["forecaster"] = forecaster.name
+    table["forecaster"] = forecaster.key     # the FORECAST_TERMS key, not the descriptive name (scale_model.forecaster_of)
     return table.dropna(subset=["predicted", "realized"]).reset_index(drop=True)

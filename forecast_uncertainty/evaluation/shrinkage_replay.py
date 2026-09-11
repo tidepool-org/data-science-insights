@@ -1,7 +1,7 @@
 """Per-user shrinkage, cold-start replay under leave-one-user-out.
 
-    python run_residuals.py    --out-dir outputs
-    python evaluation/shrinkage_replay.py --out-dir outputs [--max-train-rows 400000] [--half-life-days 21]
+    python run_residuals.py    --out-dir outputs/runs/<run>
+    python evaluation/shrinkage_replay.py --out-dir outputs/runs/<run> [--max-train-rows 400000] [--half-life-days 21]
 
 Question: starting a NEW user on the population interval, how fast and how far does learning a per-user
 offset and scale multiplier from their own residuals improve calibration?
@@ -26,7 +26,8 @@ import os
 import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PROJECT_ROOT)   # run as `python evaluation/<script>.py` from anywhere
+sys.path.insert(0, PROJECT_ROOT)
+from project_paths import PRIMARY_RUN  # noqa: E402   # run as `python evaluation/<script>.py` from anywhere
 import argparse
 
 import numpy as np
@@ -137,7 +138,7 @@ def weekly_metrics(user_id, variant, horizons, n_ticks, covered, width, pit):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", default=os.path.join(PROJECT_ROOT, "outputs"))
+    parser.add_argument("--out-dir", default=PRIMARY_RUN)
     parser.add_argument("--max-train-rows", type=int, default=400_000)
     parser.add_argument("--half-life-days", type=float, default=HALF_LIFE_DAYS)
     parser.add_argument("--trace-user", default=None)

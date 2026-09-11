@@ -15,7 +15,7 @@ Per loop decision (a 5-min series decision in the holdout with a displayed forec
 Outputs (in --out-dir): decision_intervals_summary.csv (shares and rates by decision class; no counts),
 decision_intervals_calibration.csv (hypo rate by lower-bound bin), figures/26_decision_intervals.png.
 
-Run from the project root:  python evaluation/decision_intervals.py --out-dir outputs_loop_displayed
+Run from the project root:  python evaluation/decision_intervals.py --out-dir outputs/runs/loop_displayed
 Memory: one process; the holdout table (~1 GB) plus ten small tick frames.
 """
 import argparse
@@ -28,10 +28,12 @@ import pandas as pd
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, PROJECT_ROOT)
+from project_paths import PRIMARY_RUN  # noqa: E402
 import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
+from model.origin_states import INTERVENTION_STATES, STATE_LABELS, assign_origin_states  # noqa: E402
 from evaluation.residual_schema import HOLDOUT_TABLE, load_table  # noqa: E402
 from run_residuals import DEFAULT_DATA_DIR, build_user_frame, load_streams, user_streams  # noqa: E402
 
@@ -44,7 +46,7 @@ LOWER_BOUND_BINS = np.arange(30, 200, 10)  # calibration bins for the minimum lo
 RECOMMENDED_BOLUS_BINS = [0, 1e-9, 0.5, 1.5, np.inf]
 RECOMMENDED_BOLUS_LABELS = ["none recommended", "≤ 0.5 U", "0.5–1.5 U", "> 1.5 U"]
 HOLDOUT_COLUMNS = ["_userId", "origin_index", "timestamp", "horizon_min", "cgm0", "iob0", "predicted", "centre",
-                   "lower", "upper", "realized", "minutes_since_carb_entry"]
+                   "lower", "upper", "realized", "minutes_since_carb_entry", "minutes_since_bolus", "prior_change_30"]
 
 
 def auc(score, outcome):
@@ -75,6 +77,7 @@ def decisions_with_intervals(held, data_dir):
     per_origin = (window.groupby(["_userId", "origin_index"], observed=True)
                   .agg(timestamp=("timestamp", "first"), cgm0=("cgm0", "first"), iob0=("iob0", "first"),
                        minutes_since_carb_entry=("minutes_since_carb_entry", "first"),
+                       minutes_since_bolus=("minutes_since_bolus", "first"), prior_change_30=("prior_change_30", "first"),
                        loop_min_forecast=("predicted", "min"), min_lower=("lower", "min"), min_centre=("centre", "min"),
                        n_horizons=("horizon_min", "size"))
                   .reset_index())
@@ -98,6 +101,7 @@ def decisions_with_intervals(held, data_dir):
     table = table.dropna(subset=["recommended_bolus", "realized_min", "min_lower"])
     table["decision"] = pd.cut(table["recommended_bolus"], RECOMMENDED_BOLUS_BINS, labels=RECOMMENDED_BOLUS_LABELS, right=True, include_lowest=True)
     table["insulin_recommended"] = table["recommended_bolus"] > 0
+    table = assign_origin_states(table)                 # the project's origin states (model/origin_states.py)
     table["hypo"] = table["realized_min"] < HYPO_MG_DL
     table["severe_hypo"] = table["realized_min"] < SEVERE_HYPO_MG_DL
     return table
@@ -108,6 +112,9 @@ def summarize(table):
     groups = [("all decisions", table), ("insulin recommended", table[table["insulin_recommended"]]),
               ("none recommended", table[~table["insulin_recommended"]])]
     groups += [(f"recommended {label}", table[table["decision"] == label]) for label in RECOMMENDED_BOLUS_LABELS[1:]]
+    recommended = table[table["insulin_recommended"]]
+    groups += [(f"insulin recommended, {STATE_LABELS[state]}", recommended[recommended["intervention_state"] == state])
+               for state in INTERVENTION_STATES]
     for name, g in groups:
         if g.empty:
             continue
@@ -194,7 +201,7 @@ def figure(table, summary, calib, fig_dir):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", default=os.path.join(PROJECT_ROOT, "outputs_loop_displayed"))
+    parser.add_argument("--out-dir", default=PRIMARY_RUN)
     parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
     parser.add_argument("--fig-dir", default=None)
     args = parser.parse_args()

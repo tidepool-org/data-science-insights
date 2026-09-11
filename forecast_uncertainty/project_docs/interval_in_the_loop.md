@@ -1,4 +1,4 @@
-# Factoring the prediction interval into Loop — design note (2026-09-06)
+# Factoring the prediction interval into Loop — design note (2026-09-06; Level C built 2026-09-08)
 
 The question (user): once we have a state-dependent prediction interval on Loop's forecast, how does it enter dosing?
 Two asks, in the order they can be answered: (1) what is the interval for the doses Loop actually decides — how often
@@ -51,19 +51,61 @@ must be solved before that number means what it says.
 
 ## Where titration would live
 
-The bolus-time decision (`normalBolus` / `watchBolus`) is the natural origin: Loop computes the recommendation from
-that forecast with the carbs entered, and our interval on it is exactly "the interval for the dose Loop decides".
-`decision_intervals.py --out-dir outputs_loop_bolus_time` gives Level A at those origins: the same picture as at the series decisions — floor below 70 at 38% of insulin-recommended bolus decisions, hypo rate 19% when below against 6% when not, AUC 0.69 for the floor against 0.64 for Loop's own minimum. Extrapolation of the log-linear scale with bolus size is mild on real boluses (60-min scale 21.5 → 24 mg/dL from ≤ 0.5 U to > 6 U), but a dose sweep moves exactly that term, which is why problem 1 comes first.
+The bolus-time decision (`normalBolus` / `watchBolus`) is the natural origin. What Loop STORES at that decision is its
+forecast at that moment WITHOUT the meal being entered and WITHOUT the bolus about to be given (established 2026-09-08:
+on the export the stored predicted change does not move with the grams entered or with whether a bolus followed, and
+the reconstructed carb and bolus components get coefficients near zero; the carb entry saved with the bolus lands 0-5
+min after the glucose sample the decision is anchored on, i.e. usually in the next tick). Level A's bolus-time reading
+therefore rests on an interval whose location absorbed the typical outcome of the meal and its bolus; it stands as a
+description of where the floor sat when Loop decided. Titration needs the meal and the dose made explicit instead
+(the meal channel, below).
+`decision_intervals.py --out-dir outputs/runs/loop_displayed_bolus_time` gives Level A at those origins: the same picture as at the series decisions — floor below 70 at 38% of insulin-recommended bolus decisions, hypo rate 19% when below against 6% when not, AUC 0.69 for the floor against 0.64 for Loop's own minimum. Extrapolation of the log-linear scale with bolus size is mild on real boluses (60-min scale 21.5 → 24 mg/dL from ≤ 0.5 U to > 6 U), but a dose sweep moves exactly that term, which is why problem 1 comes first.
+
+## The interval as the application factor (2026-09-08, the user's original intent)
+
+Loop hedges every automatic bolus with a fixed factor of the recommended correction. The interval offers a state-dependent
+factor: deliver the largest share of the correction whose calibrated floor stays above the line. Where the forecast has
+been reliable in states like the present one, that is the full correction; where it has not, less. On real decisions the
+floor holds back at a small minority of decisions that carry three to four times the hypoglycaemia rate and would deliver
+substantially more insulin at the rest (history 2026-09-08); the simulator's `autobolus floor[R]` and `coherent[R]` arms
+test whether that is safe against the full-correction and shipped references. First grid (2026-09-08): the full correction every
+cycle is catastrophic (hypo share 0.51 vs 0.11); the floor policies deliver 15–29% more automatic insulin with fewer minutes
+above 180, lows unchanged and total insulin unchanged — better in the weak sense, on one physiology with announced meals. Population grid (2026-09-09; three physiologies, noisy and ideal
+sensor, unannounced intake): weakly dominant everywhere — lows never worse, 5–9 more minutes in range per six hours, 2–8 fewer
+above 180; the coherent rule also trims lows (−17% minutes < 70; the sensitive patient's hypo share 0.10 → 0.07).
+
+## What "better than the current policy" means (2026-09-08)
+
+Loop's rule is itself a floor rule on the point forecast. A calibrated gate is better if it reduces the hypoglycaemia that
+follows meal boluses without giving up time in range at equal or less insulin. That splits into discrimination (does the
+rule reduce the dose on the meals that go low and not on the others — answerable on real data; today weak, see history)
+and effect (does the smaller dose prevent the low without a high — answerable only in the simulator or a causal model).
+Inside an autobolus loop a meal-bolus gate alone has no effect at any level because the controller re-delivers the withheld
+insulin; the policy to test is the same rule at every dosing decision, or the advisor role with automatic dosing off.
 
 ## Program
 
 1. Level A at series and bolus-time decisions — done 2026-09-06.
-2. Mechanistic-dose interval: `loop_full` with controller insulin (needs `export_insulin_delivery.py` run), location
-   without dose-magnitude features, scale with them; check the dose channel against the observational one. (2026-09-07:
-   the location without the dose-magnitude terms — `location_no_insulin` — costs at most 0.4% CRPS on either forecaster
-   with coverage unchanged, so this half is settled; what remains is splitting the forecast term's shrinkage into its insulin and carb parts.)
+2. Mechanistic-dose interval — built 2026-09-08 as the MEAL CHANNEL on Loop's displayed bolus-time forecast, which needs
+   no controller-insulin export: predicted = stored (pre-meal) forecast + the entered carbs' effect − the delivered bolus's
+   effect, both through Loop's own curves and the user's settings (the carb curve stretched to 1.5 × the absorption time,
+   as Loop's bolus screen forecasts a fresh entry under dynamic absorption; verified against the Swift port). The location
+   reads the stored predicted change and the meal's modelled effect as its forecast terms (`FORECAST_TERMS["loop_displayed_meal"]`)
+   and, in the `location_no_insulin` spec, no dose-magnitude term, so a candidate dose passes through no fitted coefficient;
+   the location may correct the carb model but never the dose. (2026-09-07: dropping the dose-magnitude terms from the
+   location costs at most 0.4% CRPS with coverage unchanged.) The reconstructed forecaster with controller insulin remains
+   the diagnostic for how much of the location's shrinkage of Loop's whole forecast falls on the insulin component: the
+   `location_no_insulin_channel` spec fixes that component's coefficient at zero and prices what titration gives up by
+   holding the dose mechanistic.
 3. Descriptive dose sweep at holdout carb entries: the largest dose with floor ≥ 70 vs the dose Loop recommended vs
-   the realized minimum; no causal reading, a first look at how often the rule would have bound.
-4. Simulator validation (tidepool-data-science-simulator with the Swift LoopAlgorithm port): coverage of the
-   calibrated interval under counterfactual doses, then the rule's hypo and time-in-range trade-off with known truth.
+   the realized minimum; no causal reading, a first look at how often the rule would have bound. (Pending; the
+   machinery is `titration/interval_bundle.py` on the meal-channel bundle.)
+4. Simulator validation — built 2026-09-08 (`titration/`): `FloorGatedSwiftLoopController` wraps the simulator's Swift
+   Loop; at a carb entry it takes Loop's forecast without the entry (the analogue of the stored bolus-time forecast),
+   adds the meal and subtracts a candidate dose through the same curves as the real-data fit, reads the exported interval
+   bundle at the pre-meal state, and applies min(Loop's recommendation, the largest dose whose 95% floor stays ≥ 70 over
+   180 min). `run_titration.py` runs the shipped and gated arms and forced multiples of the recommendation over a grid
+   of meals, entry errors, ISF setting errors and starting glucose on a virtual patient whose truth is Palerm insulin and
+   Cescon carbs, and reports hypoglycemia, time in range, insulin and the interval's coverage under doses Loop would not
+   have given. Results in project_history.md.
 5. Path-wise level for the floor rule via the adaptive level; per-user layer after the intervention picture is settled.

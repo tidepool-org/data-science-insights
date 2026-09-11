@@ -1,7 +1,7 @@
 """Step 2: online adaptation of the interval level on the holdout stream, lumped vs per-horizon.
 
-    python run_residuals.py   --out-dir outputs
-    python evaluation/adaptive_level.py --out-dir outputs [--gammas 0.002,0.005,0.01]
+    python run_residuals.py   --out-dir outputs/runs/<run>
+    python evaluation/adaptive_level.py --out-dir outputs/runs/<run> [--gammas 0.002,0.005,0.01]
 
 The location and scale models stay fixed (fit on the training part of each user's window). What adapts
 is the miscoverage level alpha used to read the standardized quantiles, following adaptive conformal
@@ -27,7 +27,8 @@ import os
 import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PROJECT_ROOT)   # run as `python evaluation/<script>.py` from anywhere
+sys.path.insert(0, PROJECT_ROOT)
+from project_paths import PRIMARY_RUN  # noqa: E402   # run as `python evaluation/<script>.py` from anywhere
 import argparse
 
 import numpy as np
@@ -143,7 +144,7 @@ def summarize(user_id, variant, gamma, horizons, arrays, covered, width, alpha_t
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", default=os.path.join(PROJECT_ROOT, "outputs"))
+    parser.add_argument("--out-dir", default=PRIMARY_RUN)
     parser.add_argument("--gammas", default=",".join(str(g) for g in GAMMAS))
     parser.add_argument("--trace-user", default=None, help="_userId whose alpha trace is written (default: first)")
     args = parser.parse_args()

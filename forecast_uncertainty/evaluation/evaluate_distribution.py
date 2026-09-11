@@ -1,8 +1,8 @@
 """Does the predicted residual DISTRIBUTION transfer, and which features carry it?
 
-    python run_residuals.py         --out-dir outputs
-    python evaluation/evaluate_distribution.py --out-dir outputs [--split both] [--method none|drop|permute] [--jobs 6]
-    python evaluation/plot_residuals.py --out-dir outputs --only 12,13,14
+    python run_residuals.py         --out-dir outputs/runs/<run>
+    python evaluation/evaluate_distribution.py --out-dir outputs/runs/<run> [--split both] [--method none|drop|permute] [--jobs 6]
+    python evaluation/plot_residuals.py --out-dir outputs/runs/<run> --only 12,13,14
 
 TWO SPLITS, because "holdout" answers two different questions:
   temporal  train on the first 70% of every user's window, test on the last 30%: does the model transfer
@@ -31,7 +31,8 @@ import os
 import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PROJECT_ROOT)   # run as `python evaluation/<script>.py` from anywhere
+sys.path.insert(0, PROJECT_ROOT)
+from project_paths import PRIMARY_RUN  # noqa: E402   # run as `python evaluation/<script>.py` from anywhere
 import argparse
 import multiprocessing
 
@@ -199,7 +200,7 @@ def evaluate(residuals, split, methods, max_train_rows, out_dir, jobs):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", default=os.path.join(PROJECT_ROOT, "outputs"))
+    parser.add_argument("--out-dir", default=PRIMARY_RUN)
     parser.add_argument("--split", default="both", choices=["temporal", "louo", "both"])
     parser.add_argument("--method", default="none",
                         help="none | drop (refit without the feature, honest but slow) | permute (fast, confounded)")
