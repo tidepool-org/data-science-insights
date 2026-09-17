@@ -2,7 +2,7 @@
 -- RFAI insulin type x pediatric subgroup — transition cohort (users) and all
 -- eligible autobolus days (days), read DIRECTLY from the device data
 -- =============================================================================
--- Context: FDA K262435 Additional Information, Clinical deficiency 2 (Fiasp /
+-- Context: the FDA Additional Information request, Clinical deficiency 2 (Fiasp /
 -- Lyumjev attribution). Plan + results live in Drive 510k/claude/RFAI/. This
 -- file is the self-contained, reviewable form of the counts: no scratch tables,
 -- no pipeline-side brand staging — every brand is read from the raw BDDP dose
@@ -15,8 +15,9 @@
 --                              ("NovoLog", "Humalog", "Apidra", "Fiasp", "Lyumjev", "Afrezza")
 --   S3  HealthKit path       : payload -> $["com.loopkit.InsulinKit.MetadataKeyInsulinType"]
 --                              ("Novolog", "Humalog", ... the same six, different capitalisation)
--- Both are normalised with INITCAP(LOWER(...)). The two fields agree on > 99%
--- of the user-days that carry both (probe 0b, 2026-09-09). pumpSettings.
+-- Both are normalised with INITCAP(LOWER(...)). The two fields agree on nearly
+-- every user-day that carries both (probe 0b, 2026-09-09; the rate is recorded
+-- in the Drive plan, not here). pumpSettings.
 -- insulinModel is NOT used: it holds only Loop's default rapid-acting curve.
 --
 -- Rules
@@ -26,7 +27,17 @@
 --   * transition user = the single brand across the user's window days
 --     (seg1 start .. seg2 end, 28 days); 'multiple' if more than one brand
 --     appears; 'unknown' if no branded day. No carry from outside the window.
---   * AB day          = that day's brand; 'unknown' if none.
+--   * dosing day      = that day's brand; 'unknown' if none. Days are split by
+--     dosing mode with the transition staging's own rule
+--     (export_valid_transition_segments.py): autobolus = GREATEST(dd, hk
+--     autobolus count) >= 3; temp_basal = that threshold NOT met AND any
+--     temp-basal count > 0. Days with neither are not dosing days and drop.
+--     Both dosing-day detectors in loop_recommendations are Loop-3-era signals
+--     (dosingDecision uploads; the HealthKit MetadataKeyAutomaticallyIssued
+--     flag, which LoopKit writes alongside the insulin-type key), so temp-basal
+--     days here are Loop 3 temp-basal-only days and carry a brand about as
+--     often as autobolus days do (run 2026-09-11; the unknown share is in the
+--     Drive plan). Loop 2.x days never enter this universe.
 --   * class           : RAI labelled = Novolog + Humalog; URAI labelled = Fiasp +
 --     Lyumjev; Apidra = RAI not on the proposed label; Afrezza = inhaled.
 --   * age bands       : 6-11 / 12-17 / 18+ / age unknown (the cohort gates keep
@@ -44,8 +55,10 @@
 --     cohort_transition view in cohort_diagnosis_breakdown.sql.
 --     The unsuffixed tables ARE the 0.80 box since 2026-08-05; append _box070 /
 --     _box090 to the three transition tables for the sensitivity builds.
---   * AB days = ab_day_cohort.is_eligible_ab_day (IR-1002 universe: type-1,
---     >= 3 automated boluses that day, version/date gate, age >= 6).
+--   * dosing days = every (type-1 user, day) in ab_day_cohort that passes the
+--     version/date and age gates and is either an autobolus day (the IR-1002
+--     eligible-AB-day universe, exactly) or a temp-basal day (same gates, the
+--     temp-basal rule above, counts joined from loop_recommendations).
 --
 -- Databricks only; run top to bottom. Each result query re-reads the dose view
 -- (a few minutes each). Results are dataset statistics: they go in the Drive
@@ -107,16 +120,31 @@ FROM ranked
 WHERE rn = 1;
 
 
--- --- Eligible autobolus days (IR-1002 universe) ------------------------------
+-- --- Eligible dosing days: autobolus (IR-1002 universe) + temp-basal ----------
+-- ab_day_cohort has one row per (type-1 user, observed day) with the gate flags
+-- but not the temp-basal counts; those come from loop_recommendations.
+CREATE OR REPLACE TEMP VIEW rfai_dosing_days AS
+SELECT a._userId,
+       CAST(a.day AS DATE) AS day,
+       CASE WHEN a.is_ab_day THEN 'autobolus' ELSE 'temp_basal' END AS dosing_mode
+FROM dev.fda_510k_rwd.ab_day_cohort a
+JOIN dev.fda_510k_rwd.loop_recommendations r
+  ON r._userId = a._userId AND CAST(r.day AS DATE) = CAST(a.day AS DATE)
+WHERE a.is_version_eligible
+  AND a.is_age_eligible
+  AND (a.is_ab_day
+       OR COALESCE(r.dd_temp_basal_count, 0) > 0
+       OR COALESCE(r.hk_temp_basal_count, 0) > 0);
+
+-- The autobolus rows of that view ARE the eligible AB days (is_eligible_ab_day
+-- = is_ab_day AND is_version_eligible AND is_age_eligible); result 0 checks it.
 CREATE OR REPLACE TEMP VIEW rfai_ab_days AS
-SELECT _userId, CAST(day AS DATE) AS day
-FROM dev.fda_510k_rwd.ab_day_cohort
-WHERE is_eligible_ab_day;
+SELECT _userId, day FROM rfai_dosing_days WHERE dosing_mode = 'autobolus';
 
 
 -- --- Every (user, day) the counts need, so the raw dose scan is a join -------
 CREATE OR REPLACE TEMP VIEW rfai_relevant_days AS
-SELECT _userId, day FROM rfai_ab_days
+SELECT _userId, day FROM rfai_dosing_days
 UNION
 SELECT c._userId,
        explode(sequence(c.tb_to_ab_seg1_start, c.tb_to_ab_seg2_end, INTERVAL 1 DAY)) AS day
@@ -175,8 +203,8 @@ LEFT JOIN rfai_dose_brand_by_day d
 GROUP BY c._userId, c.gender, c.tb_to_ab_age_years, c.tb_to_ab_years_lwd;
 
 
--- --- Eligible AB days: day label + age band on the day ------------------------
-CREATE OR REPLACE TEMP VIEW rfai_ab_days_labelled AS
+-- --- Eligible dosing days: mode + day label + age band on the day -------------
+CREATE OR REPLACE TEMP VIEW rfai_dosing_days_labelled AS
 WITH dob AS (
   -- dob is a STRING and at least one value is written in Arabic-Indic digits
   -- (e.g. '٢٠١٦-٠٤-٢٥'); transliterate to ASCII digits, then cast tolerantly.
@@ -185,14 +213,14 @@ WITH dob AS (
   FROM dev.default.bddp_user_dates
   GROUP BY userid
 )
-SELECT a._userId, a.day,
+SELECT a._userId, a.day, a.dosing_mode,
        COALESCE(d.brand, 'unknown')                   AS insulin_type,
        COALESCE(d.n_brands, 0)                        AS n_brands,
        CASE WHEN u.dob IS NULL                                  THEN 'age unknown'
             WHEN FLOOR(DATEDIFF(a.day, u.dob) / 365.25) < 12    THEN '6-11'
             WHEN FLOOR(DATEDIFF(a.day, u.dob) / 365.25) < 18    THEN '12-17'
             ELSE                                                     '18+' END AS age_band
-FROM rfai_ab_days a
+FROM rfai_dosing_days a
 LEFT JOIN rfai_dose_brand_by_day d ON d._userId = a._userId AND d.day = a.day
 LEFT JOIN dob u                    ON u.userid = a._userId;
 
@@ -202,12 +230,20 @@ LEFT JOIN dob u                    ON u.userid = a._userId;
 -- =============================================================================
 
 -- 0) Universe sizes (transition N must equal Table 6.3a's final row of the
---    production build; AB days / users must equal the IR-1002 cohort flow) ----
+--    production build; autobolus days / users must equal the IR-1002 cohort
+--    flow, i.e. the eligible-AB-day universe) ---------------------------------
 SELECT 'transition analysis cohort (users)' AS universe, COUNT(*) AS n FROM rfai_transition_cohort
 UNION ALL
-SELECT 'eligible AB days (user-days)',        COUNT(*)                 FROM rfai_ab_days
+SELECT 'eligible autobolus days (user-days)',   COUNT(*)                FROM rfai_dosing_days WHERE dosing_mode = 'autobolus'
 UNION ALL
-SELECT 'eligible AB days (users)',            COUNT(DISTINCT _userId)  FROM rfai_ab_days;
+SELECT 'eligible autobolus days (users)',       COUNT(DISTINCT _userId) FROM rfai_dosing_days WHERE dosing_mode = 'autobolus'
+UNION ALL
+SELECT 'eligible temp-basal days (user-days)',  COUNT(*)                FROM rfai_dosing_days WHERE dosing_mode = 'temp_basal'
+UNION ALL
+SELECT 'eligible temp-basal days (users)',      COUNT(DISTINCT _userId) FROM rfai_dosing_days WHERE dosing_mode = 'temp_basal'
+UNION ALL
+SELECT 'eligible AB-day-cohort check (should equal autobolus days)',
+       COUNT(*) FROM dev.fda_510k_rwd.ab_day_cohort WHERE is_eligible_ab_day;
 
 
 -- 1) Transition cohort: users by brand x age band, then by class x age band ---
@@ -240,10 +276,11 @@ SELECT * FROM (
 ORDER BY level, total_users DESC;
 
 
--- 2) Eligible AB days: days by brand x age band on the day (plus distinct users
---    contributing days in each band), then by class ---------------------------
+-- 2) Eligible dosing days, autobolus and temp-basal separately: days by brand x
+--    age band on the day (plus distinct users contributing days in each band),
+--    then by class ------------------------------------------------------------
 SELECT * FROM (
-  SELECT 'brand' AS level, insulin_type AS label,
+  SELECT dosing_mode, 'brand' AS level, insulin_type AS label,
          SUM(CASE WHEN age_band = '6-11'             THEN 1 ELSE 0 END) AS days_6_11,
          SUM(CASE WHEN age_band = '12-17'            THEN 1 ELSE 0 END) AS days_12_17,
          SUM(CASE WHEN age_band IN ('6-11', '12-17') THEN 1 ELSE 0 END) AS days_pediatric_6_17,
@@ -254,10 +291,10 @@ SELECT * FROM (
          COUNT(DISTINCT CASE WHEN age_band = '12-17' THEN _userId END)  AS users_12_17,
          COUNT(DISTINCT CASE WHEN age_band = '18+'   THEN _userId END)  AS users_18_plus,
          COUNT(DISTINCT _userId)                                        AS users_any_age
-  FROM rfai_ab_days_labelled
-  GROUP BY insulin_type
+  FROM rfai_dosing_days_labelled
+  GROUP BY dosing_mode, insulin_type
   UNION ALL
-  SELECT 'class',
+  SELECT dosing_mode, 'class',
          CASE WHEN insulin_type IN ('Novolog', 'Humalog') THEN 'RAI labelled (Novolog/Humalog)'
               WHEN insulin_type IN ('Fiasp', 'Lyumjev')   THEN 'URAI labelled (Fiasp/Lyumjev)'
               WHEN insulin_type = 'Apidra'                THEN 'RAI not on label (Apidra)'
@@ -273,17 +310,22 @@ SELECT * FROM (
          COUNT(DISTINCT CASE WHEN age_band = '12-17' THEN _userId END),
          COUNT(DISTINCT CASE WHEN age_band = '18+'   THEN _userId END),
          COUNT(DISTINCT _userId)
-  FROM rfai_ab_days_labelled
-  GROUP BY 2
+  FROM rfai_dosing_days_labelled
+  GROUP BY dosing_mode, 3
 )
-ORDER BY level, total_days DESC;
+ORDER BY dosing_mode, level, total_days DESC;
 
 
--- 3) Data checks: pod-change days and unknown days among eligible AB days -----
-SELECT SUM(CASE WHEN n_brands > 1 THEN 1 ELSE 0 END)           AS ab_days_with_two_brands,
-       SUM(CASE WHEN insulin_type = 'unknown' THEN 1 ELSE 0 END) AS ab_days_without_brand,
-       COUNT(*)                                                  AS ab_days_total
-FROM rfai_ab_days_labelled;
+-- 3) Data checks by dosing mode: pod-change days and unknown days ---------------
+SELECT dosing_mode,
+       SUM(CASE WHEN n_brands > 1 THEN 1 ELSE 0 END)             AS days_with_two_brands,
+       SUM(CASE WHEN insulin_type = 'unknown' THEN 1 ELSE 0 END) AS days_without_brand,
+       COUNT(*)                                                  AS days_total,
+       MIN(day)                                                  AS first_day,
+       MAX(day)                                                  AS last_day
+FROM rfai_dosing_days_labelled
+GROUP BY dosing_mode
+ORDER BY dosing_mode;
 
 
 -- 4) Transition cohort, one row per user (demographics + window label) — the

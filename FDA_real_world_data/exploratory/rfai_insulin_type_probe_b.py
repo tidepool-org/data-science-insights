@@ -1,9 +1,9 @@
 """RFAI insulin type — Phase 0b probe: the HealthKit-path insulin type and a nearest-in-time fallback.
 
 Follow-up to rfai_insulin_type_probe.py (Phase 0, run 2026-09-09). That run showed both fields exist
-but that the per-dose `insulinFormulation` brand reaches only ~1 in 5 eligible transition users and
-~1 in 10 eligible autobolus days inside the analysis windows, and that `pumpSettings.insulinModel`
-carries no brand information at all in this dataset. The reason is the upload path: the brand is
+but that the per-dose `insulinFormulation` brand reaches only a minority of eligible transition users
+and eligible autobolus days inside the analysis windows, and that `pumpSettings.insulinModel` carries
+no brand information at all in this dataset (figures in the Drive plan). The reason is the upload path: the brand is
 stamped only by Loop's Tidepool plugin (records whose `origin.version` is set), while the bulk of the
 dose records — everything before 2023 and most of 2023–2024 — reached Tidepool through HealthKit and
 carry no `insulinFormulation`.
@@ -197,7 +197,7 @@ def run(spark, bddp_table=BDDP_TABLE, catalog=CATALOG, scratch_table=SCRATCH_TAB
     """)
 
     # ---- 7. Transition windows with S1 ∪ S3, plus the nearest-branded-day fallback -----------
-    show(spark, "7a. Transition window (seg1 start .. seg2 end): coverage with S1 ∪ S3 (compare Phase 0 4b: 70 of 347 with S1 alone)", f"""
+    show(spark, "7a. Transition window (seg1 start .. seg2 end): coverage with S1 ∪ S3 (compare Phase 0 4b, S1 alone)", f"""
     WITH in_window AS (
       SELECT t._userId, b.modal_brand, b.n_branded_doses,
              CASE WHEN b.day <= t.tb_to_ab_seg1_end THEN 'seg1' ELSE 'seg2' END AS phase
@@ -259,7 +259,7 @@ def run(spark, bddp_table=BDDP_TABLE, catalog=CATALOG, scratch_table=SCRATCH_TAB
     """)
 
     # ---- 8. Eligible AB days with S1 ∪ S3, plus the nearest-branded-day fallback ----------------
-    show(spark, "8a. Eligible AB days: day-weighted brand with S1 ∪ S3 (compare Phase 0 4d: ~10% of days with S1 alone)", f"""
+    show(spark, "8a. Eligible AB days: day-weighted brand with S1 ∪ S3 (compare Phase 0 4d, S1 alone)", f"""
     SELECT COALESCE(b.modal_brand, '(no branded dose that day)') AS day_brand,
            COUNT(*)                                              AS n_ab_days,
            COUNT(DISTINCT a._userId)                             AS n_users,
