@@ -24,7 +24,6 @@ Outputs:
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy import stats
 from typing import Dict, Optional, Tuple
 import os
 
@@ -36,7 +35,7 @@ from utils.constants import (
     FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT, COLORS_STACKED_BAR,
     STACKED_BAR_PCT_DECIMALS,
 )
-from utils.statistics import test_normality, compute_paired_statistics, hodges_lehmann_ci, format_p
+from utils.statistics import test_normality, compute_paired_statistics, hodges_lehmann_ci, format_p, paired_non_inferiority
 from utils.data_loading import load_transition_endpoints
 
 
@@ -420,26 +419,12 @@ def compute_non_inferiority(df: pd.DataFrame, margin: float = 5.0) -> Dict:
     H₀: mean(TIR_autobolus - TIR_temp_basal) ≤ -margin  (autobolus is inferior)
     H₁: mean(TIR_autobolus - TIR_temp_basal) > -margin   (autobolus is non-inferior)
 
-    Returns dict with test statistics and conclusion at α = 0.05.
+    The test itself lives in utils.statistics.paired_non_inferiority (shared with
+    PLN-RFAI-0001 Analysis 2, which runs it within each insulin group); this
+    step applies it to the cohort frame and prints the result at α = 0.05.
     """
-    valid = df["tir_seg1"].notna() & df["tir_seg2"].notna()
-    diff = df.loc[valid, "tir_seg2"] - df.loc[valid, "tir_seg1"]
-    n = len(diff)
-    mean_diff = diff.mean()
-    sd_diff = diff.std(ddof=1)
-
-    t_stat = (mean_diff - (-margin)) / (sd_diff / np.sqrt(n))
-    p_value = 1 - stats.t.cdf(t_stat, df=n - 1)
-
-    result = {
-        "n": n,
-        "mean_diff": mean_diff,
-        "sd_diff": sd_diff,
-        "margin": margin,
-        "t_stat": t_stat,
-        "p_value": p_value,
-        "non_inferior": p_value < 0.05,
-    }
+    result = paired_non_inferiority(df["tir_seg1"], df["tir_seg2"], margin=margin)
+    n, mean_diff, sd_diff, t_stat, p_value = (result[k] for k in ("n", "mean_diff", "sd_diff", "t_stat", "p_value"))
 
     print(f"\n  Non-Inferiority Test: TIR (Autobolus − Temp Basal)")
     print(f"  Margin:     {margin:.1f}%")

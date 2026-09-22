@@ -225,3 +225,60 @@ def compute_posthoc(
             print(f"  Dunn's test failed: {e}")
 
     return tukey_df, dunn_df
+
+
+def paired_non_inferiority(reference: pd.Series, comparator: pd.Series,
+                           margin: float = 5.0, alpha: float = 0.05) -> Dict:
+    """One-sided paired t-test of non-inferiority on a percentage-point scale.
+
+    The paired difference is comparator - reference (e.g. TIR on autobolus days
+    minus TIR on temp-basal days for the same user).
+
+        H0: mean(difference) <= -margin   (the comparator is inferior)
+        H1: mean(difference) >  -margin   (the comparator is non-inferior)
+
+    Pairs with a missing value on either side are dropped. Returns the sample
+    size, mean and SD of the difference, the test statistic, the one-sided
+    p-value, the lower bound of the one-sided (1 - alpha) confidence interval
+    for the mean difference, and the conclusion at alpha. Used by RPT-1001
+    §8.1 (all users) and by PLN-RFAI-0001 Analysis 2 (within each insulin
+    group), so both run one implementation.
+    """
+    valid = reference.notna() & comparator.notna()
+    diff = (comparator[valid] - reference[valid]).astype(float)
+    n = int(len(diff))
+    if n < 2:
+        return {"n": n, "mean_diff": np.nan, "sd_diff": np.nan, "margin": margin,
+                "t_stat": np.nan, "p_value": np.nan, "ci_low_one_sided": np.nan, "non_inferior": False}
+    mean_diff = float(diff.mean())
+    sd_diff = float(diff.std(ddof=1))
+    se = sd_diff / np.sqrt(n)
+    t_stat = (mean_diff + margin) / se
+    p_value = float(1 - stats.t.cdf(t_stat, df=n - 1))
+    ci_low = mean_diff - stats.t.ppf(1 - alpha, df=n - 1) * se
+    return {"n": n, "mean_diff": mean_diff, "sd_diff": sd_diff, "margin": margin,
+            "t_stat": float(t_stat), "p_value": p_value, "ci_low_one_sided": float(ci_low),
+            "non_inferior": bool(p_value < alpha)}
+
+
+def welch_difference_ci(a: pd.Series, b: pd.Series, alpha: float = 0.05) -> Dict:
+    """Welch two-sample comparison of means, a - b, with a two-sided
+    (1 - alpha) confidence interval on the Welch-Satterthwaite degrees of
+    freedom. Used by PLN-RFAI-0001 Analysis 2 for the between-group contrast
+    of paired differences (URAI minus RAI); the interval is read against a
+    reference band, not turned into an equivalence test (PLN Appendix A).
+    """
+    a = a.dropna().astype(float); b = b.dropna().astype(float)
+    n_a, n_b = len(a), len(b)
+    if n_a < 2 or n_b < 2:
+        return {"n_a": n_a, "n_b": n_b, "diff": np.nan, "se": np.nan, "df": np.nan,
+                "ci_low": np.nan, "ci_high": np.nan, "t_stat": np.nan, "p_value": np.nan}
+    var_a, var_b = a.var(ddof=1), b.var(ddof=1)
+    se = np.sqrt(var_a / n_a + var_b / n_b)
+    df = (var_a / n_a + var_b / n_b) ** 2 / ((var_a / n_a) ** 2 / (n_a - 1) + (var_b / n_b) ** 2 / (n_b - 1))
+    diff = float(a.mean() - b.mean())
+    t_crit = stats.t.ppf(1 - alpha / 2, df=df)
+    t_stat, p_value = stats.ttest_ind(a, b, equal_var=False)
+    return {"n_a": n_a, "n_b": n_b, "diff": diff, "se": float(se), "df": float(df),
+            "ci_low": float(diff - t_crit * se), "ci_high": float(diff + t_crit * se),
+            "t_stat": float(t_stat), "p_value": float(p_value)}

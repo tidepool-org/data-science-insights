@@ -21,8 +21,9 @@ Stage sources:
   cohort N exactly.
 
 Run:
-  analysis/analysis_6-3a_cohort_flow.py                    # production (0.70 box)
-  analysis/analysis_6-3a_cohort_flow.py --suffix _box080   # 0.80-box build
+  analysis/analysis_6-3a_cohort_flow.py                    # production build (the unsuffixed
+                                                           # tables are the 0.80 box since 2026-08-05)
+  analysis/analysis_6-3a_cohort_flow.py --suffix _box070   # a parallel sensitivity build
 """
 
 import argparse
