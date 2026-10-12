@@ -38,6 +38,12 @@ generator), per cohort. **Re-embed these in place of the prior-cohort image13/im
 They live in the §8_3 output dir (beside the 8.3e/8.3i/8.3j family the generator already produces, to avoid
 colliding with the existing `figure_8_4b_carb_entry_by_strategy.png`); `--figs 8_3e_ab` re-renders just these.
 
+**2026-09-23 update — Fig 8.4c changed; re-embed.** Its dashed "overall" line now covers **all AB day types**
+(it was the union of the two drawn arms, so it tracked the CE≥3/BE≥3 line); the legend entry now reads
+"overall, all day types (n=…)" and the title n is that all-day-types n. Re-embed the `all` PNG by caption and
+check the caption / §9 wording. Fig 8.4b is unchanged. `--figs 8_3e_ab_ce0hma` re-renders only 8.4c. See
+project_history 2026-09-23.
+
 **Item 1 — DONE: Table 12.1d is now a synced pipeline table on the T1D cohort.** The retired composition
 generator was reconstructed from decisions.md D15 + the surviving diagnostic CSV and **validated to reproduce
 that oracle exactly** (every Table-12.1d column, pre-T1D), so the lost bucket definitions are now pinned:

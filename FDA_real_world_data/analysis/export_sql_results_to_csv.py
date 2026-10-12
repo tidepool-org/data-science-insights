@@ -133,16 +133,24 @@ def run(spark, sql_path, out_dir=None, skip=DEFAULT_SKIP):
     print(f"{os.path.basename(sql_path)}: {len(statements)} statements -> {out_dir}")
 
     for position, statement in enumerate(statements):
-        if statement.lstrip().upper().startswith(SIDE_EFFECT_PREFIXES):
-            spark.sql(statement)
-            print(f"  [{position:02d}] ran: {statement.splitlines()[0][:80]}")
-            continue
-        result_ordinal += 1
-        label = labels[position] or f"{result_ordinal:02d}"
-        if label in skipped:
-            print(f"  [{position:02d}] result {label}: skipped (--skip)")
-            continue
-        frame = spark.sql(statement).toPandas()
+        first_line = statement.splitlines()[0][:80]
+        try:
+            if statement.lstrip().upper().startswith(SIDE_EFFECT_PREFIXES):
+                spark.sql(statement)
+                print(f"  [{position:02d}] ran: {first_line}")
+                continue
+            result_ordinal += 1
+            label = labels[position] or f"{result_ordinal:02d}"
+            if label in skipped:
+                print(f"  [{position:02d}] result {label}: skipped (--skip)")
+                continue
+            frame = spark.sql(statement).toPandas()
+        except Exception:
+            # Name the statement that failed before re-raising: a "table not
+            # found" raised by a later statement is otherwise indistinguishable
+            # from a CREATE that never ran (2026-09-24, LoopEval probe run).
+            print(f"  [{position:02d}] FAILED: {first_line}")
+            raise
         path = os.path.join(out_dir, f"{RESULT_PREFIX}{label}.csv")
         frame.to_csv(path, index=False)
         manifest_rows.append({
@@ -203,11 +211,16 @@ def get_spark():
 # of running a script) every job below runs in order. Arguments are only for the
 # pipeline job / a terminal.
 DEFAULT_JOBS = [
-    ("rfai_insulin_type_by_age.sql", DEFAULT_SKIP),   # skip 4 = the per-user listing
-    ("rfai_temp_basal_day_capture.sql", "none"),
-    ("rfai_insulin_type_coverage.sql", "none"),       # Supplement S1 sources section (added 2026-09-21)
-    ("rfai_transition_cohort_dedup_delta.sql", "none"),  # Supplement S1: the one-user difference from Table 6.3a (2026-09-21)
-    ("rfai_insulin_class_outcomes_counts.sql", "none"),  # PLN-RFAI-0001 Phase 0 feasibility (2026-09-21)
+    # ("rfai_insulin_type_by_age.sql", DEFAULT_SKIP),   # skip 4 = the per-user listing
+    # ("rfai_temp_basal_day_capture.sql", "none"),
+    # ("rfai_insulin_type_coverage.sql", "none"),       # Supplement S1 sources section (added 2026-09-21)
+    # ("rfai_transition_cohort_dedup_delta.sql", "none"),  # Supplement S1: the one-user difference from Table 6.3a (2026-09-21)
+    # ("rfai_insulin_class_outcomes_counts.sql", "none"),  # PLN-RFAI-0001 Phase 0 feasibility (2026-09-21)
+    # ("transition_autobolus_detection_probe.sql", "none"),  # transition-cohort validity: D3 autobolus detector (2026-09-25; run 2026-10-09)
+    # ("transition_flagged_segments_export.sql", "none"),  # the segments in question, listed by alias (2026-10-08; run 2026-10-09)
+    # ("transition_segment_single_user.sql", "none"),  # one window raw, record by record; edit the alias in its first statement (2026-10-08)
+    ("transition_boundary_rows_export.sql", "none"),  # raw rows around the period boundary for every failing window (2026-10-09)
+    # ("dosing_decision_recommended_bolus_probe.sql", "none"),  # does recommendedBolus.amount mark automated-bolus dosing? two users, raw rows (2026-10-12)
 ]
 
 

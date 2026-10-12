@@ -339,9 +339,13 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False, day_types=None, deli
     concentrates and disperses into the tails. Default off, so the production figures change only by the
     gridlines.
 
-    `day_types` (default None = all 5) restricts the dots + decile lines to a subset of DAY_TYPE_ORDER
-    labels — e.g. ("CE=0/BE=0", "CE>=3/BE>=3") for the clean no-announcement vs high-announcement
-    contrast. `delivery_strategy` (default None = all days) restricts to AB/TB days (a STRATEGY_COL
+    `day_types` (default None = all 5) restricts the dots + per-day-type decile lines to a subset of
+    DAY_TYPE_ORDER labels — e.g. ("CE=0/BE=0", "CE>=3/BE>=3") for the clean no-announcement vs
+    high-announcement contrast. The dashed "overall" line and the title n are NOT restricted: they
+    always cover every eligible day in scope (all 5 day types, after the delivery_strategy filter), so
+    the drawn arms read against the same all-days reference as figure 8.3e and the 5-day-type AB
+    variant; with a subset the legend entry says "overall, all day types". `delivery_strategy`
+    (default None = all days) restricts to AB/TB days (a STRATEGY_COL
     value, e.g. "autobolus_on"); on the percentile axis it is applied AFTER the within-user rank, so the
     x-axis stays the OVERALL all-eligible-days percentile (only which days are *shown* changes); the
     absolute axis is order-free.
@@ -371,6 +375,10 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False, day_types=None, deli
         ["CE=0/BE=0", "CE=0/BE<=1", "CE=0/BE<=inf", HIGH_MA_LABEL, COMPARATOR_LABEL], default="")
     df = df[df["dotcat"] != ""]
     order = list(DAY_TYPE_ORDER) if day_types is None else list(day_types)
+    # `df_all` keeps EVERY eligible day in scope (all 5 day types, after the delivery_strategy filter):
+    # the dashed "overall" line and the title n are computed on it, so a day_types subset changes only
+    # which arms are drawn, not the reference they are read against.
+    df_all = df
     if day_types is not None:
         df = df[df["dotcat"].isin(order)].copy()
 
@@ -445,11 +453,14 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False, day_types=None, deli
                      ms=5, zorder=5, label=f"{label} (n={len(sub):,}){_age_note(sub)}")
         handles.append(h)
 
-    # Overall mean TIR per bin across all categories (dashed black, on top).
-    g_all = df.assign(_b=pd.cut(df["_x"], edges, labels=marks)).groupby("_b", observed=False)["tir"]
+    # Overall mean TIR per bin across ALL eligible days in scope — every day type, not only the arms
+    # drawn (dashed black, on top). Under a day_types subset the legend entry says so.
+    g_all = (df_all.assign(_b=pd.cut(df_all["_x"], edges, labels=marks))
+                   .groupby("_b", observed=False)["tir"])
     overall = g_all.mean().reindex(marks).where(g_all.count().reindex(marks).fillna(0) >= min_bin_n)
+    overall_label = "overall" if day_types is None else "overall, all day types"
     h_all, = ax.plot(marks, overall.to_numpy(dtype=float), "--o", color="#111111", lw=2.5, ms=5,
-                     zorder=6, label=f"overall (n={len(df):,}){_age_note(df)}")
+                     zorder=6, label=f"{overall_label} (n={len(df_all):,}){_age_note(df_all)}")
     handles.append(h_all)
 
     # Density companion panel: per-bin user-day counts stacked by day type (the dotcat partition →
@@ -501,7 +512,7 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False, day_types=None, deli
         notes.append(f"x clipped at {ABS_TDD_XMAX} U/day; dots where bin n ≥ {ABS_TDD_MIN_BIN_N}")
     # 2-line title: metric/contrast on line 1, qualifiers + n on line 2 — keeps the longer variants from
     # overflowing the axes width. With no qualifiers (the plain fig 8.3e) it stays 1 line.
-    n_note = f"(n={len(df):,})"
+    n_note = f"(n={len(df_all):,})"  # the figure's scope = the overall line's n (all day types)
     title = f"{head}\n{'; '.join(notes)} — {n_note}" if notes else f"{head} {n_note}"
     ax.set_title(title, fontsize=TITLE_FS)
 

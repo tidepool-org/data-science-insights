@@ -127,3 +127,10 @@ behavior_model/data_staging/exports/
 behavior_model/presentations/
 .vscode/settings.json
 
+# loopeval_export: probe outputs (aggregate CSVs, regenerable) and export runs (user-level files) — never commit. Keep the dir via .gitkeep.
+loopeval_export/outputs/*
+!loopeval_export/outputs/.gitkeep
+
+# loop_settings_distribution: probe outputs (aggregate CSVs, regenerable) — never commit. Keep the dir via .gitkeep.
+loop_settings_distribution/outputs/*
+!loop_settings_distribution/outputs/.gitkeep

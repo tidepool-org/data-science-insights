@@ -71,6 +71,14 @@ def test_rfai_files_parse():
     phase0_text = open(os.path.join(ROOT, "exploratory", "rfai_insulin_class_outcomes_counts.sql"), encoding="utf-8").read()
     shared = by_age_text[by_age_text.index("-- --- Universe: confirmed type-1 Loop users"):by_age_text.index("-- =============================================================================\n-- Results")].rstrip()
     assert shared in phase0_text, "Phase 0 file's shared views drifted from rfai_insulin_type_by_age.sql"
+    # The autobolus-detection probe (2026-09-25) copies the cohort views (up to
+    # the dosing-day views) verbatim from the by-age file.
+    probe = _kinds(os.path.join(ROOT, "exploratory", "transition_autobolus_detection_probe.sql"))
+    assert [l for k, l in probe if k == "result"] == ["0", "1", "2", "3", "4"], probe
+    assert probe[-1][0] == "side", probe[-1]
+    probe_text = open(os.path.join(ROOT, "exploratory", "transition_autobolus_detection_probe.sql"), encoding="utf-8").read()
+    cohort_views = by_age_text[by_age_text.index("-- --- Universe: confirmed type-1 Loop users"):by_age_text.index("-- --- Eligible dosing days")]
+    assert cohort_views in probe_text, "autobolus-detection probe's cohort views drifted from rfai_insulin_type_by_age.sql"
 
 
 if __name__ == "__main__":
