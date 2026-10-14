@@ -219,8 +219,9 @@ DEFAULT_JOBS = [
     # ("transition_autobolus_detection_probe.sql", "none"),  # transition-cohort validity: D3 autobolus detector (2026-09-25; run 2026-10-09)
     # ("transition_flagged_segments_export.sql", "none"),  # the segments in question, listed by alias (2026-10-08; run 2026-10-09)
     # ("transition_segment_single_user.sql", "none"),  # one window raw, record by record; edit the alias in its first statement (2026-10-08)
-    ("transition_boundary_rows_export.sql", "none"),  # raw rows around the period boundary for every failing window (2026-10-09)
+    # ("transition_boundary_rows_export.sql", "none"),  # raw rows around the period boundary for every failing window (2026-10-09; run 2026-10-09, filed 2026-10-13)
     # ("dosing_decision_recommended_bolus_probe.sql", "none"),  # does recommendedBolus.amount mark automated-bolus dosing? two users, raw rows (2026-10-12)
+    # ("transition_excluded_windows_age_gender.sql", "none"),  # age and gender of the 16 windows to be excluded, aliases in its first statement (2026-10-13; run and filed 2026-10-13)
 ]
 
 

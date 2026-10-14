@@ -3,13 +3,19 @@
 exploratory/transition_autobolus_detection_probe.sql (aggregates: the D3
 detector against the classifier's two methods),
 exploratory/transition_flagged_segments_export.sql (the segments in question,
-listed by salted alias), and exploratory/transition_segment_single_user.sql
+listed by salted alias), exploratory/transition_segment_single_user.sql
 (one window: raw rows, then each method's verdict on them; its first
 statement is the alias to edit, so it is run by hand and is not in
-DEFAULT_JOBS). pytest-free (the run_all_tests.py convention): assertions run
+DEFAULT_JOBS), exploratory/transition_boundary_rows_export.sql (raw rows at
+the period boundary), exploratory/dosing_decision_recommended_bolus_probe.sql
+(two users' decision rows), and
+exploratory/transition_excluded_windows_age_gender.sql (age and gender of
+the 16 windows to be excluded, their aliases listed in its first statement;
+no scratch table). pytest-free (the run_all_tests.py convention): assertions run
 from __main__. Pins: each file parses with the exporter's statement splitter
 and its result labels are the ones its header promises; each file
-materialises ONE scratch table, dropped first and in its final statement; the
+materialises at most ONE scratch table (two for the boundary file), dropped
+first and in its final statements; the
 cohort views are a VERBATIM copy of rfai_insulin_type_by_age.sql (drift is a
 defect); no `--` or `;` sits inside a string literal (the exporter strips
 `--` to the end of every line and splits on `;`); every file is named in the
@@ -41,8 +47,10 @@ EXPORT = os.path.join(PROJECT, "exploratory", "transition_flagged_segments_expor
 SINGLE = os.path.join(PROJECT, "exploratory", "transition_segment_single_user.sql")
 BOUNDARY = os.path.join(PROJECT, "exploratory", "transition_boundary_rows_export.sql")
 DECISIONS = os.path.join(PROJECT, "exploratory", "dosing_decision_recommended_bolus_probe.sql")
-ALL_FILES = (PROBE, EXPORT, SINGLE, BOUNDARY, DECISIONS)
-LISTING_FILES = (EXPORT, SINGLE, BOUNDARY, DECISIONS)   # per-user results: aliases only; skip none when active
+AGE_GENDER = os.path.join(PROJECT, "exploratory", "transition_excluded_windows_age_gender.sql")
+ALL_FILES = (PROBE, EXPORT, SINGLE, BOUNDARY, DECISIONS, AGE_GENDER)
+LISTING_FILES = (EXPORT, SINGLE, BOUNDARY, DECISIONS, AGE_GENDER)   # per-user results: aliases only; skip none when active
+LISTING_VIEW_CARRIERS = (BOUNDARY,)   # files that copy the listing's views verbatim
 EXPORTER = os.path.join(PROJECT, "analysis", "export_sql_results_to_csv.py")
 
 EXPECTED_LABELS = {
@@ -51,6 +59,7 @@ EXPECTED_LABELS = {
     SINGLE: ["0", "1", "2", "3", "4", "5"],
     BOUNDARY: ["0", "1", "2", "3"],
     DECISIONS: ["0", "1", "2", "3"],
+    AGE_GENDER: ["0", "1", "2"],
 }
 SCRATCH_TABLES = {                      # every scratch table a file creates; each dropped before creation and in the final statements
     PROBE: ["dev.fda_510k_rwd.tad_window_rows"],
@@ -58,6 +67,7 @@ SCRATCH_TABLES = {                      # every scratch table a file creates; ea
     SINGLE: ["dev.fda_510k_rwd.tsu_window_rows"],
     BOUNDARY: ["dev.fda_510k_rwd.tfs_window_rows", "dev.fda_510k_rwd.tbr_boundary_rows"],
     DECISIONS: ["dev.fda_510k_rwd.ddr_window_rows"],
+    AGE_GENDER: [],                                     # no scratch table: a VALUES list of aliases joined to the cohort view
 }
 ALIAS_FORM = "concat('u', substr(sha2(concat({id}, 'rfai-insulin-type-v1'), 256), 1, 16))"
 
@@ -93,8 +103,9 @@ def test_scratch_tables_dropped_first_created_once_and_dropped_last():
             assert len(creates) == 1, f"{os.path.basename(path)}: {len(creates)} CREATE TABLE statements for {table}"
             first_mention = next(s for s in statements if table in s)
             assert first_mention.upper().startswith("DROP TABLE IF EXISTS"), f"{os.path.basename(path)}: {table} not dropped before creation"
-        tail = [s.upper() for s in statements[-len(tables):]]
-        assert sorted(tail) == sorted(f"DROP TABLE IF EXISTS {t}".upper() for t in tables), f"{os.path.basename(path)}: the final statements must drop {tables}"
+        if tables:
+            tail = [s.upper() for s in statements[-len(tables):]]
+            assert sorted(tail) == sorted(f"DROP TABLE IF EXISTS {t}".upper() for t in tables), f"{os.path.basename(path)}: the final statements must drop {tables}"
         unknown = [s for s in statements if s.upper().startswith("CREATE TABLE") and not any(t in s for t in tables)]
         assert not unknown, f"{os.path.basename(path)}: an undeclared scratch table"
 
@@ -110,13 +121,14 @@ def test_cohort_views_are_verbatim_copies():
         assert shared in _read(path), f"{os.path.basename(path)}: cohort views drifted from rfai_insulin_type_by_age.sql"
 
 
-def test_boundary_file_carries_the_listing_views_verbatim():
+def test_files_that_copy_the_listing_views_carry_them_verbatim():
     listing = _read(EXPORT)
     start = listing.index("-- --- Universe: confirmed type-1 Loop users")
     end = listing.index("-- =============================================================================\n-- Results")
     views = listing[start:end]
     assert "CREATE OR REPLACE TEMP VIEW tfs_window_verdict" in views
-    assert views in _read(BOUNDARY), "boundary file: the listing's views drifted"
+    for path in LISTING_VIEW_CARRIERS:
+        assert views in _read(path), f"{os.path.basename(path)}: the listing's views drifted"
 
 
 def test_no_exporter_hazards_inside_string_literals():
@@ -188,7 +200,7 @@ if __name__ == "__main__":
     test_result_labels_match_headers()
     test_scratch_tables_dropped_first_created_once_and_dropped_last()
     test_cohort_views_are_verbatim_copies()
-    test_boundary_file_carries_the_listing_views_verbatim()
+    test_files_that_copy_the_listing_views_carry_them_verbatim()
     test_no_exporter_hazards_inside_string_literals()
     test_default_jobs_block_names_every_file_and_active_listings_skip_nothing()
     test_listing_results_key_on_the_alias_never_the_raw_id()
