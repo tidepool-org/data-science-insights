@@ -17,7 +17,7 @@ are written beside the export, never into the repository or Drive.
 Run (house interpreter):
     /Users/mconn/miniconda3/envs/tidepool-data-science-simulator-dev/bin/python \\
         loopeval_export/plot_export_inspection.py [run_folder] [--aliases a,b] [--out folder]
-Default run folder: the newest under ~/.loop-eval/fda-transition-cohort/.
+Default run folder: the newest under the Drive exports folder `510k/claude/loopeval_export/exports/`.
 Output: <run_folder>/figures/<alias>_overview.png and <alias>_zoom.png.
 """
 
@@ -46,7 +46,10 @@ from utils.constants import (  # noqa: E402  (house palette and font sizes, STYL
 # =============================================================================
 # Constants
 # =============================================================================
-DEFAULT_RUNS_ROOT = os.path.expanduser("~/.loop-eval/fda-transition-cohort")
+# Per-person export runs live on Drive (MC, 2026-10-14; before that under ~/.loop-eval/).
+# The mount folder carries the account name, so it is resolved by pattern rather than typed.
+DEFAULT_RUNS_ROOT = next(iter(glob.glob(os.path.expanduser(
+    "~/Library/CloudStorage/GoogleDrive-*/My Drive/projects/510k/claude/loopeval_export/exports"))), None)
 ZOOM_HOURS_EACH_SIDE = 24          # the zoom spans seg2 start ± this many hours
 DPI = 200                          # inspection figures (report figures use 300)
 
@@ -331,7 +334,8 @@ def plot_user(user_dir, out_dir):
 
 
 def newest_run(root=DEFAULT_RUNS_ROOT):
-    runs = sorted(glob.glob(os.path.join(root, "export_transition_*")))
+    """The newest run folder under root (the downloaded zips sit beside the folders and are skipped)."""
+    runs = sorted(path for path in glob.glob(os.path.join(root or "", "export_transition_*")) if os.path.isdir(path))
     if not runs:
         raise FileNotFoundError(f"no export run under {root}")
     return runs[-1]

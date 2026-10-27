@@ -91,10 +91,10 @@ def test_scrubber_replaces_raw_ids():
 
 def test_manifest_rewrite_and_file_verification():
     with tempfile.TemporaryDirectory() as folder:
-        json.dump({"data_version": 19, "uid_fingerprint": "deadbeef", "counts": {}},
+        json.dump({"data_version": ex.LOOPEVAL_DATA_VERSION, "uid_fingerprint": "deadbeef", "counts": {}},
                   open(os.path.join(folder, "_export_manifest.json"), "w"))
         out = ex.rewrite_manifest(os.path.join(folder, "_export_manifest.json"), {"user_alias": "uabc", "tier": "core"})
-        assert "uid_fingerprint" not in out and out["user_alias"] == "uabc" and out["data_version"] == 19
+        assert "uid_fingerprint" not in out and out["user_alias"] == "uabc" and out["data_version"] == ex.LOOPEVAL_DATA_VERSION
         # file verification: floors and schedules
         glucose = [{"startDate": f"2023-06-{d:02d}T00:00:00.000Z", "quantity": 100.0} for d in range(1, 29)] * 40
         json.dump(glucose, open(os.path.join(folder, "glucose.json"), "w"))
@@ -120,18 +120,66 @@ def test_manifest_rewrite_and_file_verification():
         assert ex.scan_for_raw_ids(folder, ["absent"]) == []
 
 
+def test_identifier_scan_and_masks():
+    """The 2026-10-14 findings: an email address in a manifest and a developer team id in
+    cgm_quality.csv sensor labels must halt the run; the team id is masked first, the
+    Workspace user segment is redacted in the provenance."""
+    import re
+    with tempfile.TemporaryDirectory() as folder:
+        os.makedirs(os.path.join(folder, "uaaa"))
+        quality = os.path.join(folder, "uaaa", "cgm_quality.csv")
+        open(quality, "w").write("start,kind,sensors\n2023-06-01,two_sensors,com.A1B2C3D4E5.loopkit.Loop#1 (healthkit);DexG6#1\n")
+        assert [label for _p, label in ex.scan_for_identifiers(folder)] == ["app bundle identifier with a developer team id"]
+        assert ex.mask_team_ids(folder) == 1
+        assert "com.<team>.loopkit.Loop#1 (healthkit);DexG6#1" in open(quality).read()
+        assert ex.scan_for_identifiers(folder) == []
+        json.dump({"loopeval_package_parent": "/Workspace/Users/someone@tidepool.org/LoopEval/analysis"},
+                  open(os.path.join(folder, "uaaa", "_export_manifest.json"), "w"))
+        assert [label for _p, label in ex.scan_for_identifiers(folder)] == ["email address"]
+        assert re.sub(*ex.WORKSPACE_USER_SEGMENT, "/Workspace/Users/someone@tidepool.org/LoopEval/analysis") == "/Workspace/Users/<analyst>/LoopEval/analysis"
+        # an image is skipped, a plain bundle id without a team id is not an offender
+        open(os.path.join(folder, "uaaa", "figure.png"), "wb").write(b"someone@tidepool.org")
+        open(os.path.join(folder, "uaaa", "_export_manifest.json"), "w").write('{"source": "com.apple.HealthKit"}')
+        assert ex.scan_for_identifiers(folder) == []
+
+
 def test_bridge_exposes_every_etl_column():
     select = ex.BRIDGE_SQL
     for column in ex.ETL_COLUMNS:
         forms = (f" AS {column}", f" AS `{column}`", f"s.{column},", f"s.{column}\n", f"s.{column} ", f"s.`{column}`")
         assert any(form in select for form in forms), f"bridge does not expose {column}"
     # The stage carries the raw forms the bridge re-encodes from.
-    for column in ("`value`", "normal", "rate", "duration", "payload", "bgTarget", "recommendedBolus", "recommendedBasal", "bolus", "basal"):
+    for column in ("`value`", "normal", "rate", "duration", "payload", "bgTarget", "recommendedBolus", "recommendedBasal", "bolus", "basal",
+                   "requestedBolus", "insulinOnBoard"):
         assert f"b.{column}" in ex.STAGE_SQL, column
 
 
+def test_bridge_carries_the_columns_read_since_data_version_20():
+    """The six columns LoopEval's ETL reads since data versions 20-32 reach the
+    bridge through the stage and the carried view; the two numeric ones are
+    wrapped like recommendedBolus; the decode checks cover them and the two
+    payload strings; the installer re-imports the ETL's two new modules."""
+    import inspect
+    for column in ("deviceId", "warnings", "food", "originalFood", "requestedBolus", "insulinOnBoard"):
+        assert column in ex.ETL_COLUMNS, column
+        assert f"b.{column}" in ex.STAGE_SQL, column
+        assert f"s.{column}" in ex.CARRIED_SQL, column
+    for column in ("requestedBolus", "insulinOnBoard"):
+        assert f"get_json_object(s.{column}, '$.amount')" in ex.BRIDGE_SQL, column
+        assert f"AS {column}," in ex.BRIDGE_SQL, column
+    for column in ("deviceId", "warnings", "food", "originalFood"):
+        assert f"s.{column}" in ex.BRIDGE_SQL, column                 # passed through unchanged
+    fields = {field for _record_type, field, _present, _decoded in ex.DECODE_CHECKS}
+    for field in ("requestedBolus.amount", "insulinOnBoard.amount", "payload.syncIdentifier", "payload.transmitterId"):
+        assert field in fields, field
+    source = inspect.getsource(ex._install_loopeval)
+    for module in ("loopeval_analysis.tidepool.batch", "loopeval_analysis.tidepool.cgm_streams"):
+        assert module in source, module
+
+
 def _json_paths(expression):
-    return re.findall(r"get_json_object\(`?([A-Za-z_]+)`?,'(\$[^']*)'\)", expression)
+    """(column form, path) pairs; the column form is a bare name or the ETL's CAST(name AS STRING)."""
+    return re.findall(r"get_json_object\((`?[A-Za-z_]+`?|CAST\([A-Za-z_]+ AS STRING\)),'(\$[^']*)'\)", expression)
 
 
 def test_decode_checks_use_the_etls_own_paths():
@@ -142,7 +190,7 @@ def test_decode_checks_use_the_etls_own_paths():
         paths = _json_paths(decoded)
         assert paths, decoded
         for column, path in paths:
-            piece = f"get_json_object({column},'{path}')"
+            piece = f"get_json_object({column.strip('`')},'{path}')"
             assert piece in etl_text, f"{piece} is not an expression LoopEval's etl.py uses"
             n += 1
     assert n >= 20, n
@@ -179,7 +227,8 @@ class _FakeEtl:
         json.dump([], open(os.path.join(outdir, "carbs.json"), "w"))
         json.dump({"basal": [1], "sensitivity": [1], "carbRatio": [1], "target": [1], "maxBolus": 10, "maxBasalRate": 4,
                    "insulinType": insulin_type or "rapidActingAdult", "padding": "x" * 300}, open(os.path.join(outdir, "therapy.json"), "w"))
-        json.dump({"data_version": 19, "uid_fingerprint": "deadbeef", "counts": {}}, open(os.path.join(outdir, "_export_manifest.json"), "w"))
+        json.dump({"data_version": ex.LOOPEVAL_DATA_VERSION, "uid_fingerprint": "deadbeef", "counts": {}},
+                  open(os.path.join(outdir, "_export_manifest.json"), "w"))
         return {"glucose": len(glucose), "doses": 60, "carbs": 0}
 
 
@@ -231,10 +280,16 @@ def test_install_loopeval_against_the_local_clone():
         ex.LOOPEVAL_PACKAGE_PARENTS = saved
     assert etl.DATA_VERSION == ex.LOOPEVAL_DATA_VERSION
     assert etl.TBL == ex.BRIDGE_TABLE
-    assert provenance["loopeval_package_parent"] == local_parent
+    assert provenance["loopeval_package_parent"] == local_parent      # a local path has no Workspace user segment
     assert len(provenance["loopeval_etl_sha256"]) == 64
     assert "plotting" not in sys.modules.get("loopeval_analysis").__dict__   # the top-level init did not run
     assert sys.modules["loopeval_analysis.tidepool.conn"].query.__name__ == "query"
+    # Since data version 20 the ETL takes query() from batch.py, whose direct
+    # query is imported from the connection module: the stub still serves it.
+    batch = sys.modules["loopeval_analysis.tidepool.batch"]
+    assert etl.query is batch.query
+    assert batch._direct_query is sys.modules["loopeval_analysis.tidepool.conn"].query
+    assert len(provenance["loopeval_batch_sha256"]) == 64 and len(provenance["loopeval_cgm_streams_sha256"]) == 64
 
 
 def test_carried_view_carries_settings_forward_and_drops_schedule_less_rows():
@@ -375,7 +430,9 @@ if __name__ == "__main__":
     test_preset_map()
     test_scrubber_replaces_raw_ids()
     test_manifest_rewrite_and_file_verification()
+    test_identifier_scan_and_masks()
     test_bridge_exposes_every_etl_column()
+    test_bridge_carries_the_columns_read_since_data_version_20()
     test_decode_checks_use_the_etls_own_paths()
     test_time_expression_is_tolerant()
     test_export_loop_end_to_end_with_a_fake_etl()

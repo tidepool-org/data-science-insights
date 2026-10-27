@@ -36,7 +36,7 @@ What it writes, beside the run (outside the repository and Drive):
 Run (house interpreter):
     /Users/mconn/miniconda3/envs/tidepool-data-science-simulator-dev/bin/python \\
         loopeval_export/export_flagged_segments.py [run_folder] [--out folder]
-Default run folder: the newest under ~/.loop-eval/fda-transition-cohort/.
+Default run folder: the newest under the Drive exports folder `510k/claude/loopeval_export/exports/`.
 """
 
 import argparse

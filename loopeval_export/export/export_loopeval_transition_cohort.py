@@ -4,7 +4,9 @@ What this produces (plan of 2026-09-24, loopeval_export/architecture.md): one
 directory per replayable user, named by the salted alias, holding the file set
 LoopEval's JSONFileDataSource reads (glucose.json, doses.json, carbs.json,
 therapy.json) plus the ETL's sidecars (decision_times.csv, disruptions.csv,
-stale_cgm.csv, _export_manifest.json); beside them cohort_windows.csv (alias,
+stale_cgm.csv, cgm_quality.csv, dose_doubt.csv, carb_revisions.json where a
+window has edited carb entries, _export_manifest.json); beside them
+cohort_windows.csv (alias,
 tier, window dates, insulin preset, export status and counts), run_summary.csv
 (aggregates), run_manifest.json (provenance), and a zip of the run.
 
@@ -78,16 +80,18 @@ FDA_ANALYSIS_DIR = os.path.join(REPO_DIR, "FDA_real_world_data", "analysis")
 # at /Workspace/Users/mark.connolly@tidepool.org/LoopEval (first entry; the
 # checked-out commit is what runs). The first directory here that contains
 # loopeval_analysis/tidepool/etl.py is used. Only tidepool/__init__.py,
-# tidepool/etl.py, and tidepool/provenance.py are executed: the package's
-# top-level __init__ (plotting and feature modules) is bypassed and the
-# connection module is stubbed.
+# tidepool/etl.py, tidepool/batch.py, tidepool/cgm_streams.py, and
+# tidepool/provenance.py are executed: the package's top-level __init__
+# (plotting and feature modules) is bypassed and the connection module is
+# stubbed (batch.py, the ETL's query module since data version 20, takes its
+# direct query from the stub).
 LOOPEVAL_PACKAGE_PARENTS = (
     "/Workspace/Users/mark.connolly@tidepool.org/LoopEval/analysis",
     "/Workspace/Users/mark.connolly@tidepool.org/loopeval",
     "/Volumes/dev/fda_510k_rwd/loopeval_export",
 )
-LOOPEVAL_COMMIT = "a651fd9"          # github.com/loopkitdev/LoopEval main, 2026-09-22
-LOOPEVAL_DATA_VERSION = 19           # etl.DATA_VERSION the run is pinned to (halts otherwise)
+LOOPEVAL_COMMIT = "7400f4f"          # github.com/loopkitdev/LoopEval main, 2026-10-13 (data version 32)
+LOOPEVAL_DATA_VERSION = 32           # etl.DATA_VERSION the run is pinned to (halts otherwise); 19 at a651fd9 until 2026-10-14
 
 # Tables.
 SOURCE_TABLE = "dev.default.bddp_sample_all_2"          # the donated extract (decision 1, settled 2026-09-24)
@@ -111,10 +115,10 @@ EXTENDED_TIER_MAX_STALENESS_DAYS = 30
 TIERS_TO_EXPORT = ("core", "extended")
 # Trial first: the Run button exports only the first TRIAL_LIMIT tier users (by
 # alias). Set to None for the full tier set once the trial run reads clean.
-TRIAL_LIMIT = None
+TRIAL_LIMIT = None                   # 2026-10-14: the data-version-32 trial (15:12Z, three users) verified clean; full set next
 # Repair run: export only these aliases (comma-separated) into a new run folder,
 # to replace their directories in an earlier bundle. Empty = the whole tier set.
-REPAIR_ALIASES = "u468df3ed6861409f,u7ab5efa149222250,u26e84a04ff606d22"
+REPAIR_ALIASES = ""
 
 # RFAI window label (rfai_transition_labelled.insulin_type) -> LoopEval preset
 # (ExponentialInsulinModelPreset). Labels not listed ('multiple', 'unknown')
@@ -129,6 +133,22 @@ BRAND_TO_PRESET = {
 VOLUME_NAME = f"{FDA_CATALOG}.loopeval_export"
 VOLUME_PATH = "/Volumes/dev/fda_510k_rwd/loopeval_export"
 FALLBACK_OUTPUT_ROOT = os.path.join(PROJECT_DIR, "outputs")
+
+# Identifiers no written file may carry besides the raw user id (found in the
+# 2026-10-14 full-set bundle): an email address (the analyst's Workspace path
+# was in every manifest) and an app bundle identifier carrying a 10-character
+# Apple developer team id (the uploading app's name on HealthKit-route CGM
+# readings, which for a self-built Loop is the person's own developer
+# account; the ETL writes it as the sensor label in cgm_quality.csv). The
+# Workspace user segment is redacted in the provenance, the team id is masked
+# in place, and the scan halts the run if either pattern survives.
+WORKSPACE_USER_SEGMENT = (r"/Workspace/Users/[^/]+/", "/Workspace/Users/<analyst>/")
+TEAM_ID_MASK = (r"\bcom\.[A-Za-z0-9]{10}\.", "com.<team>.")
+IDENTIFIER_PATTERNS = {
+    "email address": r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+    "app bundle identifier with a developer team id": r"\bcom\.[A-Za-z0-9]{10}\.[A-Za-z0-9.\-]+",
+}
+FILES_TO_MASK = ("cgm_quality.csv",)
 
 # Per-export verification: file floors in bytes (LoopEval's export_full.py
 # pattern, sized for a 31-day window) and the CGM reconciliation band.
@@ -145,6 +165,11 @@ ETL_COLUMNS = [
     "reason", "bgForecast", "recommendedBolus", "recommendedBasal", "errors", "timezone", "status",
     "overridePreset", "insulinSensitivityScaleFactor", "basalRateScaleFactor", "carbRatioScaleFactor", "bgTarget",
     "units", "basalSchedules", "insulinSensitivities", "carbRatios", "bgTargets", "bgSafetyLimit", "bolus", "basal",
+    # Read since ETL data versions 20-32 (update of 2026-10-14): the CGM sensor
+    # label, the bolus-in-progress warning, the bolus-screen carb versions, and
+    # the requested bolus and insulin on board that restore unrecorded manual
+    # boluses. The last two are numbers the ETL addresses by path (wrapped).
+    "deviceId", "warnings", "food", "originalFood", "requestedBolus", "insulinOnBoard",
 ]
 
 # =============================================================================
@@ -377,6 +402,7 @@ FROM (
          b.recommendedBolus, b.recommendedBasal, b.bgForecast, b.errors, b.timezone, b.`status`,
          b.overridePreset, b.insulinSensitivityScaleFactor, b.basalRateScaleFactor,
          b.carbRatioScaleFactor, b.bgTarget,
+         b.deviceId, b.warnings, b.food, b.originalFood, b.requestedBolus, b.insulinOnBoard,
          b.units, b.basalSchedules, b.insulinSensitivities, b.insulinSensitivity,
          b.carbRatios, b.carbRatio, b.bgTargets, b.bgSafetyLimit, b.bolus, b.basal, b.activeSchedule,
          w.tb_to_ab_seg1_start, w.tb_to_ab_seg2_end, w.export_start, w.export_end, w.scan_start
@@ -602,6 +628,7 @@ FROM (
          s.origin, s.payload, s.nutrition, s.insulinFormulation,
          s.recommendedBolus, s.recommendedBasal, s.bgForecast, s.errors, s.`status`,
          s.overridePreset, s.insulinSensitivityScaleFactor, s.basalRateScaleFactor, s.carbRatioScaleFactor, s.bgTarget,
+         s.deviceId, s.warnings, s.food, s.originalFood, s.requestedBolus, s.insulinOnBoard,
          {_carried('timezone')}              AS timezone,
          {_carried('units')}                 AS units,
          {_complete_schedules(_carried('basalSchedules'), 'rate')}                AS basalSchedules,
@@ -674,6 +701,15 @@ SELECT s._userId, s.type, s.subType,
             ELSE to_json(named_struct('low',  named_struct('$numberDouble', get_json_object(s.bgTarget, '$.low')),
                                       'high', named_struct('$numberDouble', get_json_object(s.bgTarget, '$.high')))) END
                                                                                         AS bgTarget,
+       s.deviceId, s.warnings, s.food, s.originalFood,
+       CASE WHEN s.requestedBolus IS NULL THEN NULL
+            ELSE to_json(named_struct('amount',
+                   named_struct('$numberDouble', get_json_object(s.requestedBolus, '$.amount')))) END
+                                                                                        AS requestedBolus,
+       CASE WHEN s.insulinOnBoard IS NULL THEN NULL
+            ELSE to_json(named_struct('amount',
+                   named_struct('$numberDouble', get_json_object(s.insulinOnBoard, '$.amount')))) END
+                                                                                        AS insulinOnBoard,
        s.units, s.basalSchedules, s.insulinSensitivities, s.carbRatios, s.bgTargets, s.bgSafetyLimit,
        CASE WHEN s.bolus IS NULL THEN NULL
             ELSE to_json(named_struct('amountMaximum', named_struct('value',
@@ -740,6 +776,21 @@ DECODE_CHECKS = [
     ("dosingDecision", "recommendedBasal.duration",
      "get_json_object(recommendedBasal,'$.duration') IS NOT NULL",
      "CAST(get_json_object(recommendedBasal,'$.duration.$numberInt') AS BIGINT) IS NOT NULL"),
+    ("dosingDecision", "requestedBolus.amount",
+     "get_json_object(requestedBolus,'$.amount') IS NOT NULL",
+     "COALESCE(CAST(get_json_object(CAST(requestedBolus AS STRING),'$.amount.$numberDouble') AS DOUBLE), CAST(get_json_object(CAST(requestedBolus AS STRING),'$.amount.$numberInt') AS DOUBLE)) IS NOT NULL"),
+    ("dosingDecision", "insulinOnBoard.amount",
+     "get_json_object(insulinOnBoard,'$.amount') IS NOT NULL",
+     "COALESCE(CAST(get_json_object(CAST(insulinOnBoard AS STRING),'$.amount.$numberDouble') AS DOUBLE), CAST(get_json_object(CAST(insulinOnBoard AS STRING),'$.amount.$numberInt') AS DOUBLE)) IS NOT NULL"),
+    # Strings the ETL reads inside payload (sensor label, scheduled-basal
+    # marker): passed through, so these checks prove only that the payload is
+    # still JSON after the in-place deliveredUnits replacement.
+    ("basal", "payload.syncIdentifier",
+     "get_json_object(payload,'$.syncIdentifier') IS NOT NULL",
+     "get_json_object(CAST(payload AS STRING),'$.syncIdentifier') IS NOT NULL"),
+    ("cbg", "payload.transmitterId",
+     "get_json_object(payload,'$.transmitterId') IS NOT NULL",
+     "get_json_object(CAST(payload AS STRING),'$.transmitterId') IS NOT NULL"),
     ("pumpSettings", "bolus.amountMaximum.value",
      "get_json_object(bolus,'$.amountMaximum.value') IS NOT NULL",
      "COALESCE(CAST(get_json_object(bolus,'$.amountMaximum.value.$numberDouble') AS DOUBLE), CAST(get_json_object(bolus,'$.amountMaximum.value.$numberInt') AS DOUBLE)) IS NOT NULL"),
@@ -917,6 +968,44 @@ def scan_for_raw_ids(root, raw_ids):
     return offenders
 
 
+def mask_team_ids(root, file_names=FILES_TO_MASK):
+    """Replace the developer team id inside app bundle identifiers in the named files under root
+    (the ETL's cgm_quality.csv sensor labels). Returns the number of files changed."""
+    pattern, replacement = TEAM_ID_MASK
+    changed = 0
+    for folder, _dirs, files in os.walk(root):
+        for name in files:
+            if name not in file_names:
+                continue
+            path = os.path.join(folder, name)
+            text = open(path, encoding="utf-8", errors="ignore").read()
+            masked = re.sub(pattern, replacement, text)
+            if masked != text:
+                open(path, "w", encoding="utf-8").write(masked)
+                changed += 1
+    return changed
+
+
+def scan_for_identifiers(root, patterns=IDENTIFIER_PATTERNS):
+    """Every text file under root must match none of the identifier patterns. Returns
+    (path, pattern name) offenders; images are skipped."""
+    offenders = []
+    for folder, _dirs, files in os.walk(root):
+        for name in files:
+            if name.endswith((".png", ".zip")):
+                continue
+            path = os.path.join(folder, name)
+            try:
+                text = open(path, encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            for label, pattern in patterns.items():
+                if re.search(pattern, text):
+                    offenders.append((path, label))
+                    break
+    return offenders
+
+
 def sha256_of_file(path):
     return hashlib.sha256(open(path, "rb").read()).hexdigest()
 
@@ -952,7 +1041,8 @@ def _install_loopeval(spark):
 
     stub.query = query
     sys.modules["loopeval_analysis.tidepool.conn"] = stub
-    for name in ("loopeval_analysis.tidepool", "loopeval_analysis.tidepool.etl", "loopeval_analysis.tidepool.provenance"):
+    for name in ("loopeval_analysis.tidepool", "loopeval_analysis.tidepool.etl", "loopeval_analysis.tidepool.provenance",
+                 "loopeval_analysis.tidepool.batch", "loopeval_analysis.tidepool.cgm_streams"):
         sys.modules.pop(name, None)      # a re-run in the same session re-imports the files
     import loopeval_analysis.tidepool.etl as etl  # noqa: E402
     if int(getattr(etl, "DATA_VERSION", -1)) != LOOPEVAL_DATA_VERSION:
@@ -962,8 +1052,10 @@ def _install_loopeval(spark):
         "loopeval_commit": LOOPEVAL_COMMIT,
         "loopeval_data_version": etl.DATA_VERSION,
         "loopeval_etl_sha256": sha256_of_file(etl_path),
-        "loopeval_package_parent": parent,
+        "loopeval_package_parent": re.sub(*WORKSPACE_USER_SEGMENT, parent),   # the Workspace path names the analyst
         "loopeval_provenance_sha256": sha256_of_file(os.path.join(parent, "loopeval_analysis", "tidepool", "provenance.py")),
+        "loopeval_batch_sha256": sha256_of_file(os.path.join(parent, "loopeval_analysis", "tidepool", "batch.py")),
+        "loopeval_cgm_streams_sha256": sha256_of_file(os.path.join(parent, "loopeval_analysis", "tidepool", "cgm_streams.py")),
     }
     return etl, provenance
 
@@ -1219,6 +1311,12 @@ def write_outputs(flags, merged, coverage, bridge_stats, run_root, provenance, s
     if offenders:
         raise AssertionError(f"raw user id found in {len(offenders)} written file(s): {offenders[0][0]} — run halted before the zip")
     print("   hard check passed: no raw user id in any written file")
+    masked = mask_team_ids(run_root)
+    print(f"   developer team ids masked in {masked} file(s)")
+    offenders = scan_for_identifiers(run_root)
+    if offenders:
+        raise AssertionError(f"{offenders[0][1]} found in {len(offenders)} written file(s): {offenders[0][0]} — run halted before the zip")
+    print("   hard check passed: no email address or developer team id in any written file")
     # The zip is built on the driver's local disk and copied across: the volume
     # mount does not support the seeks a zip writer needs (trial run 2026-09-24:
     # OSError Errno 5 from shutil.make_archive writing straight to the volume).
