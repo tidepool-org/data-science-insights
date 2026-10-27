@@ -18,9 +18,20 @@ Usage:
 edits.json is a list of objects:
   {"find": "<exact text in one paragraph>", "replace": "<new text>",
    "nth": 1,                       # optional: which paragraph when several match (1-based)
-   "paragraph": "<substring>"}     # optional: a substring that identifies the paragraph
+   "paragraph": "<substring>",     # optional: a substring that identifies the paragraph
+   "plain": true}                  # optional: inserted text drops bold (body text after a bold lead)
 Only the differing words are tracked: a common prefix and suffix of find and
-replace are left untouched, trimmed to whole words.  An edit whose range would
+replace are left untouched, trimmed to whole words.  An entry of the form
+  {"insert_after": "<substring of one paragraph>", "label": "<plain prefix or empty>",
+   "lead": "<bold lead or empty>", "text": "<body>"}
+inserts a whole new paragraph after that paragraph as a tracked insertion
+(add "properties_from": "<substring of another paragraph>" to copy that
+paragraph's style instead, e.g. a heading);
+  {"delete_paragraph": "<substring of one paragraph>"}
+marks every run of that paragraph and its paragraph mark as a tracked deletion
+(accepting removes the paragraph; comment anchors inside it are kept),
+copying the reference paragraph's paragraph and run properties (the lead is
+set bold, the body plain); "insert_before" does the same ahead of it.  An edit whose range would
 cut through a hyperlink, field, or existing revision is refused with a message;
 a find string that matches no paragraph, or several without "nth"/"paragraph",
 is also refused.  Text is matched after XML unescaping, exactly as
@@ -173,8 +184,10 @@ class Revisions:
         return element
 
 
-def apply_edit_to_paragraph(paragraph_xml, start, end, insertion, revisions):
-    """Track-delete text [start, end) of the paragraph and track-insert `insertion` after it."""
+def apply_edit_to_paragraph(paragraph_xml, start, end, insertion, revisions, plain=False):
+    """Track-delete text [start, end) of the paragraph and track-insert `insertion` after it.
+
+    With plain=True the inserted run drops bold (for body text appended to a bold lead)."""
     opening, tokens = tokenize_paragraph(paragraph_xml)
     new_tokens = []
     position = 0
@@ -201,7 +214,8 @@ def apply_edit_to_paragraph(paragraph_xml, start, end, insertion, revisions):
             new_tokens.append(revisions.wrap("del", make_run(properties, inside, deleted=True)))
             last_deleted_index = len(new_tokens)
         if pending_insert and (inside or boundary_insert) and (token_end >= end):
-            new_tokens.append(revisions.wrap("ins", make_run(properties, pending_insert)))
+            insert_properties = re.sub(r"<w:b/>|<w:bCs/>", "", properties) if plain else properties
+            new_tokens.append(revisions.wrap("ins", make_run(insert_properties, pending_insert)))
             pending_insert = None
             inserted = True
         new_tokens.append(make_run(properties, after))
@@ -221,9 +235,86 @@ def apply_edit_to_paragraph(paragraph_xml, start, end, insertion, revisions):
 PARAGRAPH_PATTERN = re.compile(r"<w:p(?:\s[^>]*)?>.*?</w:p>", re.S)
 
 
+def insert_paragraph(document_xml, edit, revisions):
+    """Insert a new paragraph next to the one containing the anchor, as a tracked insertion."""
+    key = "insert_after" if "insert_after" in edit else "insert_before"
+    anchor = edit[key]
+    hits = [m for m in PARAGRAPH_PATTERN.finditer(document_xml) if anchor in paragraph_text(m.group(0))]
+    if len(hits) != 1:
+        raise ValueError("insert anchor matches %d paragraphs (need exactly 1): %r" % (len(hits), anchor[:80]))
+    reference = hits[0].group(0)
+    if edit.get("properties_from"):  # borrow paragraph properties (e.g. a heading style) from another paragraph
+        donors = [m for m in PARAGRAPH_PATTERN.finditer(document_xml) if edit["properties_from"] in paragraph_text(m.group(0))]
+        if len(donors) != 1:
+            raise ValueError("properties_from matches %d paragraphs (need exactly 1): %r" % (len(donors), edit["properties_from"][:80]))
+        reference = donors[0].group(0)
+    opening, tokens = tokenize_paragraph(reference)
+    properties = next((t for t in tokens if token_kind(t) == "w:pPr"), "<w:pPr></w:pPr>")
+    properties = re.sub(r"<w:(?:ins|del)\b[^>]*/>", "", properties)  # the anchor may itself be a tracked paragraph
+    first_run = next((t for t in tokens if token_kind(t) == "w:r"), None)
+    run_properties = ""
+    if first_run is not None:
+        match = re.match(r"<w:r(?:\s[^>]*)?>(<w:rPr>.*?</w:rPr>)?", first_run, re.S)
+        run_properties = re.sub(r"<w:b/>|<w:bCs/>|<w:rStyle [^>]*/>", "", match.group(1) or "")
+    bold_properties = run_properties.replace("</w:rPr>", "<w:b/></w:rPr>") if run_properties else "<w:rPr><w:b/></w:rPr>"
+    mark = ('<w:ins w:id="%d" w:author="%s" w:date="%s"/>' % (revisions.next_id, html.escape(revisions.author, quote=True), revisions.date))
+    revisions.next_id += 1
+    # the inserted paragraph mark lives in pPr/rPr; schema order puts w:ins first inside rPr
+    if "<w:rPr>" in properties:
+        new_properties = properties.replace("<w:rPr>", "<w:rPr>" + mark, 1)
+    else:
+        new_properties = properties.replace("</w:pPr>", "<w:rPr>" + mark + "</w:rPr></w:pPr>")
+    runs = ""
+    if edit.get("label"):
+        runs += make_run(run_properties, edit["label"])  # plain prefix such as "Example A: "
+    if edit.get("lead"):
+        runs += make_run(bold_properties, edit["lead"])
+    if edit.get("text"):
+        runs += make_run(run_properties, (" " if edit.get("lead") else "") + edit["text"])
+    new_paragraph = "<w:p>" + new_properties + revisions.wrap("ins", runs) + "</w:p>"
+    position = hits[0].end() if key == "insert_after" else hits[0].start()
+    return document_xml[:position] + new_paragraph + document_xml[position:]
+
+
+def delete_paragraph(document_xml, edit, revisions):
+    """Track-delete a whole paragraph: every run becomes <w:del>, and the paragraph mark is marked deleted."""
+    anchor = edit["delete_paragraph"]
+    hits = [m for m in PARAGRAPH_PATTERN.finditer(document_xml) if anchor in paragraph_text(m.group(0))]
+    if len(hits) != 1:
+        raise ValueError("delete anchor matches %d paragraphs (need exactly 1): %r" % (len(hits), anchor[:80]))
+    opening, tokens = tokenize_paragraph(hits[0].group(0))
+    new_tokens = []
+    for token in tokens:
+        kind = token_kind(token)
+        if kind == "w:pPr":
+            mark = '<w:del w:id="%d" w:author="%s" w:date="%s"/>' % (revisions.next_id, html.escape(revisions.author, quote=True), revisions.date)
+            revisions.next_id += 1
+            if "<w:rPr>" in token:
+                token = token.replace("<w:rPr>", "<w:rPr>" + mark, 1)
+            else:
+                token = token.replace("</w:pPr>", "<w:rPr>" + mark + "</w:rPr></w:pPr>")
+            new_tokens.append(token)
+        elif kind == "w:r" and run_text(token):
+            # whole-run deletion: keep the run as is (tabs, breaks, properties) and mark its text deleted
+            deleted = token.replace("<w:t>", "<w:delText>").replace("<w:t ", "<w:delText ").replace("</w:t>", "</w:delText>")
+            new_tokens.append(revisions.wrap("del", deleted))
+        else:
+            new_tokens.append(token)  # markers, empty runs, existing revisions
+    new_paragraph = opening + "".join(new_tokens) + "</w:p>"
+    return document_xml[:hits[0].start()] + new_paragraph + document_xml[hits[0].end():]
+
+
 def apply_edits(document_xml, edits, revisions):
     applied = 0
     for edit in edits:
+        if "delete_paragraph" in edit:
+            document_xml = delete_paragraph(document_xml, edit, revisions)
+            applied += 1
+            continue
+        if "insert_after" in edit or "insert_before" in edit:
+            document_xml = insert_paragraph(document_xml, edit, revisions)
+            applied += 1
+            continue
         find, replace = edit["find"], edit["replace"]
         if not find:
             raise ValueError("empty find string")
@@ -248,7 +339,7 @@ def apply_edits(document_xml, edits, revisions):
         insertion = replace[prefix:len(replace) - suffix]
         if start == end and not insertion:
             continue  # nothing changes
-        new_paragraph = apply_edit_to_paragraph(match.group(0), start, end, insertion, revisions)
+        new_paragraph = apply_edit_to_paragraph(match.group(0), start, end, insertion, revisions, plain=bool(edit.get("plain")))
         document_xml = document_xml[:match.start()] + new_paragraph + document_xml[match.end():]
         applied += 1
     return document_xml, applied
@@ -274,8 +365,7 @@ def accept_all_revisions(document_xml):
     """
     counts = {}
     # inserted paragraph marks: just drop the marker
-    document_xml, counts["inserted_marks"] = re.subn(
-        r"(<w:pPr>(?:(?!</w:pPr>).)*?<w:rPr>(?:(?!</w:rPr>).)*?)<w:ins\b[^>]*/>", r"\1", document_xml, flags=re.S)
+    document_xml, counts["inserted_marks"] = re.subn(r"<w:ins\b[^>]*/>", "", document_xml)
     # deleted paragraph marks: merge the paragraph into the next one (Word keeps the next mark's properties)
     merged = 0
     while True:
@@ -300,7 +390,13 @@ def accept_all_revisions(document_xml):
     # run-level deletions vanish, insertions are unwrapped (moves behave the same way);
     # the opening tag must not be self-closing, i.e. its last character before '>' is not '/'
     opening = r"(?:\s[^>]*[^/>])?>"
-    document_xml, counts["deletions"] = re.subn(r"<w:(?:del|moveFrom)\b" + opening + r".*?</w:(?:del|moveFrom)>", "", document_xml, flags=re.S)
+    # a deleted block may wrap comment anchors, comment references, or bookmarks; those survive the deletion
+    def keep_markers(match):
+        inner = match.group(0)
+        kept = re.findall(r"<w:(?:commentRangeStart|commentRangeEnd|bookmarkStart|bookmarkEnd)\b[^>]*/>"
+                          r"|<w:r\b(?:(?!</w:r>).)*?<w:commentReference\b[^>]*/></w:r>", inner, flags=re.S)
+        return "".join(kept)
+    document_xml, counts["deletions"] = re.subn(r"<w:(?:del|moveFrom)\b" + opening + r".*?</w:(?:del|moveFrom)>", keep_markers, document_xml, flags=re.S)
     document_xml, counts["insertions"] = re.subn(r"<w:(?:ins|moveTo)\b" + opening + r"(.*?)</w:(?:ins|moveTo)>", r"\1", document_xml, flags=re.S)
     document_xml = re.sub(r"<w:(?:moveFromRangeStart|moveFromRangeEnd|moveToRangeStart|moveToRangeEnd)\b[^>]*/>", "", document_xml)
     # formatting-change records
@@ -310,6 +406,15 @@ def accept_all_revisions(document_xml):
     leftover = re.findall(r"<w:(?:ins|del)\b[^>]*>", document_xml)
     if leftover:
         raise ValueError("revisions remain after accepting: %r" % leftover[:3])
+    # a list item whose every run was deleted is left as an empty bullet; Word drops it, so do we
+    emptied = 0
+    for match in reversed(list(PARAGRAPH_PATTERN.finditer(document_xml))):
+        paragraph = match.group(0)
+        if "<w:numPr>" in paragraph and not paragraph_text(paragraph).strip() and "commentRange" not in paragraph \
+                and "<w:drawing" not in paragraph and "<w:tbl" not in paragraph:
+            document_xml = document_xml[:match.start()] + document_xml[match.end():]
+            emptied += 1
+    counts["emptied_bullets_removed"] = emptied
     return document_xml, counts
 
 
