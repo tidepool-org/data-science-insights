@@ -365,6 +365,14 @@ MJC asked for the CE=0/BE=0 vs CE≥3/BE≥3 AB-only scatter (`figure_8_3e_ab_ce
 - **Regenerated:** adult / pediatric / all via `--figs 8_3e_ab_ce0hma`. **Report:** the embedded Fig 8.4c (`all` cohort, developer_note item 2) is now stale → re-embed by caption, and check that the caption / §9 wording describes the dashed line as the all-day-types AB overall. Fig 8.4b is unchanged.
 - **Exploratory driver** `exploratory/tdd_percentile_ab_and_2type.py`: its `2type` / `2type_ab` variants share the builder and inherit the fix; re-run it to refresh `outputs/tdd_pct_ab_2type/`.
 
+## 2026-10-26 — Publication literature review (PubMed) for a PLN-1008 paper
+
+MC asked how the PLN-1008 work could become a publication and then for a literature review. Written to Drive `510k/claude/PLN RPT-1008/publication_literature_review_2026-10-26.md` (moved off the repository on 2026-10-27 at MC's request; PubMed through the claude.ai connector, 2026-10-26; about 190 records screened at title level, about 50 at abstract level, Niu 2026 and Lal 2026 read in full; search log in its section 8). No cohort counts in the file.
+
+- **Positioning.** No indexed paper compares no-announcement days with announced days within user on a large real-world cohort and stratifies the no-announcement days by the user's own insulin demand. Niu 2026 (Diabetes Care, 780G bolus-free days) states it did not compare no-bolus with bolus days because intake and activity were unobserved; that limitation is the §8.3 contribution. Lal 2026 (Diabetologia) calls the open-source no-announcement evidence OpenAPS-only and small; Loop at scale is new. The autobolus literature is 780G and Control-IQ only, so the §8.2 and §8.4 temp-basal versus autobolus contrast within one algorithm family has no precedent.
+- **Reference check.** Plan references 2 (Lum 2021) and 3 (Niu 2026) resolve. Reference 1, "Kovatchev 2023, Diabetes Care, Real-World Use of the Control-IQ ... Time in Closed Loop and Patterns of Use", is not in PubMed under that title, author and year, or journal and year. Niu 2026 cites a Tandem presentation at the 2024 ADA Scientific Sessions with the matching finding (higher TIR on no-bolus days, no more hypoglycemia). The plan's §7.2 attributes the "at most one bolus" day definition to reference 1, so the citation must be located (ADA abstracts are in a supplement of *Diabetes*) or the attribution changed before any manuscript, and RPT-1008 carries the same reference.
+- **Open from the review.** Read Bombaci 2025 (Diabetes Care, day-level carbohydrate-entry variability) and Laugesen 2024 (algorithm-detected missed boluses) in full; find the 780G three-month unannounced-meals study Niu cites.
+
 ## Pending / To do (deferred — not yet done)
 
 - **FDA-pipeline `_userId` pseudonymization** — the FDA exports still write raw `_userId`; apply the D16 treatment there too.

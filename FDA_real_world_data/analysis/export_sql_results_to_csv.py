@@ -222,6 +222,10 @@ DEFAULT_JOBS = [
     # ("transition_boundary_rows_export.sql", "none"),  # raw rows around the period boundary for every failing window (2026-10-09; run 2026-10-09, filed 2026-10-13)
     # ("dosing_decision_recommended_bolus_probe.sql", "none"),  # does recommendedBolus.amount mark automated-bolus dosing? two users, raw rows (2026-10-12)
     # ("transition_excluded_windows_age_gender.sql", "none"),  # age and gender of the 16 windows to be excluded, aliases in its first statement (2026-10-13; run and filed 2026-10-13)
+    # ("dose_marker_census.sql", "none"),  # execution plan Step 1: every automation marker the two routes wrote, aggregates only (2026-10-27; first run held back; re-cut with bucketed display names, then all diagnosis types 2026-10-29; ran 2026-10-29 ahead of the version-gate check)
+    # ("dose_rule_estimate.sql", "none"),  # execution plan Step 1: candidate rules R1-R4 and D against production, with the window search copied verbatim (2026-10-27; run and filed 19:29Z; 2026-10-29: all diagnosis types, R3b/R4b and the rule sets tied to Loop, the missing-version date rule, results 8-10; ran 2026-10-29 ahead of the version-gate check)
+    # ("transition_cohort_version_gate_check.sql", "none"),  # execution plan Step 1: windows with no plugin-route version pass the segment version gate as 0 (2026-10-27; by diagnosis group 2026-10-29; ran and filed 2026-10-29)
+    ("classification_walkthrough.sql", "none"),  # the meeting document of 2026-10-29: every marker, the build-up of days, the windows funnel, the 0.80 box, examples under the salted alias (MC, 2026-10-29); 2026-10-30: 12 of 14 beside the box, ties to the earliest, result 9, for draft 2
 ]
 
 

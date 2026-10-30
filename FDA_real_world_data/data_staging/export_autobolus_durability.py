@@ -3,6 +3,15 @@ import argparse
 
 CATALOG = "dev.fda_510k_rwd"
 
+# Share of a 28-day window's days that must carry Loop dosing data (a row of
+# loop_recommendations: an automated bolus or temporary basal that day). It
+# decides whether a user's final 28 days are read directly and where a
+# terminal dropoff is anchored. 0.80 since 2026-10-30 (MC), the 80% the
+# transition window's periods need; it was 0.70. The 0.70 and 0.90
+# sensitivity builds are the `_cov070` and `_cov090` variants
+# (production_runs/run_all_coverages.py).
+DEFAULT_MIN_COVERAGE = 0.80
+
 
 def run(
     spark,
@@ -11,6 +20,7 @@ def run(
     user_dates_table="dev.default.bddp_user_dates",
     user_gender_table="dev.default.user_gender",
     min_autobolus_count=3,
+    min_coverage=DEFAULT_MIN_COVERAGE,
 ):
     spark.sql(f"""
     --begin-sql
@@ -24,7 +34,7 @@ def run(
         56 AS min_followup_days,
         28 AS final_period_days,
         0.80 AS discontinuation_threshold,
-        0.70 AS min_coverage
+        {min_coverage} AS min_coverage
     ),
 
     daily_flags AS (
@@ -175,10 +185,10 @@ def run(
         AS had_terminal_dropoff,
 
       -- has_final_coverage: True iff we can classify the user. Either the
-      -- final 28 days are dense (≥70% coverage) and we read AB% directly, or
-      -- the user had a post-adoption terminal dropoff and we classify them
-      -- via the pre-dropoff window (discontinued if pre-dropoff AB% was low,
-      -- sustained/censored otherwise).
+      -- final 28 days are dense (coverage ≥ min_coverage) and we read AB%
+      -- directly, or the user had a post-adoption terminal dropoff and we
+      -- classify them via the pre-dropoff window (discontinued if
+      -- pre-dropoff AB% was low, sustained/censored otherwise).
       (f.final_days_with_data * 1.0 / p.final_period_days >= p.min_coverage)
         OR (
           eb.effective_last_day IS NOT NULL

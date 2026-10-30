@@ -3,7 +3,9 @@ Unit test for export_autobolus_durability.py.
 
 Tests: All users appear with auditable flags — adoption detection via 3-day
 rolling window, 56-day min followup, final 28-day period classification,
-age eligibility, and demographics join.
+age eligibility, and demographics join. Then the dosing-coverage switch:
+min_coverage is 0.80 by default (MC, 2026-10-30), with 0.70 and 0.90 as
+sensitivity builds.
 
 Run on Databricks.
 """
@@ -38,8 +40,11 @@ RECS_TABLE = f"{TEST_SCHEMA}._test_dur_recs"
 DATES_TABLE = f"{TEST_SCHEMA}._test_dur_dates"
 GENDER_TABLE = f"{TEST_SCHEMA}._test_dur_gender"
 OUTPUT_TABLE = f"{TEST_SCHEMA}._test_dur_output"
+COV_RECS_TABLE = f"{TEST_SCHEMA}._test_dur_cov_recs"
+COV_OUTPUT_TABLE = f"{TEST_SCHEMA}._test_dur_cov_output"
 
-ALL_TABLES = [RECS_TABLE, DATES_TABLE, GENDER_TABLE, OUTPUT_TABLE]
+ALL_TABLES = [RECS_TABLE, DATES_TABLE, GENDER_TABLE, OUTPUT_TABLE,
+              COV_RECS_TABLE, COV_OUTPUT_TABLE]
 
 # --- Test data ---
 # user_continues (age 30): 60 days all-AB.
@@ -71,6 +76,31 @@ recs_rows = (
     + make_loop_recs("user_dropoff_disc", date(2025, 1, 4), n_days=57, dosing_mode="temp_basal")
     + make_loop_recs("user_dropoff_disc", date(2025, 4, 10), n_days=1, dosing_mode="temp_basal")
 )
+
+# Coverage switch users (own table; the dates and gender tables are reused,
+# and these users are absent from them). Both are all-AB from 2025-01-01,
+# then have one AB day on 2025-03-29 after a gap, so the final 28 days
+# (2025-03-02..03-29) hold 22 or 23 days with data: 0.786 and 0.821 of 28.
+# A final window below min_coverage sends the user down the
+# terminal-dropoff path, anchored at the last day of the dense run.
+# user_cov22: dense to 2025-03-22. Read directly at 0.70; dropoff at 0.80
+#   (the default) and 0.90.
+# user_cov23: dense to 2025-03-23. Read directly at 0.70 and 0.80; dropoff
+#   at 0.90.
+coverage_rows = (
+    make_loop_recs("user_cov22", date(2025, 1, 1), n_days=81, dosing_mode="autobolus")
+    + make_loop_recs("user_cov22", date(2025, 3, 29), n_days=1, dosing_mode="autobolus")
+    + make_loop_recs("user_cov23", date(2025, 1, 1), n_days=82, dosing_mode="autobolus")
+    + make_loop_recs("user_cov23", date(2025, 3, 29), n_days=1, dosing_mode="autobolus")
+)
+
+# min_coverage passed to run() (None = the default) → expected
+# (had_terminal_dropoff, effective_last_day) per user.
+coverage_cases = [
+    (0.70, {"user_cov22": (False, date(2025, 3, 29)), "user_cov23": (False, date(2025, 3, 29))}),
+    (None, {"user_cov22": (True, date(2025, 3, 22)), "user_cov23": (False, date(2025, 3, 29))}),
+    (0.90, {"user_cov22": (True, date(2025, 3, 22)), "user_cov23": (True, date(2025, 3, 23))}),
+]
 
 dates_rows = [
     {"userid": "user_continues", "dob": date(1995, 1, 1), "diagnosis_date": date(2010, 1, 1)},
@@ -198,6 +228,36 @@ try:
     assert cont["gender"] == "F", f"user_continues gender should be F"
     assert disc["gender"] == "M", f"user_discontinues gender should be M"
     print("PASS: demographics joined correctly")
+
+    # 10. Coverage switch: the final window's share of days with data
+    #     against min_coverage decides the path; the default is 0.80.
+    setup_test_table(spark, COV_RECS_TABLE, coverage_rows)
+    for min_coverage, expected in coverage_cases:
+        threshold = {} if min_coverage is None else {"min_coverage": min_coverage}
+        run(
+            spark,
+            output_table=COV_OUTPUT_TABLE,
+            loop_recommendations_table=COV_RECS_TABLE,
+            user_dates_table=DATES_TABLE,
+            user_gender_table=GENDER_TABLE,
+            **threshold,
+        )
+        cov = read_test_output(spark, COV_OUTPUT_TABLE).set_index("_userId")
+        label = "the default (0.80)" if min_coverage is None else min_coverage
+        assert float(cov.loc["user_cov22", "final_period_coverage"]) == 0.786
+        assert float(cov.loc["user_cov23", "final_period_coverage"]) == 0.821
+        for user_id, (dropoff, effective_last_day) in expected.items():
+            row = cov.loc[user_id]
+            assert bool(row["had_terminal_dropoff"]) == dropoff, (
+                f"{user_id} at {label}: had_terminal_dropoff should be {dropoff}"
+            )
+            assert str(row["effective_last_day"])[:10] == effective_last_day.isoformat(), (
+                f"{user_id} at {label}: effective_last_day {row['effective_last_day']}, "
+                f"expected {effective_last_day}"
+            )
+            assert row["has_final_coverage"], f"{user_id} at {label}: should be classifiable"
+            assert int(row["is_discontinued"]) == 0, f"{user_id} at {label}: all AB, sustained"
+        print(f"PASS: coverage switch at {label}")
 
     print("\nAll tests passed.")
 

@@ -42,7 +42,7 @@ DURABILITY_ADOPT_DAY = date(2024, 6, 15)
 # pins those two funnel stages EXACTLY against the full Loop-user count, so a
 # shorter window silently breaks the §6.3 cohort-flow test. At most ~35 days so
 # they still cannot produce a stable-AB segment (needs a fully-AB 14-day window
-# starting ≥28 days after first AB, i.e. ≥42 days) or a durability outcome
+# starting ≥30 days after first AB, i.e. ≥44 days) or a durability outcome
 # (needs ≥56 days follow-up). Being ~all-AB, they also fail the TB→AB validity
 # box (seg1 must be <30% AB), so they enter no §8 analysis cohort.
 IR1002_START = date(2024, 9, 2)
@@ -54,7 +54,7 @@ IR1002_DAYS = 28
 # candidate 28-day window with 100% dosing-day coverage (test_analysis_6_3a
 # pins those two funnel stages exactly against the full Loop-user count), and
 # at most ~35 days so no stable-AB segment (needs a fully-AB 14-day window
-# starting ≥28 days after first AB) and no durability outcome (needs ≥56 days
+# starting ≥30 days after first AB) and no durability outcome (needs ≥56 days
 # follow-up; test_analysis_8_7 pins eligible users at exactly 2) can form.
 # All-AB from day 0, so no TB→AB transition segment forms either (seg1 would
 # be 100% AB; the validity box needs <30%) — these users reach only the
@@ -739,13 +739,14 @@ def _set_upload_id(rows, upload_id):
     return rows
 
 
-def _stable_ab_42_day_user(user_id):
-    """42 days of 100% AB starting 2024-06-01 — first-AB day = 2024-06-01,
-    stable 14-day window = days 28..41 (2024-06-29 to 2024-07-12). Full CBG
-    every day for 70%+ coverage. pumpSettings dated inside the stable window
-    so the guardrails staging script can match it."""
-    rows = [_pump_settings_row(user_id, setup_day=STABLE_START + timedelta(days=28))]
-    for d_idx in range(42):
+def _stable_ab_44_day_user(user_id):
+    """44 days of 100% AB starting 2024-06-01 — first-AB day = 2024-06-01,
+    stable 14-day window = days 30..43 (2024-07-01 to 2024-07-14), the
+    earliest window of 14 autobolus days starting ≥30 days after the first.
+    Full CBG every day for 70%+ coverage. pumpSettings dated inside the
+    stable window so the guardrails staging script can match it."""
+    rows = [_pump_settings_row(user_id, setup_day=STABLE_START + timedelta(days=30))]
+    for d_idx in range(44):
         day = STABLE_START + timedelta(days=d_idx)
         rows.extend(_cbg_rows(user_id, day, _cbg_day_at_target_tir(75.0)))
         rows.extend(_autobolus_day_rows(user_id, day, n_events=20))
@@ -753,17 +754,17 @@ def _stable_ab_42_day_user(user_id):
 
 
 def _archetype_stable_ab_jaeb(user_id="int_user_19"):
-    """Sustained 100% AB for 42 days + JAEB upload linkage. Lands in 8-6's
+    """Sustained 100% AB for 44 days + JAEB upload linkage. Lands in 8-6's
     `glycemic_endpoints_by_jaeb_id` output via the INNER JOIN on `uploadID`."""
-    rows = _stable_ab_42_day_user(user_id)
+    rows = _stable_ab_44_day_user(user_id)
     return _set_upload_id(rows, "upload_19")
 
 
 def _archetype_stable_ab_no_jaeb(user_id="int_user_20"):
-    """Sustained 100% AB for 42 days WITHOUT JAEB linkage. Reaches
+    """Sustained 100% AB for 44 days WITHOUT JAEB linkage. Reaches
     `stable_autobolus_segments` and `glycemic_endpoints_stable_autobolus`
     but is excluded from 8-6's per-PtID output (no matching uploadID)."""
-    return _stable_ab_42_day_user(user_id)
+    return _stable_ab_44_day_user(user_id)
 
 
 # ---------------------------------------------------------------------------

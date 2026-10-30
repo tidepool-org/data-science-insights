@@ -45,8 +45,8 @@ Planned but not implemented (no test currently needs them): 07, 10, 11, 17, 18.
 
 | _userId | Archetype | What makes it interesting | Analyses exercised |
 |---|---|---|---|
-| `int_user_19` | Sustained stable AB + JAEB-linked, F 35y/10y dx | 42 days of 100% AB starting 2024-06-01; first-AB day 2024-06-01, stable 14-day window = 2024-06-29..2024-07-12. `uploadID = "upload_19"` maps to `PtID = "ptid_19"` in `jaeb_upload_to_userid`. | 8-6 (JAEB-linked output) |
-| `int_user_20` | Stable AB no JAEB, M 35y/10y dx | Same 42-day shape as 19, but `uploadID` is NULL — excluded from 8-6 by INNER JOIN on JAEB | 8-6 (JAEB exclusion check) |
+| `int_user_19` | Sustained stable AB + JAEB-linked, F 35y/10y dx | 44 days of 100% AB starting 2024-06-01; first-AB day 2024-06-01, stable 14-day window = 2024-07-01..2024-07-14 (the earliest window of 14 autobolus days starting ≥30 days after the first). `uploadID = "upload_19"` maps to `PtID = "ptid_19"` in `jaeb_upload_to_userid`. | 8-6 (JAEB-linked output) |
+| `int_user_20` | Stable AB no JAEB, M 35y/10y dx | Same 44-day shape as 19, but `uploadID` is NULL — excluded from 8-6 by INNER JOIN on JAEB | 8-6 (JAEB exclusion check) |
 
 ## Adoption / durability cohort
 
@@ -64,7 +64,7 @@ in a window disjoint from every other fixture window. The length is pinned from
 both sides: ≥28 days so they anchor a candidate 28-day window and clear the
 day-coverage gate (test_analysis_6_3a pins both stages exactly against the full
 Loop-user count), and ≤~35 days so they cannot produce a stable-AB segment
-(needs ≥42) or a durability outcome (needs ≥56 follow-up). Being ~all-AB they
+(needs ≥44) or a durability outcome (needs ≥56 follow-up). Being ~all-AB they
 also fail the TB→AB validity box, so they enter no §8 analysis cohort.
 `never_preset` needs no archetype: the existing users above have AB days and no
 overrides in this window.

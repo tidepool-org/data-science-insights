@@ -14,6 +14,7 @@ as >=80% temp basal in the final 4 consecutive weeks of available data.
 Inputs:
 - dev.fda_510k_rwd.autobolus_durability  (export_autobolus_durability.sql)
 - dev.fda_510k_rwd.autobolus_event_times (export_autobolus_event_times.sql)
+  (both with `table_suffix` appended for a dosing-coverage variant, e.g. _cov070)
 - dev.default.jaeb_upload_to_userid      (PtID ↔ userid linkage)
 - dev.default.bddp_sample_all_2          (uploadID → userid)
 Outputs (Databricks `--mode default`):
@@ -59,9 +60,9 @@ SUBGROUP_ORDER = [
 # =============================================================================
 
 
-def load_durability(spark) -> pd.DataFrame:
+def load_durability(spark, table_suffix: str = "") -> pd.DataFrame:
     """Load the autobolus durability table, filtered to qualified users."""
-    df = spark.table("dev.fda_510k_rwd.autobolus_durability").toPandas()
+    df = spark.table(f"dev.fda_510k_rwd.autobolus_durability{table_suffix}").toPandas()
 
     n_total = len(df)
     df = df[
@@ -99,7 +100,7 @@ def load_jaeb_map(spark) -> pd.DataFrame:
     return jaeb_map
 
 
-def load_event_times(spark, qualified_user_ids: set) -> pd.DataFrame:
+def load_event_times(spark, qualified_user_ids: set, table_suffix: str = "") -> pd.DataFrame:
     """Load weekly event times, reduce to one row per user for KM curve.
 
     Restricted to `qualified_user_ids` so the KM curve cohort matches the
@@ -110,7 +111,7 @@ def load_event_times(spark, qualified_user_ids: set) -> pd.DataFrame:
     `is_event_week` row flag, so that terminal-dropoff events (whose week may
     fall outside any data-containing week) are not lost.
     """
-    df = spark.table("dev.fda_510k_rwd.autobolus_event_times").toPandas()
+    df = spark.table(f"dev.fda_510k_rwd.autobolus_event_times{table_suffix}").toPandas()
     df = df[df["_userId"].isin(qualified_user_ids)]
 
     summary = df.groupby("_userId").agg(
@@ -418,11 +419,13 @@ def export_by_jaeb_id(durability: pd.DataFrame, jaeb_map: pd.DataFrame, output_d
 # =============================================================================
 
 
-def run_analysis(spark, output_dir=None, suffix: str = ""):
+def run_analysis(spark, output_dir=None, suffix: str = "", table_suffix: str = ""):
     # Durability is box-independent: `suffix` only routes the output directory
     # (so a validity-box variant run drops its 8-7 copy in
-    # outputs/analysis_8_7{suffix}/) — the durability / event-time / JAEB tables
-    # are always read from production, identical across boxes.
+    # outputs/analysis_8_7{suffix}/) and the tables are read from production,
+    # identical across boxes. `table_suffix` selects a dosing-coverage variant
+    # of the durability and event-time tables
+    # (production_runs/run_all_coverages.py passes the same value as `suffix`).
     if output_dir is None:
         output_dir = OUTPUT_DIR + suffix
     os.makedirs(output_dir, exist_ok=True)
@@ -433,10 +436,10 @@ def run_analysis(spark, output_dir=None, suffix: str = ""):
 
     # --- Load data ---
     print("\n1. Loading durability data...")
-    durability = load_durability(spark)
+    durability = load_durability(spark, table_suffix)
 
     print("\n2. Loading event times for retention curve...")
-    event_times = load_event_times(spark, set(durability["_userId"]))
+    event_times = load_event_times(spark, set(durability["_userId"]), table_suffix)
 
     # --- Table 8.7a ---
     print("\n3. Creating Table 8.7a (overall durability)...")
@@ -486,8 +489,8 @@ def run_analysis(spark, output_dir=None, suffix: str = ""):
     }
 
 
-def run_in_databricks(spark, suffix: str = ""):
-    return run_analysis(spark, suffix=suffix)
+def run_in_databricks(spark, suffix: str = "", table_suffix: str = ""):
+    return run_analysis(spark, suffix=suffix, table_suffix=table_suffix)
 
 
 # =============================================================================
@@ -599,6 +602,9 @@ def _parse_args():
     parser.add_argument("--suffix", default="",
                         help="output-dir suffix, e.g. _box080 (durability is "
                              "box-independent — routes output only, not source tables).")
+    parser.add_argument("--table-suffix", default="",
+                        help="durability and event-time table suffix for a "
+                             "dosing-coverage variant, e.g. _cov070.")
     return parser.parse_args()
 
 
@@ -609,4 +615,4 @@ if __name__ == "__main__":
             raise SystemExit("--mode figures requires --input-csv PATH")
         render_subgroup_figure(args.input_csv, args.output_dir)
     else:
-        run_in_databricks(spark, suffix=args.suffix)  # type: ignore[name-defined]
+        run_in_databricks(spark, suffix=args.suffix, table_suffix=args.table_suffix)  # type: ignore[name-defined]
