@@ -1,9 +1,10 @@
 """
 Unit test for export_ab_day_cohort.py.
 
-Tests: the type-1 restriction, the >= 3 AB-day threshold via GREATEST across
-methods (not the sum; NULL counts coalesce to 0), the version-first /
-date-fallback rule including the version_int = 0 trap, the age gate (>= 6 on
+Tests: the type-1 restriction, the AB day read from the day projection's
+is_autobolus_day (a day of 2 automated boluses or of temporary basals is not
+one), the version-first / date-fallback rule for a NULL version and the
+version_int = 0 trap, the age gate (>= 6 on
 the day, DOB-unknown passes, young child fails), the daily coverage gate at the
 200/201 boundary with the plausibility filter, the eligible-vs-outcome day
 split, per-user first_eligible_ab_day (NULL when the user has none), and the
@@ -53,17 +54,16 @@ ALL_TABLES = [LOOP_RECS_TABLE, LOOP_CBG_TABLE, USER_DATES_TABLE, DIAGNOSIS_TABLE
 # --- Test data ---
 
 
-def rec(user, day, dd_ab=0, hk_ab=0, loop_version="3.2.0", version_int=3_002_000):
-    return {
-        "_userId": user,
-        "day": day,
-        "dd_autobolus_count": dd_ab,
-        "hk_autobolus_count": hk_ab,
-        "dd_temp_basal_count": 0,
-        "hk_temp_basal_count": 0,
-        "loop_version": loop_version,
-        "version_int": version_int,
-    }
+# The day projection's columns this staging reads, written with an explicit
+# schema so a missing version is a NULL integer (through pandas it would be NaN).
+DAY_SCHEMA = ("_userId STRING, day DATE, automated_boluses INT, temp_basals INT, "
+              "is_autobolus_day INT, is_temp_basal_day INT, loop_version STRING, version_int INT")
+
+
+def rec(user, day, boluses=0, basals=0, loop_version="3.2.0", version_int=3_002_000):
+    """One day as export_loop_recommendations.py writes it (3 automated boluses make an AB day)."""
+    is_ab = int(boluses >= 3)
+    return (user, day, boluses, basals, is_ab, int(not is_ab and basals > 0), loop_version, version_int)
 
 
 def cbg_day(user, day, n_plausible, n_implausible=0):
@@ -97,24 +97,25 @@ user_dates_rows = [
 ]
 
 loop_recs_rows = [
-    # user_a: the AB-threshold and coverage matrix (all days version-eligible).
-    rec("user_a", date(2024, 1, 1), dd_ab=5),               # AB day; 250 CBG -> outcome day
-    rec("user_a", date(2024, 1, 2), dd_ab=2, hk_ab=2),      # GREATEST = 2 < 3 -> NOT an AB day
-    rec("user_a", date(2024, 1, 3), hk_ab=4),               # AB via the HK method; no CBG -> not outcome
-    rec("user_a", date(2024, 1, 4), dd_ab=5),               # AB day; 200 CBG -> coverage fails (boundary)
-    rec("user_a", date(2024, 1, 5), dd_ab=5),               # AB day; 201 plausible -> coverage passes (boundary)
-    {**rec("user_a", date(2024, 1, 6)), "dd_autobolus_count": None, "hk_autobolus_count": None},  # NULL counts -> 0
+    # user_a: the AB-day and coverage matrix (all days version-eligible).
+    rec("user_a", date(2024, 1, 1), boluses=5),             # AB day; 250 CBG -> outcome day
+    rec("user_a", date(2024, 1, 2), boluses=2),             # 2 automated boluses -> NOT an AB day
+    rec("user_a", date(2024, 1, 3), boluses=4),             # AB day; no CBG -> not outcome
+    rec("user_a", date(2024, 1, 4), boluses=5),             # AB day; 200 CBG -> coverage fails (boundary)
+    rec("user_a", date(2024, 1, 5), boluses=5),             # AB day; 201 plausible -> coverage passes (boundary)
+    rec("user_a", date(2024, 1, 6), basals=6),              # a temp-basal day -> NOT an AB day
     # user_b: version scenarios (all AB days; DOB unknown).
-    rec("user_b", date(2024, 1, 2), dd_ab=5, loop_version="3.4.0", version_int=3_004_000),  # version blocks
-    rec("user_b", date(2024, 1, 3), dd_ab=5, loop_version=None, version_int=0),             # 0 -> date rule, pre-cutoff
-    rec("user_b", date(2024, 8, 1), dd_ab=5, loop_version=None, version_int=0),             # 0 -> date rule, post-cutoff
+    rec("user_b", date(2024, 1, 2), boluses=5, loop_version="3.4.0", version_int=3_004_000),  # version blocks
+    rec("user_b", date(2024, 1, 3), boluses=5, loop_version=None, version_int=0),             # 0 -> date rule, pre-cutoff
+    rec("user_b", date(2024, 1, 4), boluses=5, loop_version=None, version_int=None),          # NULL -> date rule, pre-cutoff
+    rec("user_b", date(2024, 8, 1), boluses=5, loop_version=None, version_int=0),             # 0 -> date rule, post-cutoff
     # user_kid: AB day but age ~3.6 -> never eligible.
-    rec("user_kid", date(2024, 1, 1), dd_ab=5),
+    rec("user_kid", date(2024, 1, 1), boluses=5),
     # user_t2: excluded entirely by the diagnosis gate.
-    rec("user_t2", date(2024, 1, 1), dd_ab=5),
+    rec("user_t2", date(2024, 1, 1), boluses=5),
     # user_lada: excluded by default; admitted only under include_lada=True
     # (DOB unknown -> age-eligible; version-eligible AB day).
-    rec("user_lada", date(2024, 1, 1), dd_ab=5),
+    rec("user_lada", date(2024, 1, 1), boluses=5),
 ]
 
 loop_cbg_rows = (
@@ -125,7 +126,7 @@ loop_cbg_rows = (
 
 # --- Run test ---
 try:
-    setup_test_table(spark, LOOP_RECS_TABLE, loop_recs_rows)
+    spark.createDataFrame(loop_recs_rows, schema=DAY_SCHEMA).write.mode("overwrite").saveAsTable(LOOP_RECS_TABLE)
     setup_test_table(spark, LOOP_CBG_TABLE, loop_cbg_rows)
     setup_test_table(spark, USER_DATES_TABLE, user_dates_rows)
     setup_test_table(spark, DIAGNOSIS_TABLE, diagnosis_rows)
@@ -142,25 +143,26 @@ try:
     result = read_test_output(spark, OUTPUT_TABLE)
     by_key = {(r["_userId"], r["day"]): r for _, r in result.iterrows()}
 
-    # 1. 10 rows: user_a 6 + user_b 3 + user_kid 1; user_t2 and user_lada
+    # 1. 11 rows: user_a 6 + user_b 4 + user_kid 1; user_t2 and user_lada
     #    excluded by the type-1 gate, and no is_lada column by default.
-    assert_row_count(result, 10, "ab_day_cohort rows")
+    assert_row_count(result, 11, "ab_day_cohort rows")
     assert "user_t2" not in set(result["_userId"]), "type-2 user should be excluded"
     assert "user_lada" not in set(result["_userId"]), "LADA user should be excluded by default"
     assert "is_lada" not in result.columns, "default output must not carry is_lada"
     print("PASS: type-1 restriction (LADA excluded, no is_lada column)")
 
-    # 2. AB-day threshold: >= 3 via GREATEST per method — 2+2 across methods is
-    #    NOT an AB day; 4 via HK alone is; NULL counts coalesce to 0.
+    # 2. The AB day is the projection's is_autobolus_day: 2 automated boluses
+    #    or a temp-basal day are not AB days.
     assert bool(by_key[("user_a", date(2024, 1, 1))]["is_ab_day"])
-    assert not bool(by_key[("user_a", date(2024, 1, 2))]["is_ab_day"]), "GREATEST, not sum"
+    assert not bool(by_key[("user_a", date(2024, 1, 2))]["is_ab_day"]), "2 automated boluses"
     assert bool(by_key[("user_a", date(2024, 1, 3))]["is_ab_day"])
-    assert not bool(by_key[("user_a", date(2024, 1, 6))]["is_ab_day"]), "NULL counts -> 0"
-    print("PASS: >= 3 AB-day threshold via GREATEST")
+    assert not bool(by_key[("user_a", date(2024, 1, 6))]["is_ab_day"]), "a temp-basal day"
+    print("PASS: the AB day is the day projection's flag")
 
-    # 3. Version-first / date-fallback incl. the version_int = 0 trap.
+    # 3. Version-first / date-fallback for a NULL version and the version_int = 0 trap.
     assert not bool(by_key[("user_b", date(2024, 1, 2))]["is_version_eligible"])
     assert bool(by_key[("user_b", date(2024, 1, 3))]["is_version_eligible"])
+    assert bool(by_key[("user_b", date(2024, 1, 4))]["is_version_eligible"]), "NULL -> date rule"
     assert not bool(by_key[("user_b", date(2024, 8, 1))]["is_version_eligible"])
     print("PASS: version-first / date-fallback eligibility")
 
@@ -209,7 +211,7 @@ try:
         include_lada=True,
     )
     lada_result = read_test_output(spark, OUTPUT_TABLE_LADA)
-    assert_row_count(lada_result, 11, "ab_day_cohort rows (include_lada)")
+    assert_row_count(lada_result, 12, "ab_day_cohort rows (include_lada)")
     assert "user_t2" not in set(lada_result["_userId"]), "type-2 user still excluded"
     lada_row = lada_result[lada_result["_userId"] == "user_lada"].iloc[0]
     assert bool(lada_row["is_lada"])

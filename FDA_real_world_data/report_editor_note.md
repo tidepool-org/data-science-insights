@@ -13,6 +13,39 @@ build (previous primary) and 0.90 build move to the §12 supplement. The validit
 `{suffix}` outputs (`_box080` / `_box090`); 8-6/8-7 (stable-AB / durability) are box-independent and
 identical across builds._
 
+_Since 2026-08-05 the unsuffixed build is the primary. Since 2026-10-30 the rebuild's day rules replace the
+day-coverage gate and the validity box described in the dated entries below, and `_box070` / `_box090`
+mean 10 and 13 of 14 days (§0f)._
+
+## 0f. The rebuild's day rules — 2026-10-30 (every N changes at the rebuild)
+
+The rebuild (execution plan 2026-10-27, Step 2; MC's decisions of 2026-10-29 and 2026-10-30, plan §5)
+replaces the rules behind every §6.3 and §8 table. The specification is
+`docs/dosing_strategy_classification.md`.
+
+- **Transition windows.** A period passes when at least 12 of its 14 calendar days are of the right kind,
+  temporary-basal days in the first period and autobolus days in the second. A day without dosing data
+  counts against its period. This one rule replaces the 0.70 day-coverage gate and the 0.80 box on shares
+  of classified days.
+- **Which window a user keeps.** Windows rank by the smaller of the two right-kind day counts out of 14,
+  and a tie goes to the earliest window. Windows across the Loop 2 to Loop 3 upgrade compete with the rest,
+  and §8 reports pooled results.
+- **Sensitivity builds.** `_box070` and `_box090` keep their names and need 10 and 13 of 14 days.
+- **Day classes.** A day is an autobolus day with at least 3 automated boluses, and a temporary-basal day
+  with fewer and at least one temporary basal. Automated doses are now recognised by every rule of the new
+  dose classifier, each dose counted once.
+- **Table 6.3a.** The day-coverage stage is now part of the window-rule stage.
+- **Stable autobolus (§8.6).** A segment is 14 autobolus days starting at least 30 days after the first
+  autobolus day, as PLN-1001 states.
+- **Durability (§8.7).** A user's final 28 days are read directly when at least 80% of them carry dosing
+  data (it was 70%).
+- **Unchanged.** The CGM-coverage gate (70% of a period's readings), the type-1 restriction, and the age
+  gate.
+- **Missing Loop version.** It is judged on the date: the window or day must end before 2024-07-13.
+
+Every N, table, and figure changes at the rebuild. Until then the issued report keeps its vintage of record
+(`docs/vintage_inventory_2026-10-27.md`).
+
 ## 0e. IR-1 output contract + caption guidance — 2026-07-30 (later same day; supersedes the earlier IR-1 table list)
 
 **Final lettering — one table per letter, six CSVs** (under `outputs/analysis_ir_1{suffix}/`; a bare
@@ -99,8 +132,8 @@ to the endpoint analyses."
 
 **Run order — one click:** `production_runs/run_all_boxes.py` rebuilds the box-affected staging subtree
 (including the new `stated_duration` column) and runs 6-3a + 8-1/2/3/4/5/7/8 + IR-1 for all three
-builds in sequence (`_box080` primary first, then production `""`, then `_box090`). Subset via
-`--only _box080,prod`; staging-only via `--skip-analysis`.
+builds in sequence: the primary `""` (12 of 14 days) first, then `_box070` (10 of 14) and `_box090`
+(13 of 14), as of 2026-10-30. Subset via `--only prod,_box070`; staging-only via `--skip-analysis`.
 
 ## 0c. Reading Table 8.4 — the two Ns + zero-inflation — 2026-06-24 (prose/caption guidance; no code change)
 
@@ -164,7 +197,8 @@ applies identically to the 0.70 / 0.80 / 0.90 builds.
   §6.3 tables already are.
 - **Table 6.3a gains a stage.** The cohort-flow funnel now has a **"Type 1 diabetes"** row between the
   analysis cohort gate (Loop version + age) and the CGM-coverage gate — **12 rows instead of 11** — and
-  its final transition-cohort N reflects the restriction. Table 6.3b (when it lands) is computed from the
+  its final transition-cohort N reflects the restriction. (Since 2026-10-30 the day-coverage stage is part
+  of the window-rule stage, §0f.) Table 6.3b (when it lands) is computed from the
   same type-1 cohort.
 - **No new tables/figures, no renames** — same outputs, smaller cohorts. Once the gate-applied analyses
   are re-run on Databricks, refreshed CSVs land under `outputs/` / `outputs_supplement/` as before; flag
@@ -173,8 +207,8 @@ applies identically to the 0.70 / 0.80 / 0.90 builds.
 ## 1. What the sections are
 
 - **§6.3 sample-information tables** — Table **6.3a** (cohort-flow funnel, BDDP sample → final transition
-  cohort) ships from `analysis/analysis_6-3a_cohort_flow.py` for any build (`--suffix _box080` / `_box090`;
-  no suffix = the 0.70 build); CSV at `outputs/cohort_6_3{suffix}/table_6_3a_cohort_flow.csv`. Table
+  cohort) ships from `analysis/analysis_6-3a_cohort_flow.py` for any build (`--suffix _box070` / `_box090`;
+  no suffix = the primary build, 12 of 14 days); CSV at `outputs/cohort_6_3{suffix}/table_6_3a_cohort_flow.csv`. Table
   **6.3b** (demographic breakdown of the transition cohort) is **pending** (see `developer_note.md`).
 - **§8.1** — comparative TB vs AB performance (paired t-test on TIR/TBR/TAR), parametric + non-parametric.
 - **§8.2** — glycemic outcomes during preset activation: Tables 8.2a (sample characteristics), 8.2b (TB vs
@@ -193,10 +227,10 @@ applies identically to the 0.70 / 0.80 / 0.90 builds.
 
 ## 2. Deviations / things to be aware of
 
-- **"Box" ≠ "coverage."** The configurable threshold behind the 0.80 build is the segment-**validity box**
-  (`autobolus_low` / `autobolus_high`), **not** the `min_coverage` day-coverage gate — that stays **0.70 in
-  every build**. The §6.3 funnel and the build labels reflect the box framing (see `developer_note.md`, the
-  2026-06-12 developer response).
+- **One window rule, and a separate CGM gate.** Since 2026-10-30 a window's periods pass when at least
+  12 of their 14 days are of the right kind (10 and 13 in `_box070` / `_box090`); the former day-coverage
+  gate and validity box are gone (§0f; `developer_note.md`, 2026-10-30). The CGM-coverage gate (70% of a
+  period's readings) is a separate, unchanged requirement of the glycemic analyses.
 - **Guardrail values are placeholders.** The pump-settings guardrail limits are interim ("arbitrary values
   for now") pending FDA-confirmed limits; any guardrail-exclusion counts will move when the real limits land.
 - **Table 6.3b is pending** for the box080-primary copy (+ 0.90 parity), per `developer_note.md`.
@@ -224,21 +258,22 @@ listed):
 
 - **Cohort = type-1 only** (as of 2026-06-24, §0). State the type-1 restriction wherever the cohort is
   described.
-- **Box vs coverage** terminology (§2) — the 0.80/0.90 builds vary the validity box, not the 70% CGM-coverage
-  gate.
+- **Window rule vs CGM coverage** (§2) — the builds vary the days of the right kind a period needs (12, 10, or
+  13 of 14), not the 70% CGM-coverage gate.
 - **Guardrail limits are placeholders** (§2) — don't present guardrail-exclusion counts as final.
 - **§8.6 / §8.7 partner figures** render the partner team's returned **median/IQR** (8.6) and **proportion +
   Clopper-Pearson / Bonferroni CI** (8.7) summaries — the `ax.bxp()` boxes encode those, not raw distributions.
 - **§8.2 hypo** is a **rate per hour** of preset exposure (events ÷ total exposure hours), not a count.
 - **One segment per user.** The transition analyses select the best surviving TB→AB segment per user (lowest
   `segment_rank` among those passing coverage + guardrails + both halves), so each user contributes one paired
-  observation.
+  observation. Since 2026-10-30 `segment_rank` orders by the smaller right-kind day count out of 14, a tie
+  going to the earliest window.
 
 ## 5. Output "contract" — don't rename/restructure silently
 
 - **§6.3:** `outputs/cohort_6_3{suffix}/table_6_3a_cohort_flow.csv`, columns `stage, description, n_users,
   n_segments` (the funnel only ever narrows — the loader asserts monotonic `n_users`). `{suffix}` ∈
-  {`""` (0.70), `_box080`, `_box090`}.
+  {`""` (12 of 14, the primary), `_box070` (10 of 14), `_box090` (13 of 14)} as of 2026-10-30.
 - **§8.x:** per-build outputs under `outputs/analysis_8_X{suffix}/`; the box080-primary copies are synced under
   `outputs_supplement/*_box080`.
 - **IR-1 (interactive review):** six lettered CSVs under `outputs/analysis_ir_1{suffix}/` — the exact

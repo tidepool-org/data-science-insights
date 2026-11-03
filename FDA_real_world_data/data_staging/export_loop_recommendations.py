@@ -1,270 +1,118 @@
-"""Count automated bolus and basal events per user-day.
+"""Count each user-day's automated doses by rule, and class the day.
 
-Two independent detection methods are used:
+The day projection of dev.fda_510k_rwd.loop_dose_classification (execution
+plan 2026-10-27, Step 2 item 3; MC, 2026-10-30): one row per user-day with at
+least one automated dose. A day counts its automated boluses and its
+temporary basals once each (logical doses: a dose's copies on both routes are
+one dose), and, for each rule, how many of the day's doses that rule
+recognised. A dose several rules recognise counts under each, so the rule
+columns can sum past the totals. The plugin's automated scheduled basal is
+counted as a temporary basal and shown apart in its own column.
 
-1. dosingDecision: Matches bolus/basal records to the most recent
-   dosingDecision with reason='loop' in the 5 seconds before the record.
-   Excludes boluses that have a reason='normalBolus' dosingDecision
-   within ±15 seconds (user-initiated correction bolus, not an autobolus).
-2. HealthKit: Uses MetadataKeyAutomaticallyIssued on insulin delivery records
-   where the HealthKit source is Loop.
+Day class:
+  is_autobolus_day   at least AUTOBOLUS_DAY_MIN_BOLUSES automated boluses
+  is_temp_basal_day  fewer, and at least one temporary basal
+  (neither)          1 or 2 automated boluses and no temporary basal
 
-Output is one row per (user, day) with four counts
-(dd_autobolus_count, hk_autobolus_count, dd_temp_basal_count, hk_temp_basal_count).
-Downstream consumers define autobolus / temp_basal days from the counts —
-e.g. autobolus = any autobolus count > 0.
+Loop version: the highest that day on a plugin copy of any dose or on a Loop
+dosing decision; NULL when none parses (MC, 2026-10-29: the gates downstream
+judge a missing version on the date).
+
+Every consumer reads is_autobolus_day and is_temp_basal_day instead of
+restating the rule (Step 2 item 6).
 """
 
 import argparse
 
 
+CATALOG = "dev.fda_510k_rwd"
+
+# An autobolus day has at least this many automated boluses.
+AUTOBOLUS_DAY_MIN_BOLUSES = 3
+
+# The rules of export_loop_dose_classification.py that can recognise each
+# record type; the offline test checks them against its TAGS.
+BOLUS_TAGS = ("decision_match", "plugin_automated_id", "health_flag_named_loop", "health_flag_loop_app")
+BASAL_TAGS = ("decision_match", "plugin_automated_temp", "plugin_automated_scheduled",
+              "health_flag_named_loop", "health_rate_loop_app")
+
+
+def version_int_sql(version):
+    """A version string as major*1000000 + minor*1000 + patch, NULL unless it starts with major.minor.
+
+    The same expression as export_loop_dose_classification.py; the offline
+    test fails if the two drift.
+    """
+    return (
+        f"CASE WHEN {version} RLIKE '^[0-9]+[.][0-9]+' "
+        f"THEN CAST(regexp_extract({version}, '^([0-9]+)', 1) AS INT) * 1000000 "
+        f"+ CAST(regexp_extract({version}, '^[0-9]+[.]([0-9]+)', 1) AS INT) * 1000 "
+        f"+ COALESCE(TRY_CAST(regexp_extract({version}, '^[0-9]+[.][0-9]+[.]([0-9]+)', 1) AS INT), 0) END"
+    )
+
+
 def run(
     spark,
+    output_table=f"{CATALOG}.loop_recommendations",
+    dose_table=f"{CATALOG}.loop_dose_classification",
     input_table="dev.default.bddp_sample_all_2",
-    output_table="dev.fda_510k_rwd.loop_recommendations",
 ):
-    spark.sql(f"""
---begin-sql
-CREATE OR REPLACE TABLE {output_table} AS
-
-WITH
--- Method 1: dosingDecision-based classification
-
--- Loop-initiated dosing decisions
-loop_decisions AS (
-  SELECT
-    _userId,
-    time_string,
-    TRY_CAST(time_string AS TIMESTAMP) AS dd_ts,
-    get_json_object(origin, '$.version') AS loop_version
-  FROM {input_table}
-  WHERE type = 'dosingDecision'
-    AND reason = 'loop'
-    AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
-),
-
--- User-initiated bolus decisions (used to exclude false-positive autoboluses)
-normal_bolus_decisions AS (
-  SELECT
-    _userId,
-    TRY_CAST(time_string AS TIMESTAMP) AS nb_ts
-  FROM {input_table}
-  WHERE type = 'dosingDecision'
-    AND reason = 'normalBolus'
-    AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
-),
-
--- Match each bolus/basal to all loop DDs in the prior 5 seconds, ranked most recent first
-dd_matched AS (
-  SELECT
-    b._userId,
-    b.time_string AS b_time_string,
-    TRY_CAST(b.time_string AS TIMESTAMP) AS b_ts,
-    b.type AS b_type,
-    b.subType AS b_subType,
-    dd.dd_ts,
-    ROW_NUMBER() OVER (
-      PARTITION BY b._userId, b.time_string
-      ORDER BY dd.dd_ts DESC
-    ) AS rn
-  FROM {input_table} b
-  INNER JOIN loop_decisions dd
-    ON b._userId = dd._userId
-    AND LEFT(b.time_string, 10) = LEFT(dd.time_string, 10)
-    AND TIMESTAMPDIFF(SECOND, dd.dd_ts, TRY_CAST(b.time_string AS TIMESTAMP))
-        BETWEEN 0 AND 5
-  WHERE b.type IN ('bolus', 'basal')
-    AND TRY_CAST(b.time_string AS TIMESTAMP) IS NOT NULL
-),
-
--- Keep only the most recent DD match per bolus/basal
-dd_most_recent AS (
-  SELECT *
-  FROM dd_matched
-  WHERE rn = 1
-),
-
--- Exclude boluses with a normalBolus DD within ±15s (user-initiated, not autobolus)
-dd_filtered AS (
-  SELECT *
-  FROM dd_most_recent m
-  WHERE NOT (
-    m.b_type = 'bolus'
-    AND EXISTS (
-      SELECT 1
-      FROM normal_bolus_decisions nb
-      WHERE nb._userId = m._userId
-        AND ABS(TIMESTAMPDIFF(SECOND, nb.nb_ts, m.b_ts)) <= 15
+    rule_counts = ",\n             ".join(
+        [f"SUM(CASE WHEN type = 'bolus' THEN {tag} ELSE 0 END) AS boluses_{tag}" for tag in BOLUS_TAGS]
+        + [f"SUM(CASE WHEN type = 'basal' THEN {tag} ELSE 0 END) AS basals_{tag}" for tag in BASAL_TAGS]
     )
-  )
-),
+    decision_version_int = version_int_sql("get_json_object(origin, '$.version')")
+    spark.sql(f"""
+    --begin-sql
+    CREATE OR REPLACE TABLE {output_table} AS
 
-dd_autobolus_days AS (
-  SELECT
-    _userId,
-    CAST(LEFT(b_time_string, 10) AS DATE) AS day,
-    COUNT(DISTINCT b_time_string) AS autobolus_count
-  FROM dd_filtered
-  WHERE b_type = 'bolus'
-    AND b_subType != 'normal'
-  GROUP BY
-    _userId,
-    CAST(LEFT(b_time_string, 10) AS DATE)
-),
+    WITH
+    -- each user-day's automated doses, in total and by the rules that
+    -- recognised them
+    day_counts AS (
+      SELECT _userId, day,
+             SUM(CASE WHEN type = 'bolus' THEN 1 ELSE 0 END) AS automated_boluses,
+             SUM(CASE WHEN type = 'basal' THEN 1 ELSE 0 END) AS temp_basals,
+             {rule_counts}
+      FROM {dose_table}
+      WHERE is_automated = 1
+      GROUP BY _userId, day
+    ),
 
-dd_temp_basal_days AS (
-  SELECT
-    _userId,
-    CAST(LEFT(b_time_string, 10) AS DATE) AS day,
-    COUNT(DISTINCT b_time_string) AS temp_basal_count
-  FROM dd_filtered
-  WHERE b_type = 'basal'
-  GROUP BY
-    _userId,
-    CAST(LEFT(b_time_string, 10) AS DATE)
-),
+    -- the day's Loop version: the highest on a plugin copy of any dose or on a
+    -- Loop dosing decision that day
+    versions AS (
+      SELECT _userId, day, loop_version, version_int
+      FROM {dose_table}
+      WHERE version_int IS NOT NULL
+      UNION ALL
+      SELECT _userId,
+             TRY_CAST(LEFT(time_string, 10) AS DATE) AS day,
+             get_json_object(origin, '$.version')    AS loop_version,
+             {decision_version_int}                  AS version_int
+      FROM {input_table}
+      WHERE type = 'dosingDecision' AND reason = 'loop'
+    ),
 
--- Method 2: HealthKit-based classification
-hk_automated AS (
-  SELECT
-    _userId,
-    type,
-    time_string,
-    CAST(LEFT(time_string, 10) AS DATE) AS day,
-    get_json_object(origin, '$.version') AS loop_version
-  FROM {input_table}
-  WHERE get_json_object(origin, '$.payload.sourceRevision.source.name') = 'Loop'
-    AND CAST(get_json_object(payload, '$["com.loopkit.InsulinKit.MetadataKeyAutomaticallyIssued"]') AS DOUBLE) = 1
-    AND type IN ('bolus', 'basal')
-    AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
-),
+    day_versions AS (
+      SELECT _userId, day,
+             MAX_BY(loop_version, version_int) AS loop_version,
+             MAX(version_int)                  AS version_int
+      FROM versions
+      WHERE version_int IS NOT NULL AND day IS NOT NULL
+      GROUP BY _userId, day
+    )
 
--- COUNT(DISTINCT time_string), not COUNT(*): BDDP re-ingests uploads, so the
--- same physical delivery can appear as several identical rows. The
--- dosingDecision method above already de-duplicates on the delivery timestamp
--- (COUNT(DISTINCT b_time_string)); counting raw rows here let duplicates
--- inflate the HealthKit side, and every downstream consumer takes
--- GREATEST(dd, hk) — so duplicates could manufacture autobolus days and pull a
--- user's first-autobolus day earlier (adversarial review, 2026-08-04).
--- Two genuinely distinct automated deliveries never share a timestamp: Loop
--- doses on a ~5-minute cycle, which is the same assumption the dosingDecision
--- path makes.
-hk_autobolus_days AS (
-  SELECT
-    _userId,
-    day,
-    COUNT(DISTINCT time_string) AS autobolus_count
-  FROM hk_automated
-  WHERE type = 'bolus'
-  GROUP BY
-    _userId,
-    day
-),
-
-hk_temp_basal_days AS (
-  SELECT
-    _userId,
-    day,
-    COUNT(DISTINCT time_string) AS temp_basal_count
-  FROM hk_automated
-  WHERE type = 'basal'
-  GROUP BY
-    _userId,
-    day
-),
-
--- Combine both methods
-all_autobolus_days AS (
-  SELECT
-    _userId,
-    day,
-    MAX(dd_autobolus_count) AS dd_autobolus_count,
-    MAX(hk_autobolus_count) AS hk_autobolus_count
-  FROM (
-    SELECT _userId, day, autobolus_count AS dd_autobolus_count, NULL AS hk_autobolus_count
-    FROM dd_autobolus_days
-    UNION ALL
-    SELECT _userId, day, NULL AS dd_autobolus_count, autobolus_count AS hk_autobolus_count
-    FROM hk_autobolus_days
-  )
-  GROUP BY _userId, day
-),
-
-all_temp_basal_days AS (
-  SELECT
-    _userId,
-    day,
-    MAX(dd_temp_basal_count) AS dd_temp_basal_count,
-    MAX(hk_temp_basal_count) AS hk_temp_basal_count
-  FROM (
-    SELECT _userId, day, temp_basal_count AS dd_temp_basal_count, NULL AS hk_temp_basal_count
-    FROM dd_temp_basal_days
-    UNION ALL
-    SELECT _userId, day, NULL AS dd_temp_basal_count, temp_basal_count AS hk_temp_basal_count
-    FROM hk_temp_basal_days
-  )
-  GROUP BY _userId, day
-),
-
--- Convert version string (e.g. '3.10.1') to a sortable int (3*1000000 + 10*1000 + 1 = 3010001)
--- so MAX picks the true highest version, not the lexicographic max
-day_versions AS (
-  SELECT
-    _userId,
-    day,
-    MAX_BY(loop_version, version_int) AS loop_version,
-    MAX(version_int) AS version_int
-  FROM (
-    SELECT
-      _userId,
-      CAST(LEFT(time_string, 10) AS DATE) AS day,
-      loop_version,
-      COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\.')[0] AS INT), 0) * 1000000
-        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\.')[1] AS INT), 0) * 1000
-        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\.')[2] AS INT), 0) AS version_int
-    FROM loop_decisions
-    UNION ALL
-    SELECT
-      _userId,
-      day,
-      loop_version,
-      COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\.')[0] AS INT), 0) * 1000000
-        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\.')[1] AS INT), 0) * 1000
-        + COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\.')[2] AS INT), 0) AS version_int
-    FROM hk_automated
-  )
-  GROUP BY _userId, day
-),
-
-day_counts AS (
-  SELECT
-    COALESCE(ab._userId, tb._userId) AS _userId,
-    COALESCE(ab.day, tb.day) AS day,
-    ab.dd_autobolus_count,
-    ab.hk_autobolus_count,
-    tb.dd_temp_basal_count,
-    tb.hk_temp_basal_count
-  FROM all_autobolus_days ab
-  FULL OUTER JOIN all_temp_basal_days tb
-    ON ab._userId = tb._userId
-    AND ab.day = tb.day
-)
-
-SELECT
-  c._userId,
-  c.day,
-  c.dd_autobolus_count,
-  c.hk_autobolus_count,
-  c.dd_temp_basal_count,
-  c.hk_temp_basal_count,
-  dv.loop_version,
-  dv.version_int
-FROM day_counts c
-LEFT JOIN day_versions dv
-  ON c._userId = dv._userId
-  AND c.day = dv.day
-;
-""")
+    SELECT c.*,
+           v.loop_version,
+           v.version_int,
+           CASE WHEN c.automated_boluses >= {AUTOBOLUS_DAY_MIN_BOLUSES} THEN 1 ELSE 0 END  AS is_autobolus_day,
+           CASE WHEN c.automated_boluses < {AUTOBOLUS_DAY_MIN_BOLUSES} AND c.temp_basals > 0
+                THEN 1 ELSE 0 END                                                           AS is_temp_basal_day
+    FROM day_counts c
+    LEFT JOIN day_versions v ON v._userId = c._userId AND v.day = c.day
+    ;
+    """)
 
 
 if __name__ == "__main__":
@@ -272,6 +120,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_table", default="dev.default.bddp_sample_all_2")
+    parser.add_argument("--dose_table", default=f"{CATALOG}.loop_dose_classification")
     args, _ = parser.parse_known_args()
 
-    run(spark, args.input_table)
+    run(spark, dose_table=args.dose_table, input_table=args.input_table)

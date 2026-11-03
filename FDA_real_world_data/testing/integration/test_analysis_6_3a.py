@@ -2,10 +2,12 @@
 
 The funnel over the synthetic BDDP fixture is pinned stage by stage: the
 upstream SQL-derived stages must match counts derived from the fixture
-tables (int_user_25 — alternating dosing days — is the discriminating case
-that separates "Candidate 28-day window" from "Day-coverage gate"), and the
-final stage must equal an independently loaded transition cohort (the same
-one the §8 analyses see, incl. the 8-1 containment archetypes).
+tables (int_user_25 — alternating temp-basal days — anchors a candidate window
+but its periods hold 7 temp-basal days and no autobolus day, so it fails the
+window rule of 12 of 14 days of the right kind and has no segment), and the
+final stage must equal an
+independently loaded transition cohort (the same one the §8 analyses see,
+incl. the 8-1 containment archetypes).
 
 Run on Databricks.
 """
@@ -57,14 +59,15 @@ try:
         print("PASS: table_6_3a_cohort_flow.csv written with expected columns")
 
         # ── Funnel shape ──────────────────────────────────────────────────
-        # 5 upstream stages + 7 loader stages (incl. the type-1 diagnosis gate).
-        assert len(table) == 12, f"expected 12 funnel stages, got {len(table)}"
+        # 4 upstream stages + 7 loader stages (incl. the type-1 diagnosis gate);
+        # the day-coverage stage is part of the window rule since 2026-10-30.
+        assert len(table) == 11, f"expected 11 funnel stages, got {len(table)}"
         users = table["n_users"].tolist()
         assert all(b <= a for a, b in zip(users, users[1:])), (
             f"n_users not non-increasing down the funnel: {users}"
         )
         assert users[0] > 0, "BDDP sample stage is empty"
-        print(f"PASS: 12-stage funnel, n_users non-increasing ({users})")
+        print(f"PASS: 11-stage funnel, n_users non-increasing ({users})")
 
         # ── Upstream SQL stages pinned to the fixture ─────────────────────
         # Exact pins (not just bounds) so an over-admitting drift from
@@ -90,14 +93,16 @@ try:
         assert by_stage["Candidate 28-day window"] == n_loop, (
             f"candidate stage {by_stage['Candidate 28-day window']} != {n_loop}"
         )
-        # ...and int_user_25 (alternating dosing days → 7/14 per half) is the
-        # one archetype built to fail the 70% day-coverage gate.
-        assert by_stage["Day-coverage gate"] == n_loop - 1, (
-            f"day-coverage stage {by_stage['Day-coverage gate']} != "
-            f"{n_loop - 1} (all loop users minus int_user_25)"
+        assert "Day-coverage gate" not in by_stage.index, "the day-coverage stage is part of the window rule"
+        # ...and int_user_25 (alternating temp-basal days → 7 of 14 per period)
+        # anchors a candidate window but fails the window rule.
+        seg_ids = set(
+            r["_userId"] for r in spark.table(run_pipeline.TABLES["valid_transition_segments"])
+            .select("_userId").distinct().collect()
         )
-        print(f"PASS: upstream stages pinned ({n_bddp} BDDP / {n_loop} loop / "
-              f"{n_loop - 1} day-covered)")
+        assert "int_user_25" not in seg_ids, "int_user_25 must fail 12 of 14 days of the right kind"
+        print(f"PASS: upstream stages pinned ({n_bddp} BDDP / {n_loop} loop); "
+              f"int_user_25 has no segment")
 
         # ── Staged-table stage matches the fixture table exactly ──────────
         seg_users = (

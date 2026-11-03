@@ -48,7 +48,7 @@ from run_all_boxes import BOX_CONFIGS, PROD_TOKEN  # noqa: E402
 
 # Variant namespaces torn down by default — every configured box except
 # production (empty suffix), which needs the explicit --include-prod.
-DEFAULT_SUFFIXES = [suffix for suffix, _, _ in BOX_CONFIGS if suffix]
+DEFAULT_SUFFIXES = [suffix for suffix, _ in BOX_CONFIGS if suffix]
 
 
 def _test_catalog_teardown(spark):

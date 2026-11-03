@@ -2,7 +2,7 @@
 Unit test for production_runs/run_all_boxes.py (no Spark).
 
 Monkeypatches run_transition_variant.run with a recorder and verifies the
-one-click driver runs every box with the right thresholds and order, honors
+one-click driver runs every build with the right days-of-14 threshold and order, honors
 --only subsets and --skip-analysis, and rejects unknown suffixes.
 """
 
@@ -23,8 +23,8 @@ import run_transition_variant  # noqa: E402
 
 
 def _record(calls):
-    def fake_run(spark, suffix, autobolus_low, autobolus_high, run_analysis):
-        calls.append((suffix, autobolus_low, autobolus_high, run_analysis))
+    def fake_run(spark, suffix, min_period_days, run_analysis):
+        calls.append((suffix, min_period_days, run_analysis))
     return fake_run
 
 
@@ -43,27 +43,21 @@ def test_runs_every_box_in_order():
     def check(calls):
         run_all_boxes.run(spark=object())
         assert calls == [
-            ("",        0.20, 0.80, True),   # report primary, unsuffixed
-            ("_box070", 0.30, 0.70, True),
-            ("_box090", 0.10, 0.90, True),
+            ("",        12, True),   # report primary, unsuffixed: 12 of 14
+            ("_box070", 10, True),
+            ("_box090", 13, True),
         ], calls
     _with_recorder(check)
     print("PASS: test_runs_every_box_in_order")
 
 
 def test_box_configs_match_variant_defaults():
-    # The primary (unsuffixed) row must stay in lockstep with BOTH the variant
-    # driver's defaults and the staging-script defaults — since 2026-08-05 all
-    # three describe the same 0.80 box, so a drift in any one of them fails here.
-    by_suffix = {s: (lo, hi) for s, lo, hi in run_all_boxes.BOX_CONFIGS}
-    assert by_suffix[""] == (
-        run_transition_variant.DEFAULT_AUTOBOLUS_LOW,
-        run_transition_variant.DEFAULT_AUTOBOLUS_HIGH,
-    )
-    from export_valid_transition_segments import (  # staging dir is on sys.path
-        DEFAULT_AUTOBOLUS_LOW, DEFAULT_AUTOBOLUS_HIGH,
-    )
-    assert by_suffix[""] == (DEFAULT_AUTOBOLUS_LOW, DEFAULT_AUTOBOLUS_HIGH)
+    # The primary (unsuffixed) row must stay in lockstep with the staging
+    # default, which the variant driver imports: 12 of 14 since 2026-10-30.
+    by_suffix = dict(run_all_boxes.BOX_CONFIGS)
+    from export_valid_transition_segments import DEFAULT_MIN_PERIOD_DAYS  # staging dir is on sys.path
+    assert by_suffix[""] == DEFAULT_MIN_PERIOD_DAYS == 12, by_suffix
+    assert by_suffix["_box070"] == 10 and by_suffix["_box090"] == 13, by_suffix
     assert run_transition_variant.DEFAULT_SUFFIX == "", (
         "the variant driver must default to the unsuffixed primary build"
     )
@@ -74,8 +68,8 @@ def test_only_subset_and_skip_analysis():
     def check(calls):
         run_all_boxes.run(spark=object(), run_analysis=False, only=["_box090", ""])
         assert calls == [
-            ("",        0.20, 0.80, False),
-            ("_box090", 0.10, 0.90, False),
+            ("",        12, False),
+            ("_box090", 13, False),
         ], calls
     _with_recorder(check)
     print("PASS: test_only_subset_and_skip_analysis")

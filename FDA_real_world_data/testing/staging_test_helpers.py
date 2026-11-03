@@ -52,23 +52,29 @@ def assert_column_values(df, column, expected_values, label=""):
 
 def make_loop_recs(user_id, start_date, n_days, dosing_mode,
                    autobolus_count=10, temp_basal_count=10, loop_version="3.2.0"):
-    """Generate per-day rows matching the loop_recommendations schema.
+    """Generate per-day rows matching the loop_recommendations schema (the day
+    projection of export_loop_recommendations.py).
 
-    One row per (user, day) with the four method-specific counts. The active
-    side (dd_autobolus_count or dd_temp_basal_count) gets the count; the other
-    three count columns are 0. Production SQL uses GREATEST(dd_*, hk_*) >= threshold,
-    so 0 is the identity and emitting 0 instead of NULL avoids the Databricks Connect
-    all-None-column-drop bug without changing semantics.
+    One row per (user, day). An autobolus day carries `autobolus_count`
+    automated boluses and no temporary basal; a temp-basal day carries
+    `temp_basal_count` temporary basals and no automated bolus. Each dose is
+    credited to the decision-match rule only, every other rule's column is 0,
+    and the two day flags follow the projection's own threshold, so a consumer
+    reading is_autobolus_day / is_temp_basal_day sees what the projection
+    would write. The staging directory must be on sys.path (every staging test
+    puts it there before importing this module).
 
     Args:
         user_id: _userId value
         start_date: first day (date object)
         n_days: number of days to generate
         dosing_mode: "autobolus" or "temp_basal"
-        autobolus_count: dd_autobolus_count when dosing_mode="autobolus"
-        temp_basal_count: dd_temp_basal_count when dosing_mode="temp_basal"
+        autobolus_count: automated boluses per day when dosing_mode="autobolus"
+        temp_basal_count: temporary basals per day when dosing_mode="temp_basal"
         loop_version: string like "3.2.0"
     """
+    from export_loop_recommendations import AUTOBOLUS_DAY_MIN_BOLUSES, BASAL_TAGS, BOLUS_TAGS
+
     if dosing_mode not in ("autobolus", "temp_basal"):
         raise ValueError(f"dosing_mode must be 'autobolus' or 'temp_basal', got {dosing_mode!r}")
 
@@ -76,18 +82,20 @@ def make_loop_recs(user_id, start_date, n_days, dosing_mode,
     version_int = int(parts[0]) * 1_000_000 + int(parts[1]) * 1_000 + int(parts[2])
 
     is_ab = dosing_mode == "autobolus"
+    boluses = autobolus_count if is_ab else 0
+    basals = 0 if is_ab else temp_basal_count
 
     rows = []
     for d in range(n_days):
         day = start_date + timedelta(days=d)
-        rows.append({
-            "_userId": user_id,
-            "day": day,
-            "dd_autobolus_count": autobolus_count if is_ab else 0,
-            "hk_autobolus_count": 0,
-            "dd_temp_basal_count": 0 if is_ab else temp_basal_count,
-            "hk_temp_basal_count": 0,
+        row = {"_userId": user_id, "day": day, "automated_boluses": boluses, "temp_basals": basals}
+        row.update({f"boluses_{tag}": boluses if tag == "decision_match" else 0 for tag in BOLUS_TAGS})
+        row.update({f"basals_{tag}": basals if tag == "decision_match" else 0 for tag in BASAL_TAGS})
+        row.update({
             "loop_version": loop_version,
             "version_int": version_int,
+            "is_autobolus_day": int(boluses >= AUTOBOLUS_DAY_MIN_BOLUSES),
+            "is_temp_basal_day": int(boluses < AUTOBOLUS_DAY_MIN_BOLUSES and basals > 0),
         })
+        rows.append(row)
     return rows

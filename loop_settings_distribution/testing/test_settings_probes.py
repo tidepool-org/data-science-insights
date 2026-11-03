@@ -17,6 +17,7 @@ Run locally:
     /Users/mconn/miniconda3/envs/tidepool-data-science-simulator-dev/bin/python \
         loop_settings_distribution/testing/test_settings_probes.py
 """
+import importlib.util
 import os
 import re
 import sys
@@ -101,18 +102,18 @@ def test_dob_is_cast_tolerantly_without_transliteration():
 
 
 def test_version_integer_matches_the_staging_formula():
-    # export_loop_recommendations.py writes the formula inside an f-string, where
-    # the regex dot is '\\\\.' in the source; the SQL that reaches Spark reads
-    # '\\.'. The probe's SQL file must hold that same text.
-    staging = _read(LOOP_RECOMMENDATIONS)
-    source_lines = [line.strip() for line in staging.splitlines()
-                    if "COALESCE(TRY_CAST(SPLIT(loop_version, '\\\\\\\\.')" in line]
-    assert len(source_lines) >= 3, source_lines
-    probe = " ".join(line.strip() for line in _read(PROBE).splitlines())
-    for line in source_lines[:3]:
-        expected = line.replace("\\\\\\\\.", "\\\\.").replace("loop_version", "d.loop_version")
-        expected = expected.rstrip(",").replace(" AS version_int", "")
-        assert expected in probe, f"version_int formula drifted: {expected}"
+    # The probe's version integer is export_loop_recommendations.py's
+    # version_int_sql applied to the record's version, whitespace aside: NULL
+    # when the version does not start with major.minor (MC, 2026-10-29), so
+    # the gate sends it to the date rule. The old form, which read a missing
+    # version as 0, must not come back.
+    spec = importlib.util.spec_from_file_location("export_loop_recommendations", LOOP_RECOMMENDATIONS)
+    staging = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(staging)
+    expected = " ".join(staging.version_int_sql("d.loop_version").split())
+    probe = " ".join(_read(PROBE).split())
+    assert f"{expected} AS version_int" in probe, f"version_int formula drifted from the staging: {expected}"
+    assert "TRY_CAST(SPLIT(d.loop_version" not in probe, "the 0-when-missing version formula is back"
 
 
 def test_gates_match_the_ab_day_cohort_constants():

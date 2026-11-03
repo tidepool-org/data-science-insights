@@ -1,28 +1,27 @@
 """Table 6.3a — Cohort Flow of the TB→AB transition cohort (RPT-1001 §6.3).
 
 Stage-by-stage funnel from the BDDP sample down to the final transition
-cohort, for the production build (suffix "") or a parallel validity-box
-build (e.g. --suffix _box080; see exploratory/run_transition_variant.py).
-Requested by the RPT-1001 report editor (developer_note.md, 2026-06-12) for
-the box080-primary report copy.
+cohort, for the production build (suffix "") or a parallel window-rule build
+(e.g. --suffix _box070; see exploratory/run_transition_variant.py).
+Requested by the RPT-1001 report editor (developer_note.md, 2026-06-12).
 
 Stage sources:
 - The upstream stages (BDDP sample → Loop automated-dosing days → candidate
-  28-day windows → day-coverage gate) are box-independent — the variant
-  driver "branches from the box", reusing production upstream tables — so
-  they are re-derived here with the same sliding-window logic as
-  data_staging/export_valid_transition_segments.py and are identical for
-  every build.
-- The validity-box stage is read from the staged
+  28-day windows) are the same for every build — the variant driver reuses
+  production upstream tables — so they are re-derived here with the same
+  sliding-window geometry as data_staging/export_valid_transition_segments.py.
+- The window-rule stage is read from the staged
   valid_transition_segments{suffix} table, so this script never needs the
-  box thresholds the build was staged with.
+  threshold the build was staged with (12 of 14 days of the right kind in
+  each period for the primary; 10 and 13 for _box070 and _box090). Since
+  2026-10-30 the rule counts the 14 calendar days, so the former separate
+  day-coverage stage is part of it.
 - The analysis-side stages come from load_transition_endpoints(funnel=...) —
   the same code path the §8 analyses use, so the final row matches their
   cohort N exactly.
 
 Run:
-  analysis/analysis_6-3a_cohort_flow.py                    # production build (the unsuffixed
-                                                           # tables are the 0.80 box since 2026-08-05)
+  analysis/analysis_6-3a_cohort_flow.py                    # production build (12 of 14)
   analysis/analysis_6-3a_cohort_flow.py --suffix _box070   # a parallel sensitivity build
 """
 
@@ -39,11 +38,9 @@ OUTPUT_DIR = "outputs/cohort_6_3"
 BDDP_TABLE = "dev.default.bddp_sample_all_2"
 LOOP_RECOMMENDATIONS_TABLE = f"{CATALOG}.loop_recommendations"
 
-# Candidate-window geometry + day-coverage gate, mirroring the `params` CTE in
-# data_staging/export_valid_transition_segments.py: 14-day halves, ≥70% of
-# days observed in each half.
+# Candidate-window geometry, mirroring data_staging/export_valid_transition_segments.py:
+# two 14-day periods.
 SEGMENT_DAYS = 14
-MIN_DAY_COVERAGE = 0.70
 
 
 def _count(spark, sql):
@@ -54,8 +51,9 @@ def _count(spark, sql):
 def build_upstream_funnel(spark, suffix: str = "") -> list:
     """Funnel stages upstream of the analysis loaders, counted in SQL.
 
-    Stages 1–4 are box-independent; stage 5 (the validity box + staging age
-    gate) is read from the staged segments table for the requested build.
+    Stages 1–3 are the same for every build; stage 4 (the window rule +
+    staging age gate) is read from the staged segments table for the
+    requested build.
     """
     rows = []
 
@@ -81,9 +79,9 @@ def build_upstream_funnel(spark, suffix: str = "") -> list:
         "n_segments": None,
     })
 
-    # Sliding-window candidacy + day-coverage, mirroring the `sliding_window`
-    # and `scored` CTEs of export_valid_transition_segments.py (window
-    # geometry, observation-bounds check, and coverage gate verbatim).
+    # Sliding-window candidacy, mirroring the `sliding_window` and `scored`
+    # CTEs of export_valid_transition_segments.py (window geometry and the
+    # observation-bounds check).
     windows = _count(spark, f"""
 --begin-sql
 WITH user_bounds AS (
@@ -118,14 +116,7 @@ SELECT
     WHEN total_days_seg1 > 0
      AND total_days_seg2 > 0
      AND window_within_observation
-    THEN _userId END) AS n_candidate,
-  COUNT(DISTINCT CASE
-    WHEN total_days_seg1 > 0
-     AND total_days_seg2 > 0
-     AND window_within_observation
-     AND total_days_seg1 * 1.0 / {SEGMENT_DAYS} >= {MIN_DAY_COVERAGE}
-     AND total_days_seg2 * 1.0 / {SEGMENT_DAYS} >= {MIN_DAY_COVERAGE}
-    THEN _userId END) AS n_covered
+    THEN _userId END) AS n_candidate
 FROM sliding_window
 ;
 """)
@@ -135,13 +126,6 @@ FROM sliding_window
                        f"observed, starting on/after the user's first "
                        f"observed day",
         "n_users": windows["n_candidate"],
-        "n_segments": None,
-    })
-    rows.append({
-        "stage": "Day-coverage gate",
-        "description": f"≥ {MIN_DAY_COVERAGE:.0%} of days observed in each "
-                       f"{SEGMENT_DAYS}-day half",
-        "n_users": windows["n_covered"],
         "n_segments": None,
     })
 
@@ -155,8 +139,9 @@ FROM {CATALOG}.valid_transition_segments{suffix}
 """)
     rows.append({
         "stage": "Valid TB→AB transition segment",
-        "description": "Passes the build's segment-validity box (seg1 "
-                       "temp-basal-dominated, seg2 autobolus-dominated); "
+        "description": f"At least the build's threshold of the {SEGMENT_DAYS} "
+                       "days of each period of the right kind (temp-basal "
+                       "days, then autobolus days; 12 for the primary build); "
                        "staging age gate (> 6 y at segment start or DOB "
                        "unknown)",
         "n_users": segments["n_users"],
@@ -194,7 +179,7 @@ def create_table_6_3a(spark, output_dir: str, suffix: str = ""):
 
 
 def run_analysis(spark, output_dir=None, suffix: str = ""):
-    # suffix='_box080' runs on the parallel 0.80-box cohort and writes to a
+    # suffix='_box070' runs on a parallel window-rule cohort and writes to a
     # parallel output dir so the production outputs aren't clobbered.
     if output_dir is None:
         output_dir = OUTPUT_DIR + suffix
@@ -223,6 +208,6 @@ def run_in_databricks(spark, suffix: str = ""):
 if __name__ == "__main__":
     _parser = argparse.ArgumentParser()
     _parser.add_argument("--suffix", default="",
-                         help="source-table suffix, e.g. _box080 for the 0.80-box cohort")
+                         help="source-table suffix, e.g. _box070 for the 10-of-14 cohort")
     _args, _ = _parser.parse_known_args()
     run_in_databricks(spark, suffix=_args.suffix)  # type: ignore[name-defined]

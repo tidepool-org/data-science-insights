@@ -1,36 +1,41 @@
-"""Identify TB→AB transition segments using day-level classification.
+"""Find each user's temporary-basal-to-autobolus transition windows from the day classes.
 
-Same 14-day sliding window approach as export_valid_transition_segments.py,
-but counts autobolus vs temp_basal days (from loop_recommendations)
-instead of per-row recommendation counts.
+A window is 28 days: a first period of 14 days that should be temporary-basal
+dosing, then a second period of 14 that should be autobolus dosing. The days
+are classed once, in export_loop_recommendations.py (is_temp_basal_day,
+is_autobolus_day); this script reads those flags and restates no day rule
+(execution plan 2026-10-27, Step 2 item 6).
 
-Classification is applied inline from the per-method count columns
-(dd_/hk_autobolus_count, dd_/hk_temp_basal_count):
-  - AB day: GREATEST(dd_autobolus_count, hk_autobolus_count) >= min_autobolus_count
-  - TB day: AB threshold not met AND any temp_basal_count > 0
-The `min_autobolus_count` threshold (default 3) biases toward fewer
-false-positive AB days from coincidental correction boluses.
+The window rule (MC, 2026-10-30; plan §5 item 12): a period passes when at
+least `min_period_days` of its 14 calendar days are of the right kind,
+temporary-basal days in the first period and autobolus days in the second, so
+a day without dosing data counts against its period. The default is 12 of 14
+(80%); the `_box070` and `_box090` sensitivity builds use 10 and 13 of 14
+(production_runs/run_all_boxes.py). This one test replaces the two of the
+former 0.80 box (classified days on at least 70% of a period, and more than
+80% of the classified days of the right kind).
 
-Also tracks the max Loop version observed across the full 28-day window
-and the min/median/max daily autobolus count among AB-classified days in seg2.
+Ranking (MC, 2026-10-30): the score is the smaller of the two right-kind day
+counts, out of 14 (the calendar-day score); a tie goes to the earliest window;
+a window across the Loop 2 to Loop 3 upgrade competes with the rest (pooled).
+Every passing window is kept with its rank, and the loaders take the
+best-ranked window that survives their filters.
+
+Also carries the highest Loop version in the 28 days (NULL when none parses;
+the loaders judge a missing version on the date) and the min/median/max daily
+automated-bolus count among the second period's autobolus days.
 """
 
 
 CATALOG = "dev.fda_510k_rwd"
 
-# TB→AB segment-validity box, hoisted out of the inline SQL. seg1 must be
-# temp-basal-dominated and seg2 autobolus-dominated; the production box is each
-# side > 0.70 (the seg1 floor is 1 - autobolus_low). Override via run() args to
-# materialise a different box into parallel tables — see
-# exploratory/run_transition_variant.py.
-# The DEFAULT box is the report primary (symmetric 0.80). Changed from
-# 0.30/0.70 on 2026-08-05: the unsuffixed namespace previously held the 0.70
-# build while the report primary lived in _box080, so a bare run of the
-# pipeline produced a build nobody used. The 0.70 sensitivity case is now the
-# explicit `_box070` variant (production_runs/run_all_boxes.py).
-DEFAULT_AUTOBOLUS_LOW = 0.20    # max AB-fraction in seg1 → seg1 TB floor = 1 - low
-DEFAULT_AUTOBOLUS_HIGH = 0.80   # min AB-fraction required in seg2
-DEFAULT_MIN_AUTOBOLUS_COUNT = 3
+# Days in each period of a window.
+SEGMENT_DAYS = 14
+
+# Days of the right kind a period needs, of its 14: 12 is 80% (MC,
+# 2026-10-30). run_all_boxes.py also builds 10 (70%, _box070) and 13 (90%,
+# _box090).
+DEFAULT_MIN_PERIOD_DAYS = 12
 
 
 def run(
@@ -39,46 +44,28 @@ def run(
     loop_recommendations_table=f"{CATALOG}.loop_recommendations",
     user_dates_table="dev.default.bddp_user_dates",
     user_gender_table="dev.default.user_gender",
-    min_autobolus_count=DEFAULT_MIN_AUTOBOLUS_COUNT,
-    autobolus_low=DEFAULT_AUTOBOLUS_LOW,
-    autobolus_high=DEFAULT_AUTOBOLUS_HIGH,
+    min_period_days=DEFAULT_MIN_PERIOD_DAYS,
 ):
+    min_period_days = int(min_period_days)
+    if not 0 < min_period_days <= SEGMENT_DAYS:
+        raise ValueError(f"min_period_days must be 1 to {SEGMENT_DAYS}, got {min_period_days}")
     spark.sql(f"""
 --begin-sql
 CREATE OR REPLACE TABLE {output_table} AS
 WITH
 params AS (
   SELECT
-    14 AS segment_days,
-    0.70 AS min_coverage,
-    {autobolus_low} AS autobolus_low,
-    {autobolus_high} AS autobolus_high
+    {SEGMENT_DAYS} AS segment_days,
+    {min_period_days} AS min_period_days
 ),
 
 daily_flags AS (
   SELECT
     _userId,
     day,
-    GREATEST(
-      COALESCE(dd_autobolus_count, 0),
-      COALESCE(hk_autobolus_count, 0)
-    ) AS autobolus_count,
-    CASE
-      WHEN GREATEST(
-        COALESCE(dd_autobolus_count, 0),
-        COALESCE(hk_autobolus_count, 0)
-      ) >= {min_autobolus_count}
-      THEN 1 ELSE 0
-    END AS is_autobolus,
-    CASE
-      WHEN GREATEST(
-        COALESCE(dd_autobolus_count, 0),
-        COALESCE(hk_autobolus_count, 0)
-      ) < {min_autobolus_count}
-        AND (COALESCE(dd_temp_basal_count, 0) > 0
-             OR COALESCE(hk_temp_basal_count, 0) > 0)
-      THEN 1 ELSE 0
-    END AS is_temp_basal,
+    automated_boluses AS autobolus_count,
+    is_autobolus_day AS is_autobolus,
+    is_temp_basal_day AS is_temp_basal,
     -- version_int first so struct ordering compares versions numerically (3.10 > 3.9)
     STRUCT(version_int, loop_version) AS version_struct
   FROM {loop_recommendations_table}
@@ -152,13 +139,14 @@ scored AS (
     s.total_days_seg1 * 1.0 / p.segment_days AS coverage_seg1,
     s.total_days_seg2 * 1.0 / p.segment_days AS coverage_seg2,
 
+    COALESCE(s.temp_basal_days_seg1, 0) AS temp_basal_days_seg1,
+    COALESCE(s.autobolus_days_seg2, 0) AS autobolus_days_seg2,
     s.temp_basal_days_seg1 * 1.0 / s.total_days_seg1 AS temp_basal_pct_seg1,
     s.autobolus_days_seg2 * 1.0 / s.total_days_seg2 AS autobolus_pct_seg2,
 
-    LEAST(
-      s.temp_basal_days_seg1 * 1.0 / s.total_days_seg1,
-      s.autobolus_days_seg2 * 1.0 / s.total_days_seg2
-    ) AS segment_score,
+    -- the calendar-day score: the smaller right-kind day count, out of 14
+    LEAST(COALESCE(s.temp_basal_days_seg1, 0), COALESCE(s.autobolus_days_seg2, 0)) * 1.0
+      / p.segment_days AS segment_score,
 
     s.max_version_struct.loop_version AS max_loop_version,
     s.max_version_struct.version_int AS max_loop_version_int,
@@ -167,10 +155,7 @@ scored AS (
     s.median_autobolus_count_seg2,
     s.max_autobolus_count_seg2,
 
-    s.first_day,
-
-    p.min_coverage,
-    p.segment_days
+    s.first_day
 
   FROM sliding_window s
   CROSS JOIN params p
@@ -178,20 +163,17 @@ scored AS (
     s.total_days_seg1 > 0
     AND s.total_days_seg2 > 0
     AND DATE_SUB(s.day, 27) >= s.first_day
-    AND s.total_days_seg1 * 1.0 / p.segment_days >= p.min_coverage
-    AND s.total_days_seg2 * 1.0 / p.segment_days >= p.min_coverage
 ),
 
 ranked AS (
   SELECT
     r.*,
-    p.autobolus_low,
-    p.autobolus_high,
-    ROW_NUMBER() OVER (PARTITION BY r._userId ORDER BY r.segment_score DESC) AS segment_rank
+    ROW_NUMBER() OVER (PARTITION BY r._userId ORDER BY r.segment_score DESC, r.seg1_start ASC) AS segment_rank
   FROM scored r
   CROSS JOIN params p
   WHERE
-    (r.temp_basal_pct_seg1 > (1 - p.autobolus_low) AND r.autobolus_pct_seg2 > p.autobolus_high)
+    r.temp_basal_days_seg1 >= p.min_period_days
+    AND r.autobolus_days_seg2 >= p.min_period_days
 ),
 
 valid_user_table AS (
@@ -207,6 +189,8 @@ valid_user_table AS (
     -- Analysis 8-2 Table 8.2c.
     DATE_ADD(seg2_end, 1)  AS tb_to_ab_seg3_start,
     DATE_ADD(seg2_end, 14) AS tb_to_ab_seg3_end,
+    temp_basal_days_seg1 AS tb_to_ab_temp_basal_days_seg1,
+    autobolus_days_seg2 AS tb_to_ab_autobolus_days_seg2,
     temp_basal_pct_seg1 AS tb_to_ab_pct_seg1,
     autobolus_pct_seg2 AS tb_to_ab_pct_seg2,
     coverage_seg1 AS tb_to_ab_coverage_seg1,

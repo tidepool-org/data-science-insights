@@ -236,7 +236,8 @@ def run(
     # Only keep boluses with a nearby (±15s) dosingDecision with
     # reason='normalBolus' — these are user-initiated. Autoboluses (no nearby
     # normalBolus DD) are excluded so the sim can regenerate them itself.
-    # Mirrors the directional-match used in export_loop_recommendations.py.
+    # Mirrors the user-bolus window of export_loop_dose_classification.py
+    # (USER_BOLUS_WINDOW_SECONDS).
     # SELECT DISTINCT collapses BDDP re-ingests of the same physical bolus
     # (e.g., HealthKit-Loop + pump telemetry rows with identical time_string
     # and normal value) — without it, build_scenario_json sums them on the

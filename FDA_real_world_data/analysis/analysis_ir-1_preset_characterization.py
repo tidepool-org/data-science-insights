@@ -95,9 +95,10 @@ from utils.preset_characterization import (
 
 OUTPUT_DIR = "outputs/analysis_ir_1"
 
-# The unsuffixed production build IS the report primary (0.80 box) as of
-# 2026-08-05, so a bare Run-file analyzes it — same default as every other
-# analysis. Pass --suffix _box070 / _box090 for the sensitivity builds.
+# The unsuffixed production build IS the report primary (12 of 14 days of the
+# right kind per period since 2026-10-30), so a bare Run-file analyzes it — same
+# default as every other analysis. Pass --suffix _box070 / _box090 for the
+# sensitivity builds (10 and 13 of 14).
 DEFAULT_SUFFIX = ""
 
 # (segment value, display label) — report each period separately.

@@ -53,10 +53,10 @@ def loop_rec_row(user, day, loop_version="3.2.0", version_int=3_002_000):
     return {
         "_userId": user,
         "day": day,
-        "dd_autobolus_count": 5,
-        "hk_autobolus_count": 0,
-        "dd_temp_basal_count": 0,
-        "hk_temp_basal_count": 0,
+        "automated_boluses": 5,
+        "temp_basals": 0,
+        "is_autobolus_day": 1,
+        "is_temp_basal_day": 0,
         "loop_version": loop_version,
         "version_int": version_int,
     }

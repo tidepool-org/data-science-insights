@@ -21,8 +21,10 @@ CATALOG = "dev.fda_510k_rwd"
 
 # Cohort eligibility:
 #   - If Loop version is known, keep segments below this version_int.
-#   - If Loop version is unknown, fall back to segments ending before the Loop
-#     3.4.0 release date — before then, an undeclared version can only be <3.4.0.
+#   - If Loop version is unknown (NULL, or 0 in a table staged before the
+#     projection wrote NULL), fall back to segments ending before the Loop 3.4.0
+#     release date — before then, an undeclared version can only be <3.4.0
+#     (MC, 2026-10-29: a missing version is judged on the date).
 #   - Loop autobolus indication: age ≥6 at segment start (or DOB unknown).
 MAX_LOOP_VERSION_INT = 3_004_000   # Loop 3.4.0
 MAX_SEG2_END_DATE = "2024-07-13"   # Loop 3.4.0 release date (GitHub LoopKit/Loop v3.4.0, 2024-07-13)
@@ -35,8 +37,9 @@ MIN_AGE = 6
 # (2026-07-30 decision; see report_editor_note.md §0e).
 VERSION_WHERE = (
     f"((tb_to_ab_max_loop_version_int IS NOT NULL "
+    f"  AND tb_to_ab_max_loop_version_int > 0 "
     f"  AND tb_to_ab_max_loop_version_int < {MAX_LOOP_VERSION_INT}) "
-    f" OR (tb_to_ab_max_loop_version_int IS NULL "
+    f" OR ((tb_to_ab_max_loop_version_int IS NULL OR tb_to_ab_max_loop_version_int = 0) "
     f"  AND tb_to_ab_seg2_end < DATE '{MAX_SEG2_END_DATE}'))"
 )
 

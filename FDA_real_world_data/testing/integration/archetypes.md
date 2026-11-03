@@ -61,11 +61,11 @@ Planned but not implemented (no test currently needs them): 07, 10, 11, 17, 18.
 All seven run 28 autobolus days (10 automated boluses/day, clearing the ≥3
 AB-day threshold) with full-coverage CBG, starting `IR1002_START = 2024-09-02`
 in a window disjoint from every other fixture window. The length is pinned from
-both sides: ≥28 days so they anchor a candidate 28-day window and clear the
-day-coverage gate (test_analysis_6_3a pins both stages exactly against the full
-Loop-user count), and ≤~35 days so they cannot produce a stable-AB segment
-(needs ≥44) or a durability outcome (needs ≥56 follow-up). Being ~all-AB they
-also fail the TB→AB validity box, so they enter no §8 analysis cohort.
+both sides: ≥28 days so they anchor a candidate 28-day window (test_analysis_6_3a
+pins that stage exactly against the full Loop-user count), and ≤~35 days so
+they cannot produce a stable-AB segment (needs ≥44) or a durability outcome
+(needs ≥56 follow-up). Being ~all-AB they also fail the window rule (the first
+period needs 12 of 14 temp-basal days), so they enter no §8 analysis cohort.
 `never_preset` needs no archetype: the existing users above have AB days and no
 overrides in this window.
 
@@ -89,11 +89,11 @@ All eight run `IR6B_DAYS = 28` all-autobolus days (10 automated boluses/day)
 starting `IR6B_START = 2024-11-04`, in a window disjoint from every other
 fixture window. The length is pinned from both sides exactly like the IR-1002
 window: ≥28 days of daily dosing so every user anchors a candidate 28-day
-window with 100% dosing-day coverage (test_analysis_6_3a pins those stages
-against the full Loop-user count), ≤~35 days so no stable-AB segment and no
-durability outcome can form (test_analysis_8_7 pins eligible users at exactly
-2). Being all-AB from day 0 they also fail the TB→AB validity box (seg1 needs
-<30% AB), so they enter no §8 analysis cohort.
+window (test_analysis_6_3a pins that stage against the full Loop-user count),
+≤~35 days so no stable-AB segment and no durability outcome can form
+(test_analysis_8_7 pins eligible users at exactly 2). Being all-AB from day 0
+they also fail the window rule (the first period needs 12 of 14 temp-basal
+days), so they enter no §8 analysis cohort.
 
 These users DO flow into the IR-1002 universes: each has eligible AB days, so
 the IR-2 cohort and the IR-3 activation set grow (int_user_35 lands in
@@ -125,6 +125,19 @@ edges (mmol round-trip is inexact) and ≥54 so no hypo events form.
 | `int_user_35` | C2 exclusion paths, F 27y/5y dx | Day 2: P violation (own target low 40 < 67). Day 5: M violation (needs 180% with own target low 100 < 110; not a P violation). Day 8: compliant at needs 120% — the only C2 episode. The violators are qualifying + all-days-AB, so exclusion is attributable to the violation flags alone; they never enter the episode frame (membership needs in_c1 OR in_c2). IR-2 group: `both`. | Case 5: P/M exclusion from C2 |
 | `int_user_36`–`int_user_40` | Line-level users (M/F, adults) | One compliant 1 h activation each on day 3 at needs 50%, flat-100 CBG that day only. With int_user_33's day-2 activation the 50% level holds 6 users ≥ MIN_USERS_FOR_LINE = 5; every other needs level has ≤3 users. | Case 6: line eligibility |
 
+## Dose classifier (execution plan Step 2)
+
+Two plugin-only Loop 3.2 users in their own window (`PLUGIN32_START = 2025-01-06`). Loop 3.2 uploaded
+automated boluses with subType normal and a record id ending in bolus/automated; today's decision-match
+rule needs a subType other than normal, so only the plugin's automated record id
+(`plugin_automated_id`) recognises them. Both are CGM-free, so the loaders' coverage gate keeps them
+out of every analysis cohort. `test_loop_dose_classification.py` pins both.
+
+| _userId | Archetype | What makes it interesting | Role |
+|---|---|---|---|
+| `int_user_41` | Loop 3.2 transition, F 38y/11y dx | 14 temp-basal days, then 14 days of 20 automated boluses with subType normal | Forms a transition segment only through the record id |
+| `int_user_42` | Loop 3.2 autobolus only, M 44y/16y dx | 28 days of 20 automated boluses with subType normal | Every day an autobolus day; no segment |
+
 ## Filter-coverage matrix
 
 | Filter | Exercised by |
@@ -133,6 +146,8 @@ edges (mmol round-trip is inexact) and ≥54 so no hypo events form.
 | CBG coverage < 70% (drop) | int_user_05 |
 | Guardrail violation (drop) | int_user_06 |
 | Age < 6 (drop) | int_user_07 |
+| Window rule: fewer than 12 of 14 days of the right kind in a period (drop) | int_user_25 |
+| Automated boluses found only by the plugin's automated record id (Loop 3.2) | int_user_41 (segment), int_user_42 (none) |
 | `is_valid_name_only_seg2` ≥2× each phase (drop from 8-2/8-3 primary) | int_user_09 |
 | `is_valid_name_only_seg3` (drop from 8-2c primary) | int_user_09 |
 | Min followup for adoption (drop from 8-7) | int_user_23 |

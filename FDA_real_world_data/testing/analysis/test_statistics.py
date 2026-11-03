@@ -5,7 +5,7 @@ Table 8.1b nonparametric paired-difference CI) and a smoke test of analysis
 8-1's `create_table_8_1a`, confirming both the parametric (t-based) and
 nonparametric (HL) 95% CI columns are emitted.
 
-Pure pandas/numpy — runs as a plain pytest unit test, no Spark.
+Pure pandas/numpy, no Spark; pytest-free (the run_all_tests.py convention): the checks run from __main__.
 """
 
 import importlib.util
@@ -162,3 +162,17 @@ def test_table_8_1a_parametric_ci_matches_compute_paired_statistics():
     expected = f"[{s['diff_ci_low']:.2f}, {s['diff_ci_hi']:.2f}]"
     row = param[param["Endpoint"] == name].iloc[0]
     assert row["Paired Diff 95% CI"] == expected
+
+
+if __name__ == "__main__":
+    test_hl_equals_median_of_walsh_averages_and_ci_brackets_it()
+    test_hl_locked_regression_example()
+    test_hl_shift_equivariance()
+    test_hl_negation_symmetry_swapping_segments()
+    test_hl_small_n_widens_to_full_walsh_range()
+    test_hl_filters_nan_pairs()
+    test_hl_degenerate_pair_counts_return_nan_ci()
+    test_hl_ci_consistent_with_paired_statistics_n()
+    test_table_8_1a_emits_both_ci_columns()
+    test_table_8_1a_parametric_ci_matches_compute_paired_statistics()
+    print("test_statistics: all checks passed")

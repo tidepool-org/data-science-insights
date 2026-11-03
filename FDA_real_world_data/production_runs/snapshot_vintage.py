@@ -76,7 +76,7 @@ INPUT_TABLES = (
 # lpe_), and the integration-test catalog (test_). The offline test checks
 # that every CREATE TABLE in exploratory/ is covered.
 EXCLUDED_PREFIXES = (
-    "test_", "tad_", "tfs_", "tsu_", "tbr_", "ddr_", "dmc_", "dre_", "cwt_",
+    "test_", "tad_", "tfs_", "tsu_", "tbr_", "ddr_", "dmc_", "dre_", "cwt_", "gbc_", "gate_b_",
     "rfai_tmp_", "ir6b_tmp_", "lsd_", "lpp_", "lpb_", "lpe_",
 )
 

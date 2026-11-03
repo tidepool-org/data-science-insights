@@ -239,8 +239,9 @@ def build_episode_frames(spark):
           FROM {CATALOG}.valid_transition_segments s
           WHERE s.segment_rank = 1
             AND ((s.tb_to_ab_max_loop_version_int IS NOT NULL
+                  AND s.tb_to_ab_max_loop_version_int > 0
                   AND s.tb_to_ab_max_loop_version_int < 3004000)
-              OR (s.tb_to_ab_max_loop_version_int IS NULL
+              OR ((s.tb_to_ab_max_loop_version_int IS NULL OR s.tb_to_ab_max_loop_version_int = 0)
                   AND s.tb_to_ab_seg2_end < DATE '2024-07-13'))
             AND (s.tb_to_ab_age_years >= 6 OR s.tb_to_ab_age_years IS NULL)
             AND s._userId IN (SELECT _userId FROM {CATALOG}.user_diagnosis_type

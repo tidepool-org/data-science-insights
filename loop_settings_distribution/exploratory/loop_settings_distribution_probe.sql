@@ -138,14 +138,18 @@ deduped AS (
   WHERE rn = 1
 ),
 versioned AS (
-  -- The staging's version integer: major * 1,000,000 + minor * 1,000 + patch,
-  -- each part 0 when it does not parse (so a missing version is 0, never NULL).
+  -- The staging's version integer (export_loop_recommendations.py,
+  -- version_int_sql): major * 1,000,000 + minor * 1,000 + patch, NULL when the
+  -- version does not start with major.minor (MC, 2026-10-29: a missing
+  -- version is judged on the date, never passed on as 0).
   SELECT d._userId, d.settings_time, d.activeSchedule, d.bg_units, d.loop_version,
          d.basalSchedules, d.insulinSensitivities, d.insulinSensitivity, d.carbRatios, d.carbRatio,
          CAST(d.settings_time AS DATE) AS day,
-         COALESCE(TRY_CAST(SPLIT(d.loop_version, '\\.')[0] AS INT), 0) * 1000000
-           + COALESCE(TRY_CAST(SPLIT(d.loop_version, '\\.')[1] AS INT), 0) * 1000
-           + COALESCE(TRY_CAST(SPLIT(d.loop_version, '\\.')[2] AS INT), 0) AS version_int
+         CASE WHEN d.loop_version RLIKE '^[0-9]+[.][0-9]+' THEN
+           CAST(regexp_extract(d.loop_version, '^([0-9]+)', 1) AS INT) * 1000000
+           + CAST(regexp_extract(d.loop_version, '^[0-9]+[.]([0-9]+)', 1) AS INT) * 1000
+           + COALESCE(TRY_CAST(regexp_extract(d.loop_version, '^[0-9]+[.][0-9]+[.]([0-9]+)', 1) AS INT), 0)
+         END AS version_int
   FROM deduped d
 )
 SELECT v._userId, v.settings_time, v.day, v.activeSchedule, v.bg_units, v.loop_version, v.version_int,

@@ -16,7 +16,7 @@ the "Wrote N BDDP rows" line — if it hasn't moved, run
 
 DAG order (mirrors `fda_analysis_pipeline.yml`):
 
-    bddp -> loop_recommendations
+    bddp -> loop_dose_classification -> loop_recommendations
          -> cbg_from_loop -> loop_cbg
          -> valid_transition_segments
          -> stable_autobolus_segments
@@ -57,6 +57,7 @@ TABLES = {
     "user_gender": f"{P}user_gender",
     "jaeb_link": f"{P}jaeb_upload_to_userid",
     "user_diagnosis_type": f"{P}user_diagnosis_type",
+    "loop_dose_classification": f"{P}loop_dose_classification",
     "loop_recommendations": f"{P}loop_recommendations",
     "loop_cbg": f"{P}loop_cbg",
     "valid_transition_segments": f"{P}valid_transition_segments",
@@ -89,6 +90,9 @@ TABLES = {
 # after one, re-run the affected staging script against the test tables (or
 # teardown + rebuild).
 TERMINAL_TABLES = (
+    # the dose classifier (execution plan Step 2): its absence forces the
+    # one-time rebuild the new day table needs
+    "loop_dose_classification",
     "glycemic_endpoints_transition",
     "glycemic_endpoints_stable",
     "glycemic_endpoints_override",
@@ -164,6 +168,7 @@ def run(spark, force=False):
 
     _ensure_staging_on_path()
     # Imported here (not at module top) so the path mangling above runs first.
+    import export_loop_dose_classification  # type: ignore # noqa: E402
     import export_loop_recommendations  # type: ignore # noqa: E402
     import export_cbg_from_loop  # type: ignore # noqa: E402
     import export_valid_transition_segments  # type: ignore # noqa: E402
@@ -191,10 +196,17 @@ def run(spark, force=False):
     build_synthetic_bddp.build_jaeb_link(spark, TABLES["jaeb_link"])
 
     # ── Step 2: phase 1 base tables ───────────────────────────────────────
+    print("[integration.run_pipeline] export_loop_dose_classification...")
+    export_loop_dose_classification.run(
+        spark,
+        input_table=TABLES["bddp"],
+        output_table=TABLES["loop_dose_classification"],
+    )
     print("[integration.run_pipeline] export_loop_recommendations...")
     export_loop_recommendations.run(
         spark,
         input_table=TABLES["bddp"],
+        dose_table=TABLES["loop_dose_classification"],
         output_table=TABLES["loop_recommendations"],
     )
     print("[integration.run_pipeline] build_user_diagnosis_type...")
@@ -402,6 +414,7 @@ def session(spark):
 # table references in analysis modules' spark.table()/spark.sql() calls
 # without modifying the analysis code itself.
 PROD_TO_TEST = {
+    "dev.fda_510k_rwd.loop_dose_classification": TABLES["loop_dose_classification"],
     "dev.fda_510k_rwd.loop_recommendations": TABLES["loop_recommendations"],
     "dev.fda_510k_rwd.loop_cbg": TABLES["loop_cbg"],
     "dev.fda_510k_rwd.valid_transition_segments": TABLES["valid_transition_segments"],

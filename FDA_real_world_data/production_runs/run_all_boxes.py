@@ -1,11 +1,13 @@
-"""One-click driver: rebuild + analyze EVERY validity-box build in sequence.
+"""One-click driver: rebuild + analyze EVERY window-rule build in sequence.
 
-Runs `run_transition_variant.run()` once per box configuration — the report
-primary first, then the two §12-supplement builds:
+Runs `run_transition_variant.run()` once per configuration, the report primary
+first, then the two §12-supplement builds. A window period passes with at
+least this many of its 14 days of the right kind (MC, 2026-10-30; the
+suffixes keep the names of the former 0.70 and 0.90 boxes):
 
-  _box080   0.20 / 0.80   report primary
-  ""        0.30 / 0.70   production build (0.70 box)
-  _box090   0.10 / 0.90   supplement
+  ""        12 of 14 (80%)   report primary
+  _box070   10 of 14 (70%)   supplement
+  _box090   13 of 14 (90%)   supplement
 
 Each pass rebuilds the box-affected staging subtree (valid_transition_segments
 → … → overrides_by_segment → glycemic endpoints) and runs the 6-3a cohort flow
@@ -13,14 +15,12 @@ plus analyses 8-1/2/3/4/5/7/8 and IR-1 into `outputs/*{suffix}/`.
 
 ⚠ The production pass (suffix "") rebuilds the PRODUCTION transition tables in
 place — same logic and parameters as fda_analysis_pipeline.yml's transition
-branch (CREATE OR REPLACE, idempotent). That is intentional here: the
-2026-07-30 change set added `stated_duration` to overrides_by_segment, so every
-build — production included — needs a re-stage before IR-1 reports programmed
-durations.
+branch (CREATE OR REPLACE, idempotent). Snapshot first
+(production_runs/snapshot_vintage.py).
 
 Run (Databricks Run-file = the one click):
   production_runs/run_all_boxes.py                       # all three boxes
-  production_runs/run_all_boxes.py --only _box080        # a subset ("prod" = "")
+  production_runs/run_all_boxes.py --only _box070        # a subset ("prod" = "")
   production_runs/run_all_boxes.py --skip-analysis       # staging subtrees only
 """
 
@@ -45,13 +45,12 @@ sys.path.insert(0, os.path.join(_FDA_ROOT, "exploratory"))
 
 import run_transition_variant as variant  # noqa: E402
 
-# (suffix, autobolus_low, autobolus_high). Boxes are symmetric (low = 1 − high)
-# and named by the high threshold. Report primary runs first so a mid-run
-# failure still leaves the primary build complete.
+# (suffix, days of the right kind each 14-day period needs). Report primary
+# runs first so a mid-run failure still leaves the primary build complete.
 BOX_CONFIGS = [
-    ("",        0.20, 0.80),   # report primary — the unsuffixed production build
-    ("_box070", 0.30, 0.70),   # §12 supplement
-    ("_box090", 0.10, 0.90),   # §12 supplement
+    ("",        12),   # report primary — the unsuffixed production build
+    ("_box070", 10),   # §12 supplement
+    ("_box090", 13),   # §12 supplement
 ]
 
 # CLI spelling for the production (empty-suffix) build in --only.
@@ -59,7 +58,7 @@ PROD_TOKEN = "prod"
 
 
 def _label(suffix: str) -> str:
-    return suffix if suffix else f"<production, 0.70 box ({PROD_TOKEN})>"
+    return suffix if suffix else f"<production, 12 of 14 ({PROD_TOKEN})>"
 
 
 def run(spark, run_analysis: bool = True, only=None):
@@ -71,7 +70,7 @@ def run(spark, run_analysis: bool = True, only=None):
     """
     if only is not None:
         only = set(only)
-        known = {suffix for suffix, _, _ in BOX_CONFIGS}
+        known = {suffix for suffix, _ in BOX_CONFIGS}
         unknown = only - known
         if unknown:
             raise ValueError(
@@ -79,21 +78,20 @@ def run(spark, run_analysis: bool = True, only=None):
             )
     selected = [c for c in BOX_CONFIGS if only is None or c[0] in only]
 
-    for i, (suffix, low, high) in enumerate(selected, 1):
+    for i, (suffix, min_period_days) in enumerate(selected, 1):
         print("=" * 72)
         print(f"[all-boxes {i}/{len(selected)}] {_label(suffix)}  "
-              f"(box {low}/{high})")
+              f"({min_period_days} of 14 days per period)")
         print("=" * 72)
         variant.run(
             spark,
             suffix=suffix,
-            autobolus_low=low,
-            autobolus_high=high,
+            min_period_days=min_period_days,
             run_analysis=run_analysis,
         )
 
     print("=" * 72)
-    print(f"[all-boxes] complete: {', '.join(_label(s) for s, _, _ in selected)}")
+    print(f"[all-boxes] complete: {', '.join(_label(s) for s, _ in selected)}")
     print("=" * 72)
 
 
@@ -103,7 +101,7 @@ if __name__ == "__main__":
     _parser = argparse.ArgumentParser()
     _parser.add_argument(
         "--only", default=None,
-        help=f"comma-separated subset of boxes to run, e.g. '_box080,{PROD_TOKEN}' "
+        help=f"comma-separated subset of builds to run, e.g. '_box070,{PROD_TOKEN}' "
              f"('{PROD_TOKEN}' = the production empty-suffix build); default all",
     )
     _parser.add_argument(

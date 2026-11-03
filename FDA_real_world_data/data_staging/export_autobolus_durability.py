@@ -19,7 +19,6 @@ def run(
     loop_recommendations_table=f"{CATALOG}.loop_recommendations",
     user_dates_table="dev.default.bddp_user_dates",
     user_gender_table="dev.default.user_gender",
-    min_autobolus_count=3,
     min_coverage=DEFAULT_MIN_COVERAGE,
 ):
     spark.sql(f"""
@@ -41,13 +40,8 @@ def run(
       SELECT
         _userId,
         day,
-        CASE
-          WHEN GREATEST(
-            COALESCE(dd_autobolus_count, 0),
-            COALESCE(hk_autobolus_count, 0)
-          ) >= {min_autobolus_count}
-          THEN 1 ELSE 0
-        END AS is_autobolus
+        -- the day class of export_loop_recommendations.py
+        is_autobolus_day AS is_autobolus
       FROM {loop_recommendations_table}
     ),
 

@@ -38,30 +38,38 @@ DURABILITY_ADOPT_DAY = date(2024, 6, 15)
 
 # IR-1002 (guardrail-group) window: 28 days, disjoint from every other window.
 # The length is pinned from both sides. At least 28 days so these users anchor
-# a candidate 28-day window and clear the day-coverage gate — test_analysis_6_3a
-# pins those two funnel stages EXACTLY against the full Loop-user count, so a
-# shorter window silently breaks the §6.3 cohort-flow test. At most ~35 days so
-# they still cannot produce a stable-AB segment (needs a fully-AB 14-day window
-# starting ≥30 days after first AB, i.e. ≥44 days) or a durability outcome
-# (needs ≥56 days follow-up). Being ~all-AB, they also fail the TB→AB validity
-# box (seg1 must be <30% AB), so they enter no §8 analysis cohort.
+# a candidate 28-day window — test_analysis_6_3a pins that funnel stage EXACTLY
+# against the full Loop-user count, so a shorter window silently breaks the
+# §6.3 cohort-flow test. At most ~35 days so they still cannot produce a
+# stable-AB segment (needs a fully-AB 14-day window starting ≥30 days after
+# first AB, i.e. ≥44 days) or a durability outcome (needs ≥56 days follow-up).
+# Being ~all-AB, they also fail the window rule (the first period needs 12 of 14
+# temp-basal days), so they enter no §8 analysis cohort.
 IR1002_START = date(2024, 9, 2)
 IR1002_DAYS = 28
 
 # IR-6B (preset dose-response) window: 28 days, disjoint from every other
 # fixture window. The length is pinned from both sides exactly like
 # IR1002_START: at least 28 days of daily dosing so every user anchors a
-# candidate 28-day window with 100% dosing-day coverage (test_analysis_6_3a
-# pins those two funnel stages exactly against the full Loop-user count), and
+# candidate 28-day window (test_analysis_6_3a pins that funnel stage exactly
+# against the full Loop-user count), and
 # at most ~35 days so no stable-AB segment (needs a fully-AB 14-day window
 # starting ≥30 days after first AB) and no durability outcome (needs ≥56 days
 # follow-up; test_analysis_8_7 pins eligible users at exactly 2) can form.
-# All-AB from day 0, so no TB→AB transition segment forms either (seg1 would
-# be 100% AB; the validity box needs <30%) — these users reach only the
+# All-AB from day 0, so no TB→AB transition segment forms either (seg1 holds
+# no temp-basal day; the window rule needs 12 of 14) — these users reach only the
 # IR-1002 universes (as additional guardrail-group members; every IR-2/IR-3
 # assertion is per-user or relative) and IR-6B's C2 series.
 IR6B_START = date(2024, 11, 4)
 IR6B_DAYS = 28
+
+# Plugin-only Loop 3.2 window (execution plan Step 2 item 1), disjoint from
+# every other fixture window. Loop 3.2 uploaded its automated boluses with
+# subType normal and a record id ending in bolus/automated: the first rule of
+# today's day classifier (a Loop decision, subType other than normal) misses
+# them, and the plugin's automated record id catches them.
+PLUGIN32_START = date(2025, 1, 6)
+PLUGIN32_VERSION = "3.2.0"
 
 DEFAULT_VERSION = "3.2.0"
 MMOL_PER_MGDL = 1.0 / 18.018
@@ -107,6 +115,11 @@ BDDP_COLUMNS = [
     "bgTargetPreprandial",
     "bgTargetPhysicalActivity",
     "uploadID",
+    # read by data_staging/export_loop_dose_classification.py
+    "deliveryType",
+    "rate",
+    "suppressed",
+    "insulinFormulation",
 ]
 
 BDDP_SCHEMA = (
@@ -143,7 +156,11 @@ BDDP_SCHEMA = (
     "`bgSafetyLimit` double, "
     "`bgTargetPreprandial` string, "
     "`bgTargetPhysicalActivity` string, "
-    "`uploadID` string"
+    "`uploadID` string, "
+    "`deliveryType` string, "
+    "`rate` double, "
+    "`suppressed` string, "
+    "`insulinFormulation` string"
 )
 
 
@@ -261,6 +278,32 @@ def _temp_basal_day_rows(user_id, day, n_events=10, version=DEFAULT_VERSION):
             time_string=_iso(t + timedelta(seconds=2)),
             type="basal",
             origin=_origin(version),
+        ))
+    return rows
+
+
+def _plugin32_autobolus_day_rows(user_id, day, n_events=10):
+    """Emit n_events Loop 3.2 automated boluses on `day`: a loop DD, then 2 s later a
+    bolus with subType normal and a record id ending in bolus/automated."""
+    rows = []
+    base = datetime(day.year, day.month, day.day, 6, 0, 0)
+    origin = json.dumps({"id": f"{user_id}-{day.isoformat()}:bolus/automated", "version": PLUGIN32_VERSION})
+    for i in range(n_events):
+        t = base + timedelta(minutes=30 * i)
+        rows.append(_row(
+            _userId=user_id,
+            time_string=_iso(t),
+            type="dosingDecision",
+            reason="loop",
+            origin=_origin(PLUGIN32_VERSION),
+        ))
+        rows.append(_row(
+            _userId=user_id,
+            time_string=_iso(t + timedelta(seconds=2)),
+            type="bolus",
+            subType="normal",
+            normal=0.4,
+            origin=origin,
         ))
     return rows
 
@@ -767,6 +810,29 @@ def _archetype_stable_ab_no_jaeb(user_id="int_user_20"):
     return _stable_ab_44_day_user(user_id)
 
 
+def _archetype_plugin32_transition(user_id="int_user_41"):
+    """A genuine transition on a plugin-only Loop 3.2 build: 14 temp-basal days,
+    then 14 days of automated boluses uploaded with subType normal. Must form a
+    window (the automated record id makes the second fortnight autobolus days).
+    No CGM, so the loaders' coverage gate keeps it out of every analysis cohort."""
+    rows = []
+    for d_idx in range(14):
+        rows.extend(_temp_basal_day_rows(user_id, PLUGIN32_START + timedelta(days=d_idx),
+                                         n_events=20, version=PLUGIN32_VERSION))
+    for d_idx in range(14, 28):
+        rows.extend(_plugin32_autobolus_day_rows(user_id, PLUGIN32_START + timedelta(days=d_idx), n_events=20))
+    return rows
+
+
+def _archetype_plugin32_autobolus_only(user_id="int_user_42"):
+    """A plugin-only Loop 3.2 user on automated boluses throughout (28 days, subType
+    normal). Every day is an autobolus day, so no window forms."""
+    rows = []
+    for d_idx in range(28):
+        rows.extend(_plugin32_autobolus_day_rows(user_id, PLUGIN32_START + timedelta(days=d_idx), n_events=20))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Durability cohort archetypes (int_user_21, _22, _23 for 8-7)
 # ---------------------------------------------------------------------------
@@ -818,14 +884,13 @@ def _archetype_insufficient_followup(user_id="int_user_23"):
 
 def _archetype_day_undercoverage(user_id="int_user_25"):
     """Loop dosing on alternating days only (21 of 42 days, Jan 1 – Feb 11):
-    every 14-day window holds exactly 7 dosing days (7/14 = 50%, below the 70%
-    day-coverage gate in export_valid_transition_segments.py), while anchors
-    from Jan 28 onward still satisfy the 28-day observation bound. The user
-    therefore reaches the 6-3a funnel's "Candidate 28-day window" stage but
-    drops at "Day-coverage gate" — the only archetype separating those two
-    stages. Temp-basal-only and CBG-free, so the user enters no segment table
-    and no other analysis cohort (never adopts AB → invisible to 8-7's
-    eligible count)."""
+    every 14-day period holds exactly 7 dosing days, all temp-basal, far below
+    the window rule of export_valid_transition_segments.py (12 of 14 days of
+    the right kind), while anchors from Jan 28 onward still satisfy the 28-day
+    observation bound. The user therefore reaches the 6-3a funnel's "Candidate
+    28-day window" stage and has no segment. Temp-basal-only and CBG-free, so
+    the user enters no segment table and no other analysis cohort (never
+    adopts AB → invisible to 8-7's eligible count)."""
     rows = []
     for d_idx in range(0, 42, 2):
         day = SEG1_START + timedelta(days=d_idx)
@@ -1233,6 +1298,10 @@ ARCHETYPES = {
     "int_user_38": lambda: _archetype_ir6b_line_level_user("int_user_38"),
     "int_user_39": lambda: _archetype_ir6b_line_level_user("int_user_39"),
     "int_user_40": lambda: _archetype_ir6b_line_level_user("int_user_40"),
+    # Plugin-only Loop 3.2 (execution plan Step 2 item 1): automated boluses
+    # uploaded with subType normal. Disjoint window, see PLUGIN32_START.
+    "int_user_41": _archetype_plugin32_transition,
+    "int_user_42": _archetype_plugin32_autobolus_only,
     # TODO: int_user_07, 10, 11, 17, 18 — see archetypes.md for the full catalog.
 }
 
@@ -1305,6 +1374,9 @@ _DEMOGRAPHICS = {
     "int_user_38": {"gender": "M", "age_years": 48, "yld_years": 22},
     "int_user_39": {"gender": "F", "age_years": 26, "yld_years": 4},
     "int_user_40": {"gender": "M", "age_years": 55, "yld_years": 30},
+    # Plugin-only Loop 3.2 archetypes — adults, so the age gate never binds.
+    "int_user_41": {"gender": "F", "age_years": 38, "yld_years": 11},
+    "int_user_42": {"gender": "M", "age_years": 44, "yld_years": 16},
 }
 
 

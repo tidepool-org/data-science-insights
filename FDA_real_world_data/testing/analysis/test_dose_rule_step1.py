@@ -27,6 +27,10 @@ run with skip none; no result selects a raw user id column; the snapshot's
 table selection skips every scratch prefix an exploratory file creates and
 never clones an unknown name.
 
+The staging search and the loader are read as they stood at commit 9f2a029
+(testing/analysis/step1_frozen/), the state the Step 1 runs of record copied:
+Step 2 changed the live files.
+
 Run locally:
     /Users/mconn/miniconda3/envs/tidepool-data-science-simulator-dev/bin/python \\
         FDA_real_world_data/testing/analysis/test_dose_rule_step1.py
@@ -48,7 +52,6 @@ sys.path.insert(0, os.path.join(PROJECT, "data_staging"))
 from export_sql_results_to_csv import (  # noqa: E402
     DEFAULT_JOBS, SIDE_EFFECT_PREFIXES, result_labels, split_statements,
 )
-import export_valid_transition_segments as segments  # noqa: E402
 import export_ab_day_cohort as ab_day  # noqa: E402
 import export_user_diagnosis_type as diagnosis_staging  # noqa: E402
 
@@ -58,13 +61,17 @@ CHECK = os.path.join(PROJECT, "exploratory", "transition_cohort_version_gate_che
 WALKTHROUGH = os.path.join(PROJECT, "exploratory", "classification_walkthrough.sql")
 BY_AGE = os.path.join(PROJECT, "exploratory", "rfai_insulin_type_by_age.sql")
 AGE_GENDER = os.path.join(PROJECT, "exploratory", "transition_excluded_windows_age_gender.sql")
-STAGING = os.path.join(PROJECT, "data_staging", "export_valid_transition_segments.py")
-LOADER = os.path.join(PROJECT, "analysis", "utils", "data_loading.py")
+GATE_B = os.path.join(PROJECT, "exploratory", "gate_b_check.sql")
+# The staging search and the loader as the Step 1 runs of record copied them
+# (commit 9f2a029); Step 2 changed the live files.
+FROZEN = os.path.join(HERE, "step1_frozen")
+STAGING = os.path.join(FROZEN, "export_valid_transition_segments.py.txt")
+LOADER = os.path.join(FROZEN, "data_loading.py.txt")
 EXPORTER = os.path.join(PROJECT, "analysis", "export_sql_results_to_csv.py")
 SNAPSHOT = os.path.join(PROJECT, "production_runs", "snapshot_vintage.py")
 DIAGNOSIS_STAGING = os.path.join(PROJECT, "data_staging", "export_user_diagnosis_type.py")
-ALL_FILES = (CENSUS, ESTIMATE, CHECK, WALKTHROUGH)
-COHORT_VIEW_CARRIERS = (ESTIMATE, CHECK, WALKTHROUGH)   # files that copy the by-age cohort views verbatim
+ALL_FILES = (CENSUS, ESTIMATE, CHECK, WALKTHROUGH, GATE_B)
+COHORT_VIEW_CARRIERS = (ESTIMATE, CHECK, WALKTHROUGH, GATE_B)   # files that copy the by-age cohort views verbatim
 WINDOW_SEARCH_CARRIERS = (ESTIMATE, WALKTHROUGH)        # files that copy the staging's window search verbatim
 GATED_TABLES = {ESTIMATE: "dev.fda_510k_rwd.dre_gated", WALKTHROUGH: "dev.fda_510k_rwd.cwt_gated"}
 # statements the walkthrough copies from the estimate, with the scratch prefix dre_ renamed cwt_
@@ -83,7 +90,7 @@ COPIED_FROM_ESTIMATE = (
 WALKTHROUGH_MARKER_SIGNALS = ("sig_m1_bolus", "sig_m2_bolus", "sig_r1_v3", "sig_r3b",
                               "sig_m1_basal", "sig_m2_basal", "sig_r2_v3", "sig_r4b")
 WALKTHROUGH_EXAMPLE_RESULTS = ("6", "7", "8")
-DIAGNOSIS_CARRIERS = (ESTIMATE, CENSUS, WALKTHROUGH)     # files that copy the diagnosis resolution verbatim
+DIAGNOSIS_CARRIERS = (ESTIMATE, CENSUS, WALKTHROUGH, GATE_B)     # files that copy the diagnosis resolution verbatim
 # MC, 2026-10-30 (plan §5 item 12): a window period passes when at least 12 of
 # its 14 days are of the right kind; the walkthrough's cohort sets under that
 # rule carry this suffix, and a tie goes to the earliest window
@@ -97,6 +104,7 @@ RESULTS_BY_DIAGNOSIS = {
     CENSUS: ["0"],
     CHECK: ["0", "2"],
     WALKTHROUGH: ["0", "1", "2", "3", "4", "9"],
+    GATE_B: ["0", "1"],
 }
 
 EXPECTED_LABELS = {
@@ -104,6 +112,7 @@ EXPECTED_LABELS = {
     ESTIMATE: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
     CHECK: ["0", "1", "2"],
     WALKTHROUGH: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+    GATE_B: ["0", "1", "2"],
 }
 SCRATCH_TABLES = {
     CENSUS: ["dev.fda_510k_rwd.dmc_users", "dev.fda_510k_rwd.dmc_decisions", "dev.fda_510k_rwd.dmc_dose_rows"],
@@ -112,7 +121,10 @@ SCRATCH_TABLES = {
     CHECK: [],                                          # no scratch table: views over the staged tables
     WALKTHROUGH: ["dev.fda_510k_rwd.cwt_users", "dev.fda_510k_rwd.cwt_decisions", "dev.fda_510k_rwd.cwt_dose_rows",
                   "dev.fda_510k_rwd.cwt_days", "dev.fda_510k_rwd.cwt_windows", "dev.fda_510k_rwd.cwt_gated"],
+    GATE_B: ["dev.fda_510k_rwd.gbc_users"],
 }
+# statements the Gate B check copies from the estimate, with the prefix dre_ renamed gbc_
+GATE_B_COPIED_FROM_ESTIMATE = COPIED_FROM_ESTIMATE[:3]
 # Folders whose SQL files create scratch tables in dev.fda_510k_rwd.
 SCRATCH_SQL_FOLDERS = (
     os.path.join(PROJECT, "exploratory"),
@@ -123,6 +135,11 @@ SCRATCH_SQL_FOLDERS = (
 
 def _read(path):
     return open(path, encoding="utf-8").read()
+
+
+def _frozen_staging_default(name):
+    """A default of the frozen staging search, read from its text."""
+    return float(re.search(rf"^{name} = ([\d.]+)", _read(STAGING), re.MULTILINE).group(1))
 
 
 def _load_snapshot_module():
@@ -181,7 +198,8 @@ def test_estimate_copies_the_excluded_window_aliases_verbatim():
     end = source.index("AS t(user_alias, basis);", start) + len("AS t(user_alias, basis);")
     block = source[start:end]
     assert block.count("('u") == 16, "the alias list no longer holds 16 windows; re-copy and re-pin"
-    assert block in _read(ESTIMATE), "dose_rule_estimate.sql: the alias list drifted from transition_excluded_windows_age_gender.sql"
+    for path in (ESTIMATE, GATE_B):
+        assert block in _read(path), f"{os.path.basename(path)}: the alias list drifted from transition_excluded_windows_age_gender.sql"
 
 
 def test_estimate_copies_the_window_search_verbatim_with_the_staging_parameters():
@@ -201,7 +219,8 @@ def test_estimate_copies_the_window_search_verbatim_with_the_staging_parameters(
         assert "14 AS segment_days" in params and "0.70 AS min_coverage" in params, name
         low = float(re.search(r"([\d.]+) AS autobolus_low", params).group(1))
         high = float(re.search(r"([\d.]+) AS autobolus_high", params).group(1))
-        assert low == segments.DEFAULT_AUTOBOLUS_LOW and high == segments.DEFAULT_AUTOBOLUS_HIGH, (name, low, high)
+        assert (low, high) == (_frozen_staging_default("DEFAULT_AUTOBOLUS_LOW"),
+                               _frozen_staging_default("DEFAULT_AUTOBOLUS_HIGH")), (name, low, high)
         # The composite key is split before any result reads the table.
         assert "CONCAT(rule_set, '|', _userId) AS _userId" in text, name
         assert re.search(r"SUBSTRING_INDEX\(\w+\._userId, '\|', 1\)", text), name
@@ -219,7 +238,7 @@ def test_estimate_constants_mirror_the_code():
     samples = int(re.search(r"SAMPLES_PER_DAY = (\d+)", loader).group(1))
     coverage = float(re.search(r"MIN_COVERAGE = ([\d.]+)", loader).group(1))
     min_cbg = int(segment_days * samples * coverage)
-    threshold = segments.DEFAULT_MIN_AUTOBOLUS_COUNT
+    threshold = int(_frozen_staging_default("DEFAULT_MIN_AUTOBOLUS_COUNT"))
     assert f"< {expect['MAX_LOOP_VERSION_INT']}" in estimate
     assert f"DATE '{expect['MAX_SEG2_END_DATE']}'" in estimate
     assert f">= {expect['MIN_AGE']} OR s.tb_to_ab_age_years IS NULL" in estimate
@@ -506,6 +525,24 @@ def test_walkthrough_copies_the_estimate_statements_with_its_prefix():
     assert "dre_" not in _read(WALKTHROUGH), "the walkthrough must not touch the estimate's scratch tables"
 
 
+def test_gate_b_copies_the_estimate_universe_and_compares_its_rule_set():
+    estimate = split_statements(_read(ESTIMATE))
+    gate_b_text = _read(GATE_B)
+    gate_b = split_statements(gate_b_text)
+    for head in GATE_B_COPIED_FROM_ESTIMATE:
+        source = [s for s in estimate if s.startswith(head)]
+        assert len(source) == 1, head
+        assert gate_b.count(source[0].replace("dre_", "gbc_")) == 1, f"gate_b_check.sql: {head.replace('dre_', 'gbc_')} drifted from dose_rule_estimate.sql"
+    assert "dre_" not in gate_b_text, "the Gate B check must not touch the estimate's scratch tables"
+    # result 0 has the estimate's result 2 columns, so its rows compare one for one
+    columns = lambda statement: re.findall(r"\bAS (\w+)\s*,?\s*$", statement[statement.rfind("\nSELECT"):statement.upper().rindex("\nFROM")], re.MULTILINE)
+    estimate_columns = columns(_results_by_label(ESTIMATE)["2"])
+    assert len(estimate_columns) >= 10, estimate_columns
+    assert columns(_results_by_label(GATE_B)["0"]) == estimate_columns, "Gate B result 0 lost a column of the estimate's result 2"
+    assert "'D+R1v3+R2v3+R3b+R4b'" in gate_b_text and "'D+R1v3+R2v3+R3b+R4b'" in _read(ESTIMATE)
+    print("PASS: the Gate B check copies the estimate's universe and reports its result 2 columns")
+
+
 def test_walkthrough_marker_conditions_are_the_signal_definitions():
     statements = split_statements(_read(WALKTHROUGH))
     signals = " ".join(next(s for s in statements if s.startswith("CREATE OR REPLACE TEMP VIEW cwt_dose_signals AS")).split())
@@ -562,6 +599,7 @@ def test_walkthrough_examples_carry_the_alias_and_the_year_only():
 
 if __name__ == "__main__":
     test_result_labels_match_headers()
+    test_gate_b_copies_the_estimate_universe_and_compares_its_rule_set()
     test_scratch_tables_dropped_first_created_once_and_dropped_last()
     test_estimate_copies_the_cohort_views_verbatim()
     test_estimate_copies_the_excluded_window_aliases_verbatim()

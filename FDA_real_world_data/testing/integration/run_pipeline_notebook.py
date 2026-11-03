@@ -17,7 +17,7 @@
 # MAGIC
 # MAGIC **2. The row count is the tell.** The build prints
 # MAGIC `Wrote N BDDP rows (M users)`. If N hasn't moved after a fixture edit, you are
-# MAGIC running cached code. Current expected: **265,492 rows / 28 users**.
+# MAGIC running cached code. Current expected: **277,569 rows / 38 users** (2026-11-03).
 # MAGIC
 # MAGIC **3. The idempotency guard is existence-only.** A schema change to an existing
 # MAGIC table is not detected; `force=True` (default below) is the safe choice after any

@@ -1,14 +1,18 @@
 """
-Unit test for export_loop_recommendations.py.
+Unit test for export_loop_recommendations.py, the day projection of the dose
+classification.
 
-Tests both detection methods and their per-day count output:
-- dosingDecision-based: bolus/basal matched to a prior loop DD within 5s;
-  boluses excluded when a normalBolus DD is within +/-15s;
-  only subType != 'normal' counts as autobolus.
-- HealthKit-based: Loop-sourced records with MetadataKeyAutomaticallyIssued=1.
-- Output is one row per (user, day) with four counts — a day with both
-  autobolus and temp_basal signals keeps both sets populated.
-- loop_version: numeric max (3.10.1 > 3.2.0), not lexicographic.
+Each case is one user-day built from dose rows as export_loop_dose_classification.py
+writes them:
+- 3 automated boluses and a temporary basal: an autobolus day; the boluses
+  counted once each, each rule's column counting the doses it recognised (a
+  dose two rules recognise counts under both);
+- 2 automated boluses and only the plugin's automated scheduled basal: a
+  temporary-basal day, the scheduled basal in its own column;
+- 1 automated bolus and nothing else: neither class, the row kept;
+- only doses no rule recognises: no row;
+- the day's Loop version: the highest of the doses' plugin copies and the Loop
+  decisions that day, NULL when nothing parses.
 
 Run on Databricks.
 """
@@ -18,12 +22,7 @@ import math
 import sys
 from datetime import date
 
-from pyspark.sql import SparkSession # type: ignore
-
-
-def _isnull(v):
-    """True for None or NaN (pandas nulls from integer columns come back as NaN)."""
-    return v is None or (isinstance(v, float) and math.isnan(v))
+from pyspark.sql import SparkSession  # type: ignore
 
 import os
 try:
@@ -33,222 +32,96 @@ except NameError:
     _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/data_staging"
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
-from export_loop_recommendations import run  # type: ignore # noqa: E402
-from staging_test_helpers import (  # noqa: E402
-    TEST_SCHEMA,
-    assert_row_count,
-    read_test_output,
-    setup_test_table,
-    teardown_test_tables,
-)
+from export_loop_dose_classification import TAGS  # type: ignore # noqa: E402
+from export_loop_recommendations import AUTOBOLUS_DAY_MIN_BOLUSES, BASAL_TAGS, BOLUS_TAGS, run  # type: ignore # noqa: E402
+from staging_test_helpers import TEST_SCHEMA, read_test_output, teardown_test_tables  # noqa: E402
 
 spark = SparkSession.builder.getOrCreate()
 
-INPUT_TABLE = f"{TEST_SCHEMA}._test_input_loop_recs"
-OUTPUT_TABLE = f"{TEST_SCHEMA}._test_output_loop_recs"
+DOSE_TABLE = f"{TEST_SCHEMA}._test_lr_doses"
+INPUT_TABLE = f"{TEST_SCHEMA}._test_lr_input"
+OUTPUT_TABLE = f"{TEST_SCHEMA}._test_lr_output"
+ALL_TABLES = [DOSE_TABLE, INPUT_TABLE, OUTPUT_TABLE]
 
-ALL_TABLES = [INPUT_TABLE, OUTPUT_TABLE]
+DOSE_SCHEMA = ("_userId STRING, type STRING, day DATE, loop_version STRING, version_int INT, is_automated INT, "
+               + ", ".join(f"{tag} INT" for tag in TAGS))
+INPUT_SCHEMA = "_userId STRING, time_string STRING, type STRING, reason STRING, origin STRING"
 
-
-def dd_origin(version):
-    return json.dumps({"version": version})
-
-
-def hk_origin(version):
-    return json.dumps({
-        "version": version,
-        "payload": {"sourceRevision": {"source": {"name": "Loop"}}},
-    })
+D1, D2, D3, D4 = date(2025, 3, 1), date(2025, 3, 2), date(2025, 3, 3), date(2025, 3, 4)
 
 
-AUTO_PAYLOAD = json.dumps({
-    "com.loopkit.InsulinKit.MetadataKeyAutomaticallyIssued": 1
-})
+def dose(user, type_, day, tags, version=None):
+    version_int = None
+    if version is not None:
+        major, minor, patch = (version.split(".") + ["0", "0"])[:3]
+        version_int = int(major) * 1_000_000 + int(minor) * 1_000 + int(patch)
+    flags = [1 if tag in tags else 0 for tag in TAGS]
+    return (user, type_, day, version, version_int, 1 if tags else 0, *flags)
 
 
-def row(_userId, time_string, type_, reason=None, subType=None, origin=None, payload=None):
-    return {
-        "_userId": _userId,
-        "time_string": time_string,
-        "type": type_,
-        "subType": subType,
-        "reason": reason,
-        "origin": origin,
-        "payload": payload,
-    }
+doses = [
+    # D1: an autobolus day; one bolus carries two rules
+    dose("u1", "bolus", D1, ["decision_match", "plugin_automated_id"], "3.2.0"),
+    dose("u1", "bolus", D1, ["plugin_automated_id"], "3.2.0"),
+    dose("u1", "bolus", D1, ["health_flag_named_loop", "health_flag_loop_app"]),
+    dose("u1", "basal", D1, ["plugin_automated_temp"], "3.2.0"),
+    dose("u1", "bolus", D1, []),                                   # a bolus the user asked for
+    # D2: a temporary-basal day resting only on the automated scheduled basal
+    dose("u1", "bolus", D2, ["plugin_automated_id"]),
+    dose("u1", "bolus", D2, ["health_flag_loop_app"]),
+    dose("u1", "basal", D2, ["plugin_automated_scheduled"]),
+    # D3: one automated bolus and nothing else
+    dose("u1", "bolus", D3, ["health_flag_named_loop"]),
+    # D4: no automated dose
+    dose("u1", "bolus", D4, []),
+    dose("u1", "basal", D4, []),
+]
 
-
-TEST_ROWS = [
-    # --- Day 1 (2025-01-15, user_a): autobolus via dosingDecision ---
-    row("user_a", "2025-01-15 12:00:00", "dosingDecision", reason="loop", origin=dd_origin("3.2.0")),
-    row("user_a", "2025-01-15 12:00:03", "bolus", subType="smb", origin=dd_origin("3.2.0")),
-
-    # --- Day 2 (2025-01-16, user_a): temp_basal via dosingDecision ---
-    row("user_a", "2025-01-16 08:00:00", "dosingDecision", reason="loop", origin=dd_origin("3.2.0")),
-    row("user_a", "2025-01-16 08:00:02", "basal", origin=dd_origin("3.2.0")),
-
-    # --- Day 3 (2025-01-17, user_a): autobolus via HealthKit only (no DD) ---
-    row("user_a", "2025-01-17 09:00:00", "bolus", subType="smb",
-        origin=hk_origin("3.4.0"), payload=AUTO_PAYLOAD),
-
-    # --- Day 4 (2025-01-18, user_a): both autobolus and temp_basal signals -> autobolus wins ---
-    row("user_a", "2025-01-18 10:00:00", "dosingDecision", reason="loop", origin=dd_origin("3.2.0")),
-    row("user_a", "2025-01-18 10:00:02", "bolus", subType="smb", origin=dd_origin("3.2.0")),
-    row("user_a", "2025-01-18 10:00:04", "basal", origin=dd_origin("3.2.0")),
-
-    # --- Day 5 (2025-01-19, user_a): normalBolus within +/-15s -> bolus EXCLUDED ---
-    # Would otherwise be autobolus via the loop DD, but the nearby normalBolus DD
-    # marks it as a user-initiated correction bolus.
-    row("user_a", "2025-01-19 11:00:00", "dosingDecision", reason="loop", origin=dd_origin("3.2.0")),
-    row("user_a", "2025-01-19 11:00:03", "bolus", subType="smb", origin=dd_origin("3.2.0")),
-    row("user_a", "2025-01-19 11:00:10", "dosingDecision", reason="normalBolus", origin=dd_origin("3.2.0")),
-
-    # --- Day 6 (2025-01-20, user_a): bolus subType='normal' -> NOT autobolus via DD ---
-    row("user_a", "2025-01-20 13:00:00", "dosingDecision", reason="loop", origin=dd_origin("3.2.0")),
-    row("user_a", "2025-01-20 13:00:02", "bolus", subType="normal", origin=dd_origin("3.2.0")),
-
-    # --- Day 7 (2025-01-21, user_a): non-loop DD reason -> no match, bolus dropped ---
-    row("user_a", "2025-01-21 14:00:00", "dosingDecision", reason="other", origin=dd_origin("3.2.0")),
-    row("user_a", "2025-01-21 14:00:03", "bolus", subType="smb", origin=dd_origin("3.2.0")),
-
-    # --- Day 8 (2025-01-22, user_a): bad bolus timestamp -> excluded ---
-    row("user_a", "2025-01-22 15:00:00", "dosingDecision", reason="loop", origin=dd_origin("3.2.0")),
-    row("user_a", "not-a-timestamp", "bolus", subType="smb", origin=dd_origin("3.2.0")),
-
-    # --- Day 9 (2025-01-23, user_b): numeric version selection (3.10.1 > 3.2.0) ---
-    row("user_b", "2025-01-23 07:00:00", "dosingDecision", reason="loop", origin=dd_origin("3.2.0")),
-    row("user_b", "2025-01-23 07:00:02", "basal", origin=dd_origin("3.2.0")),
-    row("user_b", "2025-01-23 20:00:00", "dosingDecision", reason="loop", origin=dd_origin("3.10.1")),
-    row("user_b", "2025-01-23 20:00:02", "basal", origin=dd_origin("3.10.1")),
-
-    # --- Day 10 (2025-01-24, user_c): both DD and HK autoboluses; HK has higher numeric version ---
-    # Tests (a) per-day count >1 and (b) cross-source numeric version selection (HK 3.4.0 > DD 3.2.0).
-    row("user_c", "2025-01-24 06:00:00", "dosingDecision", reason="loop", origin=dd_origin("3.2.0")),
-    row("user_c", "2025-01-24 06:00:02", "bolus", subType="smb", origin=dd_origin("3.2.0")),
-    row("user_c", "2025-01-24 09:00:00", "bolus", subType="smb",
-        origin=hk_origin("3.4.0"), payload=AUTO_PAYLOAD),
-    row("user_c", "2025-01-24 12:00:00", "bolus", subType="smb",
-        origin=hk_origin("3.4.0"), payload=AUTO_PAYLOAD),
-    row("user_c", "2025-01-24 15:00:00", "bolus", subType="smb",
-        origin=hk_origin("3.4.0"), payload=AUTO_PAYLOAD),
-
-    # --- Day 11 (2025-01-25, user_d): DUPLICATE HealthKit uploads ---
-    # BDDP re-ingests uploads, so one physical bolus can appear as several
-    # identical rows. Two distinct deliveries here (08:00, 09:00) with the
-    # 08:00 one duplicated three times: the HK count must be 2, not 4. Counting
-    # raw rows let duplicates manufacture autobolus days wherever downstream
-    # code takes GREATEST(dd, hk) (adversarial review, 2026-08-04).
-    row("user_d", "2025-01-25 08:00:00", "bolus", subType="smb",
-        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
-    row("user_d", "2025-01-25 08:00:00", "bolus", subType="smb",
-        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
-    row("user_d", "2025-01-25 08:00:00", "bolus", subType="smb",
-        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
-    row("user_d", "2025-01-25 09:00:00", "bolus", subType="smb",
-        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
-    # Same shape on the temp-basal side: 2 distinct deliveries, one duplicated.
-    row("user_d", "2025-01-25 10:00:00", "basal",
-        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
-    row("user_d", "2025-01-25 10:00:00", "basal",
-        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
-    row("user_d", "2025-01-25 11:00:00", "basal",
-        origin=hk_origin("3.2.0"), payload=AUTO_PAYLOAD),
+decisions = [
+    # a Loop decision on D1 with a higher version than the doses carry
+    ("u1", "2025-03-01T10:00:00Z", "dosingDecision", "loop", json.dumps({"version": "3.4.0"})),
+    # a user-bolus decision on D3: not a Loop decision, no version taken from it
+    ("u1", "2025-03-03T10:00:00Z", "dosingDecision", "normalBolus", json.dumps({"version": "3.9.0"})),
 ]
 
 
+def _isnull(v):
+    return v is None or (isinstance(v, float) and math.isnan(v))
+
+
 try:
-    setup_test_table(spark, INPUT_TABLE, TEST_ROWS)
-    run(spark, input_table=INPUT_TABLE, output_table=OUTPUT_TABLE)
-    result = read_test_output(spark, OUTPUT_TABLE)
+    assert set(BOLUS_TAGS) | set(BASAL_TAGS) == set(TAGS), "every rule is counted for some record type"
 
-    # 1. 7 user-days survive: days 1, 2, 3, 4, 9, 10, 11. Days 5, 6, 7, 8 drop out entirely.
-    assert_row_count(result, 7, "total user-days")
+    spark.createDataFrame(doses, schema=DOSE_SCHEMA).write.mode("overwrite").saveAsTable(DOSE_TABLE)
+    spark.createDataFrame(decisions, schema=INPUT_SCHEMA).write.mode("overwrite").saveAsTable(INPUT_TABLE)
+    run(spark, output_table=OUTPUT_TABLE, dose_table=DOSE_TABLE, input_table=INPUT_TABLE)
+    out = read_test_output(spark, OUTPUT_TABLE).set_index("day")
 
-    # 2. Per-day counts — NaN means NULL for that side
-    by_day = {
-        (r["_userId"], r["day"]): (
-            r["dd_autobolus_count"],
-            r["hk_autobolus_count"],
-            r["dd_temp_basal_count"],
-            r["hk_temp_basal_count"],
-        )
-        for _, r in result.iterrows()
-    }
+    assert set(out.index) == {D1, D2, D3}, f"days {sorted(out.index)}: a day with no automated dose has no row"
+    print("PASS: one row per user-day with an automated dose")
 
-    # Day 1: DD autobolus only (1 bolus)
-    assert by_day[("user_a", date(2025, 1, 15))][0] == 1
-    assert _isnull(by_day[("user_a", date(2025, 1, 15))][1])  # no HK autobolus
-    assert _isnull(by_day[("user_a", date(2025, 1, 15))][2])  # no temp_basal
-    assert _isnull(by_day[("user_a", date(2025, 1, 15))][3])
+    d1 = out.loc[D1]
+    assert int(d1["automated_boluses"]) == 3 and int(d1["temp_basals"]) == 1, d1.to_dict()
+    assert int(d1["boluses_plugin_automated_id"]) == 2 and int(d1["boluses_decision_match"]) == 1, d1.to_dict()
+    assert int(d1["boluses_health_flag_named_loop"]) == 1 and int(d1["boluses_health_flag_loop_app"]) == 1, d1.to_dict()
+    assert int(d1["basals_plugin_automated_temp"]) == 1 and int(d1["basals_plugin_automated_scheduled"]) == 0, d1.to_dict()
+    assert int(d1["is_autobolus_day"]) == 1 and int(d1["is_temp_basal_day"]) == 0, d1.to_dict()
+    print(f"PASS: {AUTOBOLUS_DAY_MIN_BOLUSES} automated boluses make an autobolus day; each rule counts the doses it recognised")
 
-    # Day 2: DD temp_basal only (1 basal)
-    assert _isnull(by_day[("user_a", date(2025, 1, 16))][0])
-    assert _isnull(by_day[("user_a", date(2025, 1, 16))][1])
-    assert by_day[("user_a", date(2025, 1, 16))][2] == 1
-    assert _isnull(by_day[("user_a", date(2025, 1, 16))][3])
+    d2 = out.loc[D2]
+    assert int(d2["automated_boluses"]) == 2 and int(d2["temp_basals"]) == 1, d2.to_dict()
+    assert int(d2["basals_plugin_automated_scheduled"]) == 1 and int(d2["basals_plugin_automated_temp"]) == 0, d2.to_dict()
+    assert int(d2["is_autobolus_day"]) == 0 and int(d2["is_temp_basal_day"]) == 1, d2.to_dict()
+    print("PASS: a day resting only on the automated scheduled basal is a temporary-basal day, shown in its own column")
 
-    # Day 3: HK autobolus only (1 bolus, no DD match)
-    assert _isnull(by_day[("user_a", date(2025, 1, 17))][0])
-    assert by_day[("user_a", date(2025, 1, 17))][1] == 1
-    assert _isnull(by_day[("user_a", date(2025, 1, 17))][2])
-    assert _isnull(by_day[("user_a", date(2025, 1, 17))][3])
+    d3 = out.loc[D3]
+    assert int(d3["automated_boluses"]) == 1 and int(d3["temp_basals"]) == 0, d3.to_dict()
+    assert int(d3["is_autobolus_day"]) == 0 and int(d3["is_temp_basal_day"]) == 0, d3.to_dict()
+    print("PASS: one automated bolus and nothing else is neither class, and the row is kept")
 
-    # Day 4: both autobolus (DD) and temp_basal (DD) populated — no more priority rule
-    day4 = by_day[("user_a", date(2025, 1, 18))]
-    assert day4[0] == 1, f"day 4 dd_autobolus_count: {day4[0]}"
-    assert day4[2] == 1, f"day 4 dd_temp_basal_count: {day4[2]}"
-
-    # Day 9: user_b temp_basal only (2 basals across two DD matches)
-    assert by_day[("user_b", date(2025, 1, 23))][2] == 2
-
-    # Day 10: user_c has 1 DD autobolus + 3 HK autoboluses (count >1 exercises the
-    # post-2026-04-16 count-based schema, where the prior boolean is_autobolus flag
-    # would have collapsed this to "1 AB day" without distinguishing intensity).
-    day10 = by_day[("user_c", date(2025, 1, 24))]
-    assert day10[0] == 1, f"day 10 dd_autobolus_count: {day10[0]}"
-    assert day10[1] == 3, f"day 10 hk_autobolus_count: {day10[1]}"
-    print("PASS: per-day counts")
-
-    # 3. Excluded days are absent: 19 (normalBolus), 20 (subType=normal),
-    #    21 (non-loop DD), 22 (bad timestamp)
-    excluded = {date(2025, 1, d) for d in (19, 20, 21, 22)}
-    present = set(result["day"].tolist())
-    assert present.isdisjoint(excluded), (
-        f"rows for excluded days leaked through: {present & excluded}"
-    )
-    print("PASS: excluded days absent (normalBolus, subType=normal, non-loop, bad ts)")
-
-    # 4. loop_version uses numeric comparison (3.10.1 > 3.2.0) — within DD source.
-    user_b_row = result[result["_userId"] == "user_b"].iloc[0]
-    assert user_b_row["loop_version"] == "3.10.1", (
-        f"expected loop_version=3.10.1, got {user_b_row['loop_version']}"
-    )
-    print("PASS: loop_version uses numeric max within DD source (3.10.1 > 3.2.0)")
-
-    # 5. HealthKit counts de-duplicate on the delivery timestamp: user_d's day
-    #    has 4 raw autobolus rows for 2 distinct deliveries, and 3 raw basal
-    #    rows for 2 distinct deliveries.
-    day11 = by_day[("user_d", date(2025, 1, 25))]
-    assert day11[1] == 2, (
-        f"hk_autobolus_count should de-duplicate 4 raw rows to 2 distinct "
-        f"deliveries; got {day11[1]}"
-    )
-    assert day11[3] == 2, (
-        f"hk_temp_basal_count should de-duplicate 3 raw rows to 2 distinct "
-        f"deliveries; got {day11[3]}"
-    )
-    print("PASS: HealthKit counts de-duplicate re-ingested rows")
-
-    # 4b. loop_version picks numeric max ACROSS sources (HK 3.4.0 > DD 3.2.0 on day 10).
-    user_c_row = result[result["_userId"] == "user_c"].iloc[0]
-    assert user_c_row["loop_version"] == "3.4.0", (
-        f"expected loop_version=3.4.0 (HK > DD), got {user_c_row['loop_version']}"
-    )
-    print("PASS: loop_version uses numeric max across DD+HK sources (3.4.0 > 3.2.0)")
-
-    # 5. All surviving rows have a non-null loop_version
-    assert result["loop_version"].notna().all(), "loop_version has unexpected NULLs"
-    print("PASS: loop_version populated on every row")
+    assert int(d1["version_int"]) == 3004000 and d1["loop_version"] == "3.4.0", d1.to_dict()
+    assert _isnull(d2["version_int"]) and _isnull(d3["version_int"]), (d2["version_int"], d3["version_int"])
+    print("PASS: the day's version is the highest of the doses and the Loop decisions; NULL when none (a user-bolus decision gives none)")
 
     print("\nAll tests passed.")
 

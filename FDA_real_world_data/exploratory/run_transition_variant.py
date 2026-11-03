@@ -1,7 +1,8 @@
-"""Run the whole transition-cohort family under a different validity box.
+"""Run the whole transition-cohort family under a different window rule.
 
 Exploratory sensitivity driver — NOT part of fda_analysis_pipeline.yml. Switches
-the TB→AB segment-validity box to a different threshold, rebuilds the entire
+the window rule (the days of the right kind each 14-day period needs, 12 by
+default; MC, 2026-10-30) to a different threshold, rebuilds the entire
 box-affected subtree into parallel `{suffix}` tables, and runs the §6.3 cohort
 flow plus every transition analysis (8-1, 8-2, 8-3, 8-4, 8-5, 8-8) into parallel
 `outputs/*{suffix}/` folders. 8-7 (durability) is box-independent but is also run
@@ -10,18 +11,18 @@ tables and only routes its output to `outputs/analysis_8_7{suffix}/` (numbers
 identical to the production 8-7). Production tables/outputs and the 8-6 (stable-AB)
 branch are never touched.
 
-"Branch from the box": everything upstream of valid_transition_segments
-(loop_recommendations, loop_cbg, bddp) is box-independent, so it is REUSED from
-production — only the validity box and everything downstream is rebuilt.
+"Branch from the window rule": everything upstream of valid_transition_segments
+(loop_dose_classification, loop_recommendations, loop_cbg, bddp) is the same for
+every build, so it is REUSED from production — only the window rule and
+everything downstream is rebuilt.
 
 Each step reuses the production staging run() with suffixed I/O tables and the
-box threshold passed through; the analyses are loaded by path (hyphenated
+window threshold passed through; the analyses are loaded by path (hyphenated
 filenames) and run with suffix=.
 
 Run:
-  exploratory/run_transition_variant.py                                   # default 0.80 box, _box080
-  exploratory/run_transition_variant.py --suffix _box075 \
-      --autobolus-low 0.25 --autobolus-high 0.75                          # a different box
+  exploratory/run_transition_variant.py                                   # default 12 of 14, unsuffixed
+  exploratory/run_transition_variant.py --suffix _days11 --min-period-days 11   # a different threshold
   exploratory/run_transition_variant.py --skip-analysis                   # build tables only
 """
 
@@ -53,15 +54,13 @@ import export_cbg_from_transitions
 import export_carbohydrates_from_transitions
 import export_overrides_from_transitions
 import export_segments_within_guardrails
-from export_valid_transition_segments import CATALOG, run as build_segments
+from export_valid_transition_segments import CATALOG, DEFAULT_MIN_PERIOD_DAYS, run as build_segments
 
-# Defaults are the report primary (symmetric 0.80) in the UNSUFFIXED namespace —
-# the same build export_valid_transition_segments.py produces by default, so a
-# bare run of this driver reproduces the primary rather than a variant. All
-# three are CLI-overridable so the same driver runs any box at any namespace.
+# Defaults are the report primary (12 of 14) in the UNSUFFIXED namespace — the
+# same build export_valid_transition_segments.py produces by default, so a bare
+# run of this driver reproduces the primary rather than a variant. Both are
+# CLI-overridable so the same driver runs any threshold at any namespace.
 DEFAULT_SUFFIX = ""
-DEFAULT_AUTOBOLUS_LOW = 0.20    # seg1 temp-basal floor = 1 - 0.20 = 0.80
-DEFAULT_AUTOBOLUS_HIGH = 0.80   # seg2 autobolus floor = 0.80
 
 # Analyses to run for the variant. 6-3a + the transition analyses (8-1/2/3/4/5/8)
 # read the box-affected {suffix} tables; 8-7 (durability) is box-independent and
@@ -115,7 +114,7 @@ def _run_analysis(spark, filename, suffix):
     module.run_in_databricks(spark, suffix=suffix)
 
 
-def build_tables(spark, suffix, autobolus_low, autobolus_high):
+def build_tables(spark, suffix, min_period_days):
     """Rebuild the box-affected staging subtree into suffixed tables.
 
     Order respects dependencies; box-independent upstreams (loop_cbg, bddp) are
@@ -130,9 +129,8 @@ def build_tables(spark, suffix, autobolus_low, autobolus_high):
     override_endpoints = _t("glycemic_endpoints_override", suffix)
     carbs = _t("valid_transition_carbs", suffix)
 
-    print(f"[variant{suffix}] segments        -> {segments}  (box {autobolus_low}/{autobolus_high})")
-    build_segments(spark, output_table=segments,
-                   autobolus_low=autobolus_low, autobolus_high=autobolus_high)
+    print(f"[variant{suffix}] segments        -> {segments}  ({min_period_days} of 14 days per period)")
+    build_segments(spark, output_table=segments, min_period_days=min_period_days)
 
     print(f"[variant{suffix}] cbg             -> {cbg}")
     export_cbg_from_transitions.run(spark, output_table=cbg, transition_segments_table=segments)
@@ -162,10 +160,8 @@ def build_tables(spark, suffix, autobolus_low, autobolus_high):
     print(f"[variant{suffix}] staging subtree built.")
 
 
-def run(spark, suffix=DEFAULT_SUFFIX,
-        autobolus_low=DEFAULT_AUTOBOLUS_LOW, autobolus_high=DEFAULT_AUTOBOLUS_HIGH,
-        run_analysis=True):
-    build_tables(spark, suffix, autobolus_low, autobolus_high)
+def run(spark, suffix=DEFAULT_SUFFIX, min_period_days=DEFAULT_MIN_PERIOD_DAYS, run_analysis=True):
+    build_tables(spark, suffix, min_period_days)
 
     if not run_analysis:
         print(f"[variant{suffix}] --skip-analysis set; tables only.")
@@ -184,14 +180,11 @@ if __name__ == "__main__":
     _parser = argparse.ArgumentParser()
     _parser.add_argument("--suffix", default=DEFAULT_SUFFIX,
                          help="namespace for parallel tables + output dirs (e.g. _box080)")
-    _parser.add_argument("--autobolus-low", type=float, default=DEFAULT_AUTOBOLUS_LOW,
-                         help="max AB-fraction in seg1 (seg1 TB floor = 1 - low)")
-    _parser.add_argument("--autobolus-high", type=float, default=DEFAULT_AUTOBOLUS_HIGH,
-                         help="min AB-fraction required in seg2")
+    _parser.add_argument("--min-period-days", type=int, default=DEFAULT_MIN_PERIOD_DAYS,
+                         help="days of the right kind each 14-day period needs (default 12)")
     _parser.add_argument("--skip-analysis", action="store_true",
                          help="build the variant tables only; skip the analyses")
     _args, _ = _parser.parse_known_args()
 
-    run(spark, suffix=_args.suffix,
-        autobolus_low=_args.autobolus_low, autobolus_high=_args.autobolus_high,
+    run(spark, suffix=_args.suffix, min_period_days=_args.min_period_days,
         run_analysis=not _args.skip_analysis)

@@ -5,14 +5,13 @@ carrying every day-level gate as a flag so downstream consumers (S3 guardrail
 flags, IR-2 outcomes, IR-3 characterization) select their own day universes
 from one table:
 
-    is_ab_day            >= min_autobolus_count automated boluses that day,
-                         GREATEST across the two classification methods
-                         (default 3 — the RPT-1001 segment-detection threshold,
-                         per the 2026-08-03 IR-1002 decision; NOT the > 0
-                         convention)
+    is_ab_day            the day projection's is_autobolus_day (at least 3
+                         automated boluses that day, every classifier rule
+                         counted once per dose; execution plan Step 2)
     is_version_eligible  stated version that day < Loop 3.4.0 when parseable;
-                         version_int = 0 (unparseable) and NULL fall to the
-                         date rule (day before the 3.4.0 release date)
+                         a missing version (NULL, or 0 from an older table)
+                         falls to the date rule (day before the 3.4.0 release
+                         date)
     is_age_eligible      age >= 6 on that day, or DOB unknown
     cbg_day_count        plausible CGM readings that day (5-min deduped)
     is_coverage_ok       cbg_day_count >= min_daily_cbg_count (default 201 =
@@ -39,10 +38,6 @@ import argparse
 
 CATALOG = "dev.fda_510k_rwd"
 
-# AB-day threshold: mirrors DEFAULT_MIN_AUTOBOLUS_COUNT in
-# export_valid_transition_segments.py (PLN IR-1002 §7.1 uses the same value).
-DEFAULT_MIN_AUTOBOLUS_COUNT = 3
-
 # Per-day version/date eligibility. Mirrors MAX_LOOP_VERSION_INT /
 # MAX_SEG2_END_DATE in analysis/utils/data_loading.py.
 MAX_LOOP_VERSION_INT = 3_004_000  # Loop 3.4.0
@@ -66,7 +61,6 @@ def run(
     loop_cbg_table=f"{CATALOG}.loop_cbg",
     user_dates_table="dev.default.bddp_user_dates",
     diagnosis_table=f"{CATALOG}.user_diagnosis_type",
-    min_autobolus_count=DEFAULT_MIN_AUTOBOLUS_COUNT,
     min_daily_cbg_count=MIN_DAILY_CBG_COUNT,
     include_lada=False,
 ):
@@ -89,8 +83,7 @@ def run(
       SELECT
         r._userId,
         r.day,
-        r.dd_autobolus_count,
-        r.hk_autobolus_count,
+        r.is_autobolus_day,
         r.version_int
       FROM {loop_recommendations_table} r
       WHERE r._userId IN (
@@ -112,12 +105,9 @@ def run(
       SELECT
         t._userId,
         t.day,
-        -- Both counts are de-duplicated on the delivery timestamp upstream in
-        -- export_loop_recommendations.py (the HealthKit side since 2026-08-04).
-        GREATEST(COALESCE(t.dd_autobolus_count, 0),
-                 COALESCE(t.hk_autobolus_count, 0)) >= {min_autobolus_count}
-          AS is_ab_day,
-        -- Version-first / date-fallback; version_int = 0 (unparseable) must
+        -- the day class of export_loop_recommendations.py
+        t.is_autobolus_day = 1 AS is_ab_day,
+        -- Version-first / date-fallback; a missing version (NULL, or 0) must
         -- fall to the date rule rather than pass a bare < {MAX_LOOP_VERSION_INT}.
         CASE
           WHEN t.version_int IS NOT NULL AND t.version_int > 0
@@ -162,13 +152,11 @@ if __name__ == "__main__":
 
     _parser = argparse.ArgumentParser()
     _parser.add_argument("--output_table", default=f"{CATALOG}.ab_day_cohort")
-    _parser.add_argument("--min_autobolus_count", type=int, default=DEFAULT_MIN_AUTOBOLUS_COUNT)
     _parser.add_argument("--include_lada", action="store_true")
     _args, _ = _parser.parse_known_args()
 
     run(
         spark,
         output_table=_args.output_table,
-        min_autobolus_count=_args.min_autobolus_count,
         include_lada=_args.include_lada,
     )
