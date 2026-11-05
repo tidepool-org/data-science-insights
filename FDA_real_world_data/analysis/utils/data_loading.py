@@ -72,6 +72,60 @@ TYPE1_SEGMENT_WHERE = (
     f"WHERE diagnosis_type = '{TYPE1_DX}')"
 )
 
+# Diagnosis groups (MC, 2026-10-29: every diagnosis type, tracked; MC,
+# 2026-11-03: outcomes overlaid by group in the figures and broken down by
+# group in an appendix). One definition: the Python twin of the SQL CASE the
+# exploratory files share (exploratory/dose_rule_estimate.sql, pinned by
+# testing/analysis/test_dose_rule_step1.py). "type1 with LADA label" is a JAEB
+# member, type 1 by definition, whose profile label reads LADA.
+DIAGNOSIS_GROUPS = ("type1", "type1 with LADA label", "lada", "type2", "other", "unknown")
+# The primary cohort is today's type-1 gate, diagnosis_type = 'type1', which
+# admits the LADA-labelled JAEB members with the rest.
+PRIMARY_DIAGNOSIS_GROUPS = ("type1", "type1 with LADA label")
+# Every user whose profile label reads LADA, inside JAEB or outside it.
+LADA_DIAGNOSIS_GROUPS = ("lada", "type1 with LADA label")
+# A raw profile label that reads LADA (export_user_diagnosis_type.py's LADA_PATTERN).
+LADA_LABEL = "lada"
+
+
+def diagnosis_group(diagnosis_type, is_lada) -> str:
+    """The group of one user, from the lookup's resolved diagnosis and LADA flag."""
+    if diagnosis_type == TYPE1_DX and is_lada:
+        return "type1 with LADA label"
+    if diagnosis_type == TYPE1_DX:
+        return "type1"
+    if is_lada:
+        return "lada"
+    if diagnosis_type == "type2":
+        return "type2"
+    if diagnosis_type is None or (isinstance(diagnosis_type, float) and np.isnan(diagnosis_type)):
+        return "unknown"
+    return "other"
+
+
+def load_diagnosis_groups(spark) -> pd.DataFrame:
+    """One row per user of the diagnosis lookup: `_userId`, `diagnosis_group`.
+
+    The LADA flag is the lookup's `is_lada` column; a lookup staged before that
+    column existed (the 2026-10-29 vintage copy, or a test table carrying only
+    `diagnosis_type`) gets it from the raw labels with the staging's own
+    expression, and a lookup without the labels gets no LADA flag at all. A
+    user absent from the lookup is placed by the caller (group `unknown`, as
+    the CASE places a missing diagnosis).
+    """
+    lookup = spark.table(DIAGNOSIS_TABLE).toPandas()
+    if "is_lada" in lookup.columns:
+        is_lada = lookup["is_lada"].fillna(False).astype(bool)
+    elif {"diagnosis_patients", "diagnosis_seagull"} <= set(lookup.columns):
+        label = lookup["diagnosis_patients"].where(lookup["diagnosis_patients"].notna(), lookup["diagnosis_seagull"])
+        is_lada = label.fillna("").str.lower().str.contains(LADA_LABEL)
+    else:
+        is_lada = pd.Series(False, index=lookup.index)
+    return pd.DataFrame({
+        "_userId": lookup["_userId"],
+        "diagnosis_group": [diagnosis_group(d, bool(l)) for d, l in zip(lookup["diagnosis_type"], is_lada)],
+    })
+
 
 def _record_funnel(funnel, stage, description, df):
     """Append a cohort-flow snapshot (Table 6.3a) to `funnel`; no-op if None.
@@ -137,10 +191,17 @@ def load_allowed_transition_segments(spark, suffix: str = ""):
     """)
 
 
-def load_transition_endpoints(spark, suffix: str = "", funnel=None) -> pd.DataFrame:
+def load_transition_endpoints(spark, suffix: str = "", funnel=None,
+                              diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS) -> pd.DataFrame:
     """
     Load glycemic endpoints for the TB→AB transition analysis, apply
     per-segment filters, and pivot to a wide DataFrame with one row per user.
+
+    `diagnosis_groups` selects the cohort by diagnosis group (DIAGNOSIS_GROUPS):
+    the default is the primary cohort, today's type-1 gate; None keeps every
+    group. The frame carries each user's `diagnosis_group`, so an analysis can
+    overlay the groups in its figures and break its results down by group
+    (MC, 2026-11-03).
 
     `suffix` selects the source tables: "" (default) reads the production
     valid_transition_segments / glycemic_endpoints_transition /
@@ -208,17 +269,26 @@ def load_transition_endpoints(spark, suffix: str = "", funnel=None) -> pd.DataFr
         endpoints,
     )
 
-    # Diagnosis gate: restrict to confirmed type-1 users (FDA Loop indication).
-    type1_ids = load_type1_user_ids(spark)
-    endpoints = endpoints[endpoints["_userId"].isin(type1_ids)].copy()
-    print(f"  Type-1 filter kept {endpoints['_userId'].nunique()} users")
+    # Diagnosis group on every user; the cohort keeps the groups asked for. A
+    # user absent from the lookup has no diagnosis, so the group is unknown.
+    groups = load_diagnosis_groups(spark)
+    endpoints = endpoints.merge(groups, on="_userId", how="left")
+    endpoints["diagnosis_group"] = endpoints["diagnosis_group"].fillna("unknown")
+    if diagnosis_groups is not None:
+        unknown_groups = sorted(set(diagnosis_groups) - set(DIAGNOSIS_GROUPS))
+        assert not unknown_groups, f"unknown diagnosis group(s) {unknown_groups}; known: {DIAGNOSIS_GROUPS}"
+        endpoints = endpoints[endpoints["diagnosis_group"].isin(diagnosis_groups)].copy()
+        print(f"  Diagnosis groups {tuple(diagnosis_groups)} kept {endpoints['_userId'].nunique()} users")
 
-    _record_funnel(
-        funnel, "Type 1 diabetes",
-        "Diagnosis resolved to type-1 in user_diagnosis_type (JAEB→type1, else "
-        "patients/seagull); non-type1, unresolved, or absent users excluded",
-        endpoints,
-    )
+    if tuple(diagnosis_groups or ()) == PRIMARY_DIAGNOSIS_GROUPS:
+        stage, description = "Type 1 diabetes", (
+            "Diagnosis resolved to type-1 in user_diagnosis_type (JAEB→type1, else "
+            "patients/seagull); non-type1, unresolved, or absent users excluded")
+    elif diagnosis_groups is None:
+        stage, description = "Diagnosis group", "Every diagnosis group kept"
+    else:
+        stage, description = "Diagnosis group", f"Diagnosis group in {tuple(diagnosis_groups)}"
+    _record_funnel(funnel, stage, description, endpoints)
 
     # Per-segment-half CBG coverage filter. Both halves must pass; the inner join
     # below enforces that by dropping any (user, seg1_start) with only one half.
@@ -259,7 +329,8 @@ def load_transition_endpoints(spark, suffix: str = "", funnel=None) -> pd.DataFr
     seg1 = endpoints[endpoints["segment"] == SEG1].set_index(SEGMENT_KEY).add_suffix("_seg1")
     seg2 = endpoints[endpoints["segment"] == SEG2].set_index(SEGMENT_KEY).add_suffix("_seg2")
     wide = seg1.join(seg2, how="inner")
-    wide = wide.drop(columns=["segment_seg1", "segment_seg2"], errors="ignore")
+    wide = wide.drop(columns=["segment_seg1", "segment_seg2", "diagnosis_group_seg2"], errors="ignore")
+    wide = wide.rename(columns={"diagnosis_group_seg1": "diagnosis_group"})
 
     # Best surviving segment per user: lowest segment_rank.
     wide = wide.sort_values("segment_rank_seg1").reset_index()

@@ -44,28 +44,30 @@ OUTPUT_TABLE = f"{TEST_SCHEMA}._test_lr_output"
 ALL_TABLES = [DOSE_TABLE, INPUT_TABLE, OUTPUT_TABLE]
 
 DOSE_SCHEMA = ("_userId STRING, type STRING, day DATE, loop_version STRING, version_int INT, is_automated INT, "
-               + ", ".join(f"{tag} INT" for tag in TAGS))
+               + ", ".join(f"{tag} INT" for tag in TAGS)
+               + ", units DOUBLE, records INT")
 INPUT_SCHEMA = "_userId STRING, time_string STRING, type STRING, reason STRING, origin STRING"
 
 D1, D2, D3, D4 = date(2025, 3, 1), date(2025, 3, 2), date(2025, 3, 3), date(2025, 3, 4)
+D5, D6 = date(2025, 3, 5), date(2025, 3, 6)
 
 
-def dose(user, type_, day, tags, version=None):
+def dose(user, type_, day, tags, version=None, units=0.5, records=1):
     version_int = None
     if version is not None:
         major, minor, patch = (version.split(".") + ["0", "0"])[:3]
         version_int = int(major) * 1_000_000 + int(minor) * 1_000 + int(patch)
     flags = [1 if tag in tags else 0 for tag in TAGS]
-    return (user, type_, day, version, version_int, 1 if tags else 0, *flags)
+    return (user, type_, day, version, version_int, 1 if tags else 0, *flags, float(units), int(records))
 
 
 doses = [
-    # D1: an autobolus day; one bolus carries two rules
-    dose("u1", "bolus", D1, ["decision_match", "plugin_automated_id"], "3.2.0"),
+    # D1: an autobolus day; one bolus carries two rules (and two raw records, one per route)
+    dose("u1", "bolus", D1, ["decision_match", "plugin_automated_id"], "3.2.0", records=2),
     dose("u1", "bolus", D1, ["plugin_automated_id"], "3.2.0"),
     dose("u1", "bolus", D1, ["health_flag_named_loop", "health_flag_loop_app"]),
     dose("u1", "basal", D1, ["plugin_automated_temp"], "3.2.0"),
-    dose("u1", "bolus", D1, []),                                   # a bolus the user asked for
+    dose("u1", "bolus", D1, [], units=2.5),                         # a bolus the user asked for
     # D2: a temporary-basal day resting only on the automated scheduled basal
     dose("u1", "bolus", D2, ["plugin_automated_id"]),
     dose("u1", "bolus", D2, ["health_flag_loop_app"]),
@@ -75,6 +77,14 @@ doses = [
     # D4: no automated dose
     dose("u1", "bolus", D4, []),
     dose("u1", "basal", D4, []),
+    # D5: a pre-key autobolus day: 25 sub-unit boluses no rule reads, and a
+    # rate-keyed temporary basal (MC, 2026-11-05: not a temp-basal day)
+    *[dose("u1", "bolus", D5, [], units=0.15) for _ in range(25)],
+    dose("u1", "basal", D5, ["health_rate_loop_app"]),
+    # D6: the same basal with 25 unit-sized unrecognised boluses: hand dosing,
+    # a temp-basal day
+    *[dose("u1", "bolus", D6, [], units=1.5) for _ in range(25)],
+    dose("u1", "basal", D6, ["health_rate_loop_app"]),
 ]
 
 decisions = [
@@ -97,8 +107,17 @@ try:
     run(spark, output_table=OUTPUT_TABLE, dose_table=DOSE_TABLE, input_table=INPUT_TABLE)
     out = read_test_output(spark, OUTPUT_TABLE).set_index("day")
 
-    assert set(out.index) == {D1, D2, D3}, f"days {sorted(out.index)}: a day with no automated dose has no row"
+    assert set(out.index) == {D1, D2, D3, D5, D6}, f"days {sorted(out.index)}: a day with no automated dose has no row"
     print("PASS: one row per user-day with an automated dose")
+
+    # the bar on a temp-basal day's unrecognised boluses (MC, 2026-11-05)
+    d5, d6 = out.loc[D5], out.loc[D6]
+    assert int(d5["unrecognised_boluses"]) == 25 and float(d5["unrecognised_bolus_units_median"]) == 0.15
+    assert int(d5["unrecognised_boluses_look_automated"]) == 1 and int(d5["is_temp_basal_day"]) == 0 \
+        and int(d5["is_autobolus_day"]) == 0, d5.to_dict()
+    assert int(d6["unrecognised_boluses"]) == 25 and float(d6["unrecognised_bolus_units_median"]) == 1.5
+    assert int(d6["unrecognised_boluses_look_automated"]) == 0 and int(d6["is_temp_basal_day"]) == 1, d6.to_dict()
+    print("PASS: 25 sub-unit unrecognised boluses make the day neither class; 25 unit-sized ones leave it a temp-basal day")
 
     d1 = out.loc[D1]
     assert int(d1["automated_boluses"]) == 3 and int(d1["temp_basals"]) == 1, d1.to_dict()
@@ -118,6 +137,15 @@ try:
     assert int(d3["automated_boluses"]) == 1 and int(d3["temp_basals"]) == 0, d3.to_dict()
     assert int(d3["is_autobolus_day"]) == 0 and int(d3["is_temp_basal_day"]) == 0, d3.to_dict()
     print("PASS: one automated bolus and nothing else is neither class, and the row is kept")
+
+    # every classified day reports every dose it holds (MC, 2026-11-05)
+    assert int(d1["bolus_doses"]) == 4 and int(d1["basal_doses"]) == 1, d1.to_dict()
+    assert int(d1["bolus_records"]) == 5 and int(d1["basal_records"]) == 1, "the two-route bolus is two records"
+    assert int(d1["unrecognised_boluses"]) == 1 and int(d1["unrecognised_basals"]) == 0, d1.to_dict()
+    assert float(d1["unrecognised_bolus_units_median"]) == 2.5, "the user's bolus is the only unrecognised one"
+    assert int(d2["bolus_doses"]) == 2 and int(d2["unrecognised_boluses"]) == 0 and _isnull(d2["unrecognised_bolus_units_median"])
+    assert int(d3["bolus_doses"]) == 1 and int(d3["basal_doses"]) == 0 and int(d3["unrecognised_boluses"]) == 0, d3.to_dict()
+    print("PASS: every classified day reports its doses, records, unrecognised doses, and their bolus size")
 
     assert int(d1["version_int"]) == 3004000 and d1["loop_version"] == "3.4.0", d1.to_dict()
     assert _isnull(d2["version_int"]) and _isnull(d3["version_int"]), (d2["version_int"], d3["version_int"])

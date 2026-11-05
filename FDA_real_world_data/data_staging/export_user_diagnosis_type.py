@@ -1,8 +1,11 @@
 """
 Build a per-user diagnosis-type lookup for the FDA Loop-user universe.
 
-One row per FDA Loop user (distinct _userId in loop_recommendations), with the
-diagnosis type pulled from two profile sources and a JAEB override:
+One row per Loop user of the dose classification (distinct _userId in
+loop_dose_classification: every user with a Loop dosing decision or a dose
+on either upload route, a superset of the day table's users; execution plan
+2026-10-27, Step 2 item 5), with the diagnosis type pulled from two profile
+sources and a JAEB override:
 
 - diagnosis_patients : prod.default.patients.diagnosisType   (flat column)
 - diagnosis_seagull  : prod.default.seagull_profiles.diagnosisType (flat column)
@@ -43,7 +46,7 @@ LADA_PATTERN = "%lada%"
 def run(
     spark,
     output_table=f"{CATALOG}.user_diagnosis_type",
-    loop_recommendations_table=f"{CATALOG}.loop_recommendations",
+    universe_table=f"{CATALOG}.loop_dose_classification",
     patients_table="prod.default.patients",
     seagull_table="prod.default.seagull_profiles",
     jaeb_table="dev.default.jaeb_upload_to_userid",
@@ -55,10 +58,11 @@ def run(
 
     WITH
 
-    -- FDA Loop-user universe: single source of truth for Loop eligibility.
+    -- Every user the dose classification knows, so a user any rule brings
+    -- into a cohort has a diagnosis group.
     loop_users AS (
       SELECT DISTINCT _userId
-      FROM {loop_recommendations_table}
+      FROM {universe_table}
     ),
 
     -- Diagnosis from prod.default.patients (flat column); one value per user,
@@ -125,7 +129,7 @@ if __name__ == "__main__":
 
     _parser = argparse.ArgumentParser()
     _parser.add_argument("--output_table", default=f"{CATALOG}.user_diagnosis_type")
-    _parser.add_argument("--loop_recommendations_table", default=f"{CATALOG}.loop_recommendations")
+    _parser.add_argument("--universe_table", default=f"{CATALOG}.loop_dose_classification")
     _parser.add_argument("--patients_table", default="prod.default.patients")
     _parser.add_argument("--seagull_table", default="prod.default.seagull_profiles")
     _parser.add_argument("--jaeb_table", default="dev.default.jaeb_upload_to_userid")
@@ -135,7 +139,7 @@ if __name__ == "__main__":
     run(
         spark,
         output_table=_args.output_table,
-        loop_recommendations_table=_args.loop_recommendations_table,
+        universe_table=_args.universe_table,
         patients_table=_args.patients_table,
         seagull_table=_args.seagull_table,
         jaeb_table=_args.jaeb_table,

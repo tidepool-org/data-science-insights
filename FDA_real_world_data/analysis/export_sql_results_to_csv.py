@@ -228,6 +228,7 @@ DEFAULT_JOBS = [
     # ("classification_walkthrough.sql", "none"),  # the meeting document of 2026-10-29: every marker, the build-up of days, the windows funnel, the 0.80 box, examples under the salted alias (MC, 2026-10-29); 2026-10-30: 12 of 14 beside the box, ranked on calendar days, ties to the earliest, result 9, for draft 2 (ran 2026-10-30)
     # ("bddp_extract_columns.sql", "none"),  # execution plan Step 2: the extract's columns; suppressed is present (ran and filed 2026-11-03)
     # ("gate_b_check.sql", "none"),  # execution plan Gate B: the new tables against the Step 1 estimate and the 16 excluded windows; run exploratory/gate_b_build.py first (2026-11-03; ran and filed 2026-11-03)
+    ("day_rule_cross_check.sql", "none"),  # the day rules against every dose of the day: distributions and discrepancies A to D (MC, 2026-11-05); needs the day table rebuilt by the 2026-11-05 export
 ]
 
 

@@ -58,8 +58,27 @@ def test_projection_counts_every_rule_for_its_record_types():
     minimum = projection.AUTOBOLUS_DAY_MIN_BOLUSES
     assert f"c.automated_boluses >= {minimum} THEN 1 ELSE 0 END" in sql
     assert f"c.automated_boluses < {minimum} AND c.temp_basals > 0" in sql
-    assert "WHERE is_automated = 1" in sql
-    print("PASS: the day projection counts every rule and uses one threshold")
+    # a temp-basal day's unrecognised boluses must not look automated (MC, 2026-11-05)
+    assert "AND c.unrecognised_boluses_look_automated = 0" in sql
+    assert (f"bolus_doses - automated_boluses >= {projection.UNRECOGNISED_AUTOMATED_MIN_BOLUSES}" in sql
+            and f"unrecognised_bolus_units_median < {projection.UNRECOGNISED_AUTOMATED_MAX_MEDIAN_UNITS}" in sql)
+    assert projection.UNRECOGNISED_AUTOMATED_MIN_BOLUSES == 20 and projection.UNRECOGNISED_AUTOMATED_MAX_MEDIAN_UNITS == 0.5
+    # the day counts read the doses the listed rules recognised; with the full
+    # lists that is the classifier's is_automated (every tag carries its type)
+    bolus_recognised = projection.recognised_sql(projection.BOLUS_TAGS, projection.BOLUS_TAGS)
+    basal_recognised = projection.recognised_sql(projection.BASAL_TAGS, projection.BASAL_TAGS)
+    assert bolus_recognised == f"GREATEST({', '.join(projection.BOLUS_TAGS)}) = 1"
+    assert basal_recognised == f"GREATEST({', '.join(projection.BASAL_TAGS)}) = 1"
+    assert f"SUM(CASE WHEN type = 'bolus' AND {bolus_recognised} THEN 1 ELSE 0 END) AS automated_boluses" in sql
+    assert f"SUM(CASE WHEN type = 'basal' AND {basal_recognised} THEN 1 ELSE 0 END) AS temp_basals" in sql
+    # every classified day reports every dose it holds (MC, 2026-11-05), and
+    # the rows stay the days with a recognised dose
+    for column in ("bolus_doses", "basal_doses", "bolus_records", "basal_records",
+                   "unrecognised_boluses", "unrecognised_basals", "unrecognised_bolus_units_median"):
+        assert f"AS {column}" in sql, column
+    assert "HAVING automated_boluses + temp_basals > 0" in sql
+    assert "WHERE is_automated" not in sql
+    print("PASS: the day projection counts every rule, every dose, and uses one threshold")
 
 
 def test_both_scripts_parse_a_version_alike():
