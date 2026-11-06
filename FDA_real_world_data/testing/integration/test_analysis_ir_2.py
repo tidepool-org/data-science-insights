@@ -73,6 +73,7 @@ try:
 
         expected_outputs = (
             "table_ir2a_cohort_flow.csv",
+            "table_ir2a_cohort_flow_by_diagnosis_group.csv",
             "table_ir2b_outcomes_by_group.csv",
             "table_ir2c_data_checks.csv",
             "figure_ir2a_stacked_ranges.png",

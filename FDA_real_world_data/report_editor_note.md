@@ -34,7 +34,12 @@ replaces the rules behind every §6.3 and §8 table. The specification is
 - **Day classes.** A day is an autobolus day with at least 3 automated boluses, and a temporary-basal day
   with fewer and at least one temporary basal. Automated doses are now recognised by every rule of the new
   dose classifier, each dose counted once.
-- **Table 6.3a.** The day-coverage stage is now part of the window-rule stage.
+- **Table 6.3a.** The day-coverage stage is now part of the window-rule stage. Since 2026-11-05 the table is
+  counted from the staged cohort table (one row per window, a boolean per criterion) and carries the issued
+  vintage's counts and the difference beside the corrected ones; a by-diagnosis-group table and one flow per
+  population are written beside it (§5).
+- **Table 8.2a.** Takes the full cohort gate since 2026-11-05, the age term included; the 2026-07-30 decision to
+  hold its numbers stable and disclose the deviation ended when every number regenerated.
 - **Stable autobolus (§8.6).** A segment is 14 autobolus days starting at least 30 days after the first
   autobolus day, as PLN-1001 states.
 - **Durability (§8.7).** A user's final 28 days are read directly when at least 80% of them carry dosing
@@ -272,7 +277,11 @@ listed):
 ## 5. Output "contract" — don't rename/restructure silently
 
 - **§6.3:** `outputs/cohort_6_3{suffix}/table_6_3a_cohort_flow.csv`, columns `stage, description, n_users,
-  n_segments` (the funnel only ever narrows — the loader asserts monotonic `n_users`). `{suffix}` ∈
+  n_segments, n_users_issued, difference_users` since 2026-11-05: the issued stages, the corrected vintage's
+  counts, the issued vintage's users beside them (counted from `transition_cohort_issued`, blank for the three
+  upstream stages, whose issued day table is gone), and the difference. Beside it, the same stages by diagnosis
+  group (`table_6_3a_cohort_flow_by_diagnosis_group.csv`, no type-1 stage, one column per group plus `all` and
+  `primary`) and the other populations' flows (`table_flow_*.csv`). The funnel only ever narrows. `{suffix}` ∈
   {`""` (12 of 14, the primary), `_box070` (10 of 14), `_box090` (13 of 14)} as of 2026-10-30.
 - **§8.x:** per-build outputs under `outputs/analysis_8_X{suffix}/`; the box080-primary copies are synced under
   `outputs_supplement/*_box080`.

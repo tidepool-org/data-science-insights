@@ -38,8 +38,9 @@ NULL_CENTER_MAX = 0.15             # |signed mean of the null TIR contrasts| (ce
 def elig():
     if not os.path.exists(nc.SNAPSHOT):
         pytest.skip(f"snapshot not on disk: {nc.SNAPSHOT}")  # input is git-ignored — prerequisite, not a failure
-    if "diagnosis_type" not in pd.read_csv(nc.SNAPSHOT, nrows=0).columns:
-        pytest.skip(f"snapshot missing 'diagnosis_type' — regenerate it (predates the §7 type-1 merge)")
+    columns = set(pd.read_csv(nc.SNAPSHOT, nrows=0).columns)
+    if not {"in_analysis_cohort", "diagnosis_group"} <= columns:
+        pytest.skip("snapshot predates the 2026-11-05 cohort-table migration (D23) — regenerate it")
     return nc.load_eligible()
 
 

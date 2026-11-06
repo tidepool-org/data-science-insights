@@ -1,6 +1,10 @@
 # PLN-1008 No Meal Announcement — Architecture
 
-## Current state (as of 2026-06-22)
+## Current state (as of 2026-11-05)
+
+**The NMA chain on the FDA dose and day tables; the analysis-ready table as the cohort table (2026-11-05, D23; nothing run on Databricks).** PLN-1008 reads the same tables as every other report: `export_user_day_bolus_classification.py` is a projection of `loop_dose_classification` (the FDA verdict counted per user-day), the NMA classifier and the event-grain `export_bolus_classification.py` are retired, and `export_user_day_analysis_ready.py` keeps every row of the day universe with the criteria as columns (`passes_loop_version_gate`, `day_eligible`, `user_eligible`, `passes_age_gate`), the predicates `in_analysis_cohort` and `in_strategy_contrast`, the diagnosis group from the FDA lookup, and the delivery strategy from the day table's flags (NULL for a neither day). The loader asserts the predicates and selects diagnosis groups (`prepare_day_level`, `filter_cohort`); `analysis/analysis_7-1_cohort_flow.py` writes the §7.1 flow by stage and diagnosis group with the issued vintage beside; the harness runs the FDA classifier and day projection on the synthetic extract; `nma_pipeline.yml` names the real tasks. Next: the Databricks run after the FDA base tables (`project_history.md`, 2026-11-05).
+
+## Previously (as of 2026-06-22)
 
 Data-staging pipeline and **§8.1 complete**: Method A (per-user paired) + Method B (LMM, Table 8.1b) + Tables 8.1a/8.1c + Figures 8.1a/8.1b/8.1c + adult/pediatric/all cohort split + **Sample Information (Table 1)**. Runs on Databricks, or **locally off the CSV snapshot** (`analysis_8-1_…py --csv_path`) that `data_staging/export_user_day_analysis_ready.py` writes. The age-stratified run is produced for all three cohorts (`outputs/analysis_8_1/{adult,pediatric,all}/`), each with a `sample_information.csv`, plus a combined `table_8_1_sample_information.csv`. The §8.1 LMM-vs-Method-A weighting caveat is documented in [docs/weighting_sensitivity.md](../docs/weighting_sensitivity.md) (pre-D7 analysis — **superseded by decisions.md D5 update 2026-06-07**: on the regenerated snapshot Method A & B concur in sign on all arms for TIR/TAR/mean-glucose/CV, so the divergence caveat now attaches to the below-range endpoints <54/<70 only).
 
@@ -149,10 +153,9 @@ Phase 2: Per-user-day aggregations
   export_user_day_cbg                → nma_user_day_cbg, nma_user_day_coverage
     slices FDA loop_cbg; coverage ungated — day intersection happens at classification
     └─ compute_user_day_glycemic_endpoints → nma_user_day_glycemic_endpoints
-  export_user_day_bolus_classification → nma_user_day_bolus_classification  (per day: manual / automatic bolus counts)
-    classify every bolus manual vs automatic — HK AutomaticallyIssued flag (HK-first), dosingDecision fallback
-    (loop-DD prior 5s, no normalBolus DD ±15s) for HK-silent boluses; dedup on (user, nearest-min, units),
-    automatic signal MAX-aggregated across duplicate representations. Source of truth for BE + delivery_strategy.
+  export_user_day_bolus_classification → nma_user_day_bolus_classification  (per day: total / manual / manual-normal / automatic bolus counts)
+    a projection of the FDA dose table loop_dose_classification (D23, 2026-11-05): is_automated is the union of the
+    FDA rules, has_normal_subtype the bolus shape; the NMA classifies nothing. Source of BE.
   export_user_day_bolus_counts       → nma_user_day_bolus_counts  (BE per valid day; 0 when no bolus)
     BE = manual_normal_bolus_count projected from nma_user_day_bolus_classification
   export_user_day_carbs              → nma_user_day_carbs  (CE per valid day; 0 when no carbs)
@@ -168,7 +171,11 @@ Phase 3: Classification + analysis-ready join
     anchored on loop_recommendations; bolus/carb/coverage LEFT JOIN (counts => 0, is_eligible => day_eligible);
     nested arm membership flags (in_ce0_be0 / in_ce0_be_le1 / in_ce0_be_inf / in_ce_gt0);
     user_eligible = >=10 eligible days/user (window count)
-    └─ export_user_day_analysis_ready → nma_user_day_analysis_ready (denormalized, analysis-ready)
+    └─ export_user_day_analysis_ready → nma_user_day_analysis_ready (the cohort table, analysis-ready; D23)
+       Every row of the universe kept; the criteria as columns (passes_loop_version_gate, day_eligible, user_eligible,
+       passes_age_gate), the predicates in_analysis_cohort / in_strategy_contrast, diagnosis_group from the FDA lookup,
+       delivery_strategy from the day table's flags (NULL for a neither day). The two lines below describe the
+       pre-2026-11-05 shape they replaced.
        Anchor: classification INNER JOIN loop_recommendations; LEFT JOIN bolus_classification / endpoints / tdd / age / user_gender (sex). Applies PLN-1001 Loop-version cohort filter: version known → version_int < 3_004_000; version NULL → local_day < 2024-07-13 (Loop 3.4.0 release date).
        delivery_strategy (§7.3) = CASE on nma_user_day_bolus_classification.automatic_bolus_count (>=3 -> autobolus_on else temp_basal_only); carries automatic_bolus_count / auto_hk_count / auto_dd_count.
        §7.5 TDD reference computed here over day_eligible days: mean_tdd_user, median_tdd_user (percentile_approx 0.5), n_eligible_days_for_tdd, tdd_ratio = tdd_units / mean_tdd_user.

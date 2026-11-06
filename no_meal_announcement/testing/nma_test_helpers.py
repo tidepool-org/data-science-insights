@@ -283,7 +283,7 @@ def make_basal_row(
     version: str = DEFAULT_VERSION,
 ) -> dict:
     """Single HealthKit (source=Loop) `type='basal'` record covering
-    `duration_hours` from `hour:00`.
+    `duration_hours` from `hour:00`, carrying Loop's automatically-issued key.
 
     export_user_day_tdd's HealthKit-delivered basal path reads the `rate` column
     (delivered U/hr) and `duration` (MILLISECONDS), then credits
@@ -291,6 +291,12 @@ def make_basal_row(
     `rate`, `duration_hours * 3600 * 1000` lands in `duration`, and the origin
     carries the source=Loop tag the HK predicate matches. With one full-day
     record per user-day, delivered basal ≈ rate × 24.
+
+    The automatically-issued key (payload) is what the FDA dose classifier's
+    `health_flag_named_loop` rule reads, so the day projection counts the basal
+    as a temporary basal Loop set and a day with fewer than three automated
+    boluses is a temp-basal day (since 2026-11-05 the harness runs the FDA
+    classifier on this fixture; decision D23).
     """
     t = datetime(day.year, day.month, day.day, hour, 0, 0)
     return _row(
@@ -300,6 +306,7 @@ def make_basal_row(
         rate=rate_u_per_hr,
         duration=str(duration_hours * 3600 * 1000),
         origin=_origin(version, source_name="Loop"),
+        payload=_AUTO_PAYLOAD,
     )
 
 

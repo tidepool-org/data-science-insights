@@ -43,6 +43,7 @@ Outputs (outputs/analysis_ir_2/):
 """
 
 import os
+import shutil
 
 import matplotlib
 matplotlib.use("Agg")
@@ -57,7 +58,20 @@ from utils.constants import (  # noqa: E402
     COLORS_STACKED_BAR,
     FONT,
 )
-from utils.data_loading import CATALOG  # noqa: E402
+from utils.cohort_flow import (  # noqa: E402
+    ALL_GROUPS_LABEL,
+    ab_day_stages,
+    assert_monotone,
+    count_flow,
+    widen_flow,
+)
+from utils.data_loading import (  # noqa: E402
+    CATALOG,
+    load_ab_day_cohort,
+    load_guardrail_flags,
+    load_guardrail_group_cohort,
+)
+from utils.figures import stacked_bar_with_callouts  # noqa: E402
 from utils.preset_characterization import (  # noqa: E402
     dist_row,
     linkage_checks,
@@ -143,8 +157,15 @@ ENDPOINT_COLORS = {
 
 def load_data(spark):
     """Per-user endpoints joined to guardrail groups, plus the day cohort and
-    the per-activation flags (for the flow and data-check tables)."""
-    groups = spark.table(f"{CATALOG}.user_guardrail_groups").toPandas()
+    the per-activation flags (for the flow and data-check tables).
+
+    Since 2026-11-05 the three come through the loaders: the users of the
+    outcome cohort (user_guardrail_groups.in_outcome_cohort, the primary
+    diagnosis group), every user-day of ab_day_cohort (for the flow and the
+    per-user day counts), and the qualifying activations of
+    override_guardrail_flags, each loader asserting its table's predicates.
+    """
+    groups = load_guardrail_group_cohort(spark, predicate="in_outcome_cohort")
     endpoints = spark.table(f"{CATALOG}.glycemic_endpoints_ab_days").toPandas()
     # Spark's decimal arithmetic (SUM(...) * 100.0 / COUNT(*)) surfaces as
     # Python Decimal objects through toPandas(); pandas stats crash mixing
@@ -153,25 +174,24 @@ def load_data(spark):
         if col != "_userId":
             endpoints[col] = pd.to_numeric(endpoints[col], errors="coerce").astype(float)
 
-    day_counts = spark.sql(f"""
-        --begin-sql
-        SELECT
-          _userId,
-          SUM(CASE WHEN is_eligible_ab_day THEN 1 ELSE 0 END) AS n_eligible_ab_days,
-          SUM(CASE WHEN is_outcome_day THEN 1 ELSE 0 END) AS n_outcome_days
-        FROM {CATALOG}.ab_day_cohort
-        GROUP BY _userId
-        ;
-    """).toPandas()
-    for col in ("n_eligible_ab_days", "n_outcome_days"):
-        day_counts[col] = pd.to_numeric(day_counts[col], errors="coerce").astype(float)
+    days = load_ab_day_cohort(spark, diagnosis_groups=None, predicate=None)
+    day_counts = (
+        days.groupby("_userId")
+        .agg(n_eligible_ab_days=("is_eligible_ab_day", lambda s: float(s.eq(True).sum())),
+             n_outcome_days=("is_outcome_day", lambda s: float(s.eq(True).sum())))
+        .reset_index()
+    )
 
-    flags = spark.table(f"{CATALOG}.override_guardrail_flags").toPandas()
+    flags = load_guardrail_flags(spark, predicate=None)
     flags = prepare_activations(flags)
 
     users = (
         endpoints.merge(groups, on="_userId", how="inner")
         .merge(day_counts, on="_userId", how="left")
+    )
+    assert len(users) == len(groups), (
+        f"{len(groups)} users in the outcome cohort but {len(users)} with pooled endpoints; "
+        "the groups table and the endpoints table are out of step"
     )
 
     # Scope the activations to the ANALYSIS cohort. user_guardrail_groups (and
@@ -207,47 +227,45 @@ def load_data(spark):
 
     print(f"  Users with pooled endpoints: {len(users)}")
     print(f"  Group counts: {users['guardrail_group'].value_counts().to_dict()}")
-    return users, groups, day_counts, flags
+    return users, groups, days, flags
 
 
 # =============================================================================
 # Table IR-2a — cohort flow + guardrail-group counts
 # =============================================================================
 
-def create_table_ir2a(spark, users, groups, flags) -> pd.DataFrame:
-    """Stage-by-stage user counts, then the five-group split. The
-    outcome-eligible row is the Analysis 1 cohort and the % denominator."""
-    stage_counts = spark.sql(f"""
-        --begin-sql
-        SELECT
-          (SELECT COUNT(DISTINCT _userId) FROM {CATALOG}.loop_recommendations) AS loop_users,
-          (SELECT COUNT(*) FROM {CATALOG}.user_diagnosis_type
-            WHERE diagnosis_type = 'type1') AS type1_users,
-          (SELECT COUNT(DISTINCT _userId) FROM {CATALOG}.ab_day_cohort
-            WHERE is_eligible_ab_day) AS eligible_users,
-          (SELECT COUNT(DISTINCT _userId) FROM {CATALOG}.ab_day_cohort
-            WHERE is_outcome_day) AS outcome_users
-        ;
-    """).toPandas().iloc[0]
+def create_cohort_flow(days):
+    """The autobolus-day population's flow counted from ab_day_cohort's
+    columns (utils/cohort_flow.py): the report's stages with the type-1
+    gate, and the same stages by diagnosis group."""
+    report = count_flow(days, ab_day_stages(primary_gate=True), unit="days")
+    by_group = count_flow(days, ab_day_stages(), unit="days")
+    assert_monotone(report)
+    assert_monotone(by_group)
+    return report, widen_flow(by_group)
 
+
+def create_table_ir2a(users, flow_report, flags) -> pd.DataFrame:
+    """Stage-by-stage user counts from the cohort flow, then the five-group
+    split. The outcome-eligible row is the Analysis 1 cohort and the %
+    denominator."""
+    stage_users = (flow_report[flow_report["group"] == ALL_GROUPS_LABEL]
+                   .set_index("stage")["n_users"])
     n_cohort = len(users)
+    assert int(stage_users["≥1 outcome-eligible (≥70% CGM-coverage) AB day"]) == n_cohort, (
+        f"the flow's outcome stage ({stage_users.iloc[-1]}) differs from the cohort ({n_cohort})"
+    )
     qualifying = flags[flags["is_qualifying"]]
     activations_by_user = qualifying.groupby("_userId").size()
 
-    rows = [
-        {"Stage / Group": "Loop users in extract",
-         "Users, n": int(stage_counts["loop_users"]), "% of eligible": "—",
-         "Activations, n": "—"},
-        {"Stage / Group": "Type 1 diagnosis",
-         "Users, n": int(stage_counts["type1_users"]), "% of eligible": "—",
-         "Activations, n": "—"},
-        {"Stage / Group": "≥1 eligible AB day (AB × version/date × age)",
-         "Users, n": int(stage_counts["eligible_users"]), "% of eligible": "—",
-         "Activations, n": "—"},
-        {"Stage / Group": "≥1 outcome-eligible (≥70% CGM-coverage) AB day",
-         "Users, n": int(stage_counts["outcome_users"]), "% of eligible": "100.0%",
-         "Activations, n": "—"},
-    ]
+    rows = []
+    for stage in stage_users.index:
+        rows.append({
+            "Stage / Group": stage,
+            "Users, n": int(stage_users[stage]),
+            "% of eligible": "100.0%" if stage == stage_users.index[-1] else "—",
+            "Activations, n": "—",
+        })
     for value, label in GROUPS:
         in_group = users[users["guardrail_group"] == value]
         n = len(in_group)
@@ -355,47 +373,18 @@ def _group_frames(users):
 
 
 def create_figure_ir2a(users: pd.DataFrame):
-    """Stacked mean time-in-ranges, one bar per guardrail group."""
+    """Stacked mean time-in-ranges, one bar per guardrail group, drawn by
+    the shared five-band bar (utils/figures.py, 2026-11-05): in-bar labels
+    on the bands tall enough, the two low bands as callouts with leaders."""
     frames = _group_frames(users)
     labels = [f"{FIG_LABELS.get(label, label)}\n(n={n})" for label, _, n in frames]
     x = np.arange(len(frames))
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    bottom = np.zeros(len(frames))
-    for band_label, col in RANGE_BANDS:
-        values = np.array([frame[col].mean() for _, frame, _ in frames])
-        ax.bar(x, values, bottom=bottom, label=band_label,
-               color=COLORS_STACKED_BAR[band_label],
-               edgecolor="white", linewidth=0.6)
-        for xi, (value, base) in enumerate(zip(values, bottom)):
-            if value >= 4:
-                ax.text(xi, base + value / 2, f"{value:.1f}", ha="center",
-                        va="center", fontsize=FONT["axis_label"], color="black")
-        bottom += values
-
-    # The <54 and 54-70 bands are too thin for in-bar labels — two side-by-side
-    # unboxed callouts per bar, each with a fixed-length leader from its band's
-    # midpoint, so the text heights stagger with the band midpoints.
-    LEADER_LEN = 6.0  # leader length in y-axis (%) units
     for xi, (_, frame, _) in enumerate(frames):
-        lt54 = float(frame["band_lt54"].mean())
-        tbr_mean = float(frame["tbr"].mean())
-        # Higher callout (the <70 total) on the left, <54 on the right, each
-        # leader anchored at the TOP of its band. No text prefixes — the
-        # leader lines tie each number to its band.
-        callouts = [
-            (xi - 0.16, tbr_mean, f"{tbr_mean:.1f}"),
-            (xi + 0.16, lt54, f"{lt54:.1f}"),
-        ]
-        for cx, y_anchor, text in callouts:
-            ax.annotate(
-                text,
-                xy=(cx, y_anchor),
-                xytext=(cx, y_anchor + LEADER_LEN),
-                ha="center", va="bottom",
-                fontsize=FONT["axis_label"], color="black",
-                arrowprops={"arrowstyle": "-", "color": "#555555", "linewidth": 1.0},
-            )
+        means = {band_label: float(frame[col].mean()) if len(frame) else 0.0
+                 for band_label, col in RANGE_BANDS}
+        stacked_bar_with_callouts(ax, xi, means, width=0.8, legend=(xi == 0))
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=FONT["axis_label"])
@@ -483,6 +472,8 @@ def create_figure_ir2c(users: pd.DataFrame):
 def run_analysis(spark, output_dir=None):
     if output_dir is None:
         output_dir = OUTPUT_DIR
+    # The analysis owns its output folder (STYLE.md §5).
+    shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)
@@ -490,11 +481,13 @@ def run_analysis(spark, output_dir=None):
     print("=" * 60)
 
     print("\n1. Loading data...")
-    users, groups, day_counts, flags = load_data(spark)
+    users, groups, days, flags = load_data(spark)
 
     print("\n2. Table IR-2a — cohort flow + group counts...")
-    table_ir2a = create_table_ir2a(spark, users, groups, flags)
+    flow_report, flow_by_group = create_cohort_flow(days)
+    table_ir2a = create_table_ir2a(users, flow_report, flags)
     table_ir2a.to_csv(f"{output_dir}/table_ir2a_cohort_flow.csv", index=False)
+    flow_by_group.to_csv(f"{output_dir}/table_ir2a_cohort_flow_by_diagnosis_group.csv", index=False)
     print(table_ir2a.to_string(index=False))
 
     print("\n3. Table IR-2b — outcomes by guardrail group...")

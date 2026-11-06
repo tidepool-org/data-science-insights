@@ -41,6 +41,7 @@ Outputs:
 """
 
 import os
+import shutil
 import re
 from typing import Dict, Tuple
 
@@ -54,8 +55,7 @@ from utils.constants import (
     STARTING_GLUCOSE_LOW, STARTING_GLUCOSE_HIGH,
 )
 from utils.data_loading import (
-    VERSION_WHERE,
-    load_override_endpoints, aggregate_override_endpoints, load_type1_user_ids,
+    load_activation_cohort, load_override_endpoints, aggregate_override_endpoints,
 )
 from utils.statistics import compute_paired_statistics, format_p
 
@@ -121,55 +121,23 @@ def build_datasets(
 
 def load_activations(spark, suffix: str = "") -> pd.DataFrame:
     """
-    Per-activation rows from `overrides_by_segment` with cohort (version-only —
-    see module docstring re the deliberate age-gate omission) + guardrail +
-    starting-glucose + type-1 diagnosis filters applied. Used by Table 8.2a
-    (counts and hours) and Figure 8.2b (glucose traces). The type-1 gate is the
-    same one `load_override_endpoints` applies. The two `is_valid_name_only_seg{2,3}`
-    flags are kept on each row so downstream code can filter for the
-    appropriate segment-pair.
+    Per-activation rows for Table 8.2a (counts and hours) and Figure 8.2b
+    (glucose traces): every activation of a window in the preset cohort
+    (transition_activation_cohort{suffix}: the version gate, the age gate,
+    the guardrail check, rank 1) with a starting glucose in range, any
+    period, with the columns of overrides_by_segment joined on. The two
+    `is_valid_name_only_seg{2,3}` flags are on each row so downstream code
+    can filter for the appropriate segment pair.
 
-    suffix='_box080' reads the parallel 0.80-box cohort tables.
+    Since 2026-11-05 this path applies the full cohort gate, the age term
+    included: the 2026-07-30 decision to keep Table 8.2a's numbers stable
+    ended when every number regenerated on the corrected classifier
+    (docs/pipeline_map.md section 8, item 4).
     """
-    cohort = (
-        spark.table(f"dev.fda_510k_rwd.valid_transition_segments{suffix}")
-        .where("segment_rank = 1")
-        # VERSION_WHERE, not COHORT_WHERE: the age ≥ 6 term is deliberately NOT
-        # applied on this path so the reported Table 8.2a / Figure 8.2b numbers
-        # stay stable; the deviation is flagged in the report (2026-07-30).
-        .where(VERSION_WHERE)
-        .select("_userId", "tb_to_ab_seg1_start")
-    )
-
-    bad_segments = (
-        spark.table(f"dev.fda_510k_rwd.valid_transition_guardrails{suffix}")
-        .withColumn(
-            "violation_count_d",
-            F.coalesce(F.col("violation_count").cast("double"), F.lit(0.0)),
-        )
-        .groupBy("_userId", F.col("segment_start").cast("date").alias("tb_to_ab_seg1_start"))
-        .agg(F.sum("violation_count_d").alias("vsum"))
-        .where("vsum > 0")
-        .select("_userId", "tb_to_ab_seg1_start")
-    )
-
-    cohort = cohort.join(bad_segments, on=["_userId", "tb_to_ab_seg1_start"], how="left_anti")
-
-    activations = (
-        spark.table(f"dev.fda_510k_rwd.overrides_by_segment{suffix}")
-        .join(cohort, on=["_userId", "tb_to_ab_seg1_start"], how="inner")
-        .filter(F.col("is_starting_glucose_in_range") == True)  # noqa: E712
-    ).toPandas()
-
-    # Diagnosis gate: confirmed type-1 users only (FDA Loop indication) — the
-    # same gate load_override_endpoints applies, so Table 8.2a's cohort matches
-    # the 8.2b / 8.2c endpoint cohort instead of silently including non-type1
-    # users. The lookup is box-independent (no suffix).
-    type1_ids = load_type1_user_ids(spark)
-    pre_dx = activations["_userId"].nunique()
-    activations = activations[activations["_userId"].isin(type1_ids)].copy()
-    print(f"  Type-1 filter kept {activations['_userId'].nunique()}/{pre_dx} users")
-
+    activations = load_activation_cohort(spark, suffix=suffix, predicate="in_activation_cohort")
+    activations = activations[activations["is_starting_glucose_in_range"].eq(True)].copy()
+    print(f"  Starting glucose in range: {len(activations)} activations, "
+          f"{activations['_userId'].nunique()} users")
     return activations
 
 
@@ -467,6 +435,8 @@ def run_analysis(spark, output_dir=None, suffix: str = ""):
     # parallel output dir so the production outputs aren't clobbered.
     if output_dir is None:
         output_dir = OUTPUT_DIR + suffix
+    # The analysis owns its output folder (STYLE.md §5).
+    shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)

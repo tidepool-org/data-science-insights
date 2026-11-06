@@ -43,8 +43,12 @@ OUTPUT_TABLE = f"{TEST_SCHEMA}._test_dur_output"
 COV_RECS_TABLE = f"{TEST_SCHEMA}._test_dur_cov_recs"
 COV_OUTPUT_TABLE = f"{TEST_SCHEMA}._test_dur_cov_output"
 
+DIAGNOSIS_TABLE = f"{TEST_SCHEMA}._test_dur_diagnosis"
+JAEB_TABLE = f"{TEST_SCHEMA}._test_dur_jaeb"
+BDDP_TABLE = f"{TEST_SCHEMA}._test_dur_bddp"
+
 ALL_TABLES = [RECS_TABLE, DATES_TABLE, GENDER_TABLE, OUTPUT_TABLE,
-              COV_RECS_TABLE, COV_OUTPUT_TABLE]
+              COV_RECS_TABLE, COV_OUTPUT_TABLE, DIAGNOSIS_TABLE, JAEB_TABLE, BDDP_TABLE]
 
 # --- Test data ---
 # user_continues (age 30): 60 days all-AB.
@@ -122,11 +126,47 @@ gender_rows = [
     {"userid": "user_dropoff_disc", "gender": "F"},
 ]
 
+# The cohort columns (2026-11-05): the diagnosis group from a lookup with
+# one LADA-labelled JAEB member and one type-2 user, and the JAEB linkage
+# through the upload id, with one PtID shared by two users (the lower user
+# id keeps it) and one user absent from the link.
+diagnosis_rows = [
+    {"_userId": "user_continues", "diagnosis_patients": "type1", "diagnosis_seagull": None,
+     "is_jaeb": False, "is_lada": False, "diagnosis_type": "type1"},
+    {"_userId": "user_discontinues", "diagnosis_patients": "LADA", "diagnosis_seagull": None,
+     "is_jaeb": True, "is_lada": True, "diagnosis_type": "type1"},
+    {"_userId": "user_short_followup", "diagnosis_patients": "type2", "diagnosis_seagull": None,
+     "is_jaeb": False, "is_lada": False, "diagnosis_type": "type2"},
+    {"_userId": "user_child", "diagnosis_patients": None, "diagnosis_seagull": "type1",
+     "is_jaeb": False, "is_lada": False, "diagnosis_type": "type1"},
+    {"_userId": "user_age_six", "diagnosis_patients": "type1", "diagnosis_seagull": None,
+     "is_jaeb": False, "is_lada": False, "diagnosis_type": "type1"},
+    {"_userId": "user_dropoff_sustained", "diagnosis_patients": "type1", "diagnosis_seagull": None,
+     "is_jaeb": False, "is_lada": False, "diagnosis_type": "type1"},
+    # user_dropoff_disc is absent from the lookup: group unknown
+]
+jaeb_rows = [
+    {"uploadID": "upload_continues", "PtID": "pt_1"},
+    {"uploadID": "upload_discontinues", "PtID": "pt_2"},
+    {"uploadID": "upload_child", "PtID": "pt_2"},       # shared PtID: user_child sorts first and keeps it
+    {"uploadID": "upload_age_six", "PtID": "pt_3"},
+]
+bddp_rows = [
+    {"_userId": "user_continues", "uploadID": "upload_continues"},
+    {"_userId": "user_discontinues", "uploadID": "upload_discontinues"},
+    {"_userId": "user_child", "uploadID": "upload_child"},
+    {"_userId": "user_age_six", "uploadID": "upload_age_six"},
+    {"_userId": "user_short_followup", "uploadID": "upload_unlinked"},
+]
+
 # --- Run test ---
 try:
     setup_test_table(spark, RECS_TABLE, recs_rows)
     setup_test_table(spark, DATES_TABLE, dates_rows)
     setup_test_table(spark, GENDER_TABLE, gender_rows)
+    setup_test_table(spark, DIAGNOSIS_TABLE, diagnosis_rows)
+    setup_test_table(spark, JAEB_TABLE, jaeb_rows)
+    setup_test_table(spark, BDDP_TABLE, bddp_rows)
 
     run(
         spark,
@@ -134,9 +174,32 @@ try:
         loop_recommendations_table=RECS_TABLE,
         user_dates_table=DATES_TABLE,
         user_gender_table=GENDER_TABLE,
+        diagnosis_table=DIAGNOSIS_TABLE,
+        jaeb_table=JAEB_TABLE,
+        bddp_table=BDDP_TABLE,
     )
 
     result = read_test_output(spark, OUTPUT_TABLE)
+
+    # --- The cohort columns of 2026-11-05 ---
+    by_user = result.set_index("_userId")
+    assert by_user.loc["user_continues", "diagnosis_group"] == "type1"
+    assert by_user.loc["user_discontinues", "diagnosis_group"] == "type1 with LADA label"
+    assert by_user.loc["user_short_followup", "diagnosis_group"] == "type2"
+    assert by_user.loc["user_dropoff_disc", "diagnosis_group"] == "unknown", "absent from the lookup"
+    assert bool(by_user.loc["user_discontinues", "is_primary_diagnosis"])
+    assert not bool(by_user.loc["user_short_followup", "is_primary_diagnosis"])
+    assert by_user.loc["user_continues", "jaeb_pt_id"] == "pt_1"
+    assert by_user.loc["user_child", "jaeb_pt_id"] == "pt_2", "the lower user id keeps a shared PtID"
+    assert not bool(by_user.loc["user_discontinues", "is_jaeb_linked"]), "its PtID went to the lower user id"
+    assert not bool(by_user.loc["user_short_followup", "is_jaeb_linked"]), "an upload id with no PtID"
+    for user, row in by_user.iterrows():
+        expected = bool(row["is_adopted"] and row["has_min_followup"] and row["has_final_coverage"] and row["is_age_eligible"])
+        assert bool(row["in_durability_cohort"]) == expected, (user, "in_durability_cohort")
+        assert bool(row["in_jaeb_cohort"]) == (expected and bool(row["is_jaeb_linked"])), (user, "in_jaeb_cohort")
+        if row["is_adopted"]:
+            assert row["days_to_adoption"] == (row["adoption_date"] - row["first_day"]).days, (user, "days_to_adoption")
+    print("PASS: diagnosis group, JAEB linkage, days to adoption, and the cohort predicates")
 
     # 1. All 7 users appear
     assert_row_count(result, 7, "all users in output")

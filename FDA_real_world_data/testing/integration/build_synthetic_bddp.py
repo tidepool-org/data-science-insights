@@ -1434,7 +1434,8 @@ def build_user_diagnosis_type(spark, table_name, loop_recommendations_table):
     (a no-type1 diagnosis table must empty every analysis cohort).
 
     Columns match production: _userId, diagnosis_patients, diagnosis_seagull,
-    is_jaeb, is_lada, diagnosis_type.
+    is_jaeb, is_lada, diagnosis_type, diagnosis_group (every synthetic user
+    'type1', the primary group).
     """
     spark.sql(f"""
         CREATE OR REPLACE TABLE {table_name} AS
@@ -1444,7 +1445,8 @@ def build_user_diagnosis_type(spark, table_name, loop_recommendations_table):
             CAST(NULL AS STRING) AS diagnosis_seagull,
             FALSE                AS is_jaeb,
             FALSE                AS is_lada,
-            'type1'              AS diagnosis_type
+            'type1'              AS diagnosis_type,
+            'type1'              AS diagnosis_group
         FROM {loop_recommendations_table}
     """)
     n = spark.table(table_name).count()

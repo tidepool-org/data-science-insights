@@ -35,13 +35,13 @@ Outputs:
 
 import argparse
 import os
+import shutil
 
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from utils import MIN_CBG_COUNT
 from utils.constants import COLORS_PRIMARY, COLORS_SECONDARY, FONT
-from utils.data_loading import MIN_AGE, load_type1_user_ids
+from utils.data_loading import load_stable_cohort
 
 OUTPUT_DIR = "outputs/analysis_8_6"
 
@@ -69,66 +69,27 @@ SUBGROUP_ORDER = [
 
 
 def load_data(spark) -> pd.DataFrame:
+    """The stable-autobolus users of the JAEB hand-off with their glycemic
+    endpoints: stable_cohort.in_jaeb_cohort (a glycemic-endpoints row, the
+    CGM coverage floor, the age gate, a partner identifier), one row per
+    user, the partner identifier as `PtID`.
+
+    JAEB members resolve to type 1 by definition, so every row is in the
+    primary diagnosis group; the loader asserts the predicate columns and
+    this function asserts the group.
     """
-    Load glycemic endpoints for stable autobolus users and link to JAEB PtID.
-    """
-    # --- Glycemic endpoints ---
-    endpoints = spark.table("dev.fda_510k_rwd.glycemic_endpoints_stable_autobolus").toPandas()
-
-    for col in endpoints.select_dtypes(include=["object"]).columns:
-        if col not in ("_userId", "segment"):
-            endpoints[col] = pd.to_numeric(endpoints[col], errors="coerce")
-
-    # CBG coverage filter (70% of 14-day period)
-    endpoints = endpoints.loc[endpoints["cbg_count"] >= MIN_CBG_COUNT].copy()
-    print(f"  Users after CBG coverage filter: {len(endpoints)}")
-
-    # Age eligibility (Loop autobolus indication: age ≥6 at segment start;
-    # users with unknown DOB are kept).
-    age_eligible = spark.sql(f"""
-        --begin-sql
-        SELECT _userId
-        FROM dev.fda_510k_rwd.stable_autobolus_segments
-        WHERE age_years >= {MIN_AGE} OR age_years IS NULL
-    ;
-    """).toPandas()
-    pre_age = endpoints["_userId"].nunique()
-    endpoints = endpoints.merge(age_eligible, on="_userId", how="inner")
-    print(f"  Users after age filter (≥{MIN_AGE}): {endpoints['_userId'].nunique()}/{pre_age}")
-
-    # --- JAEB PtID linkage ---
-    jaeb_map = spark.sql("""
-        --begin-sql
-        SELECT DISTINCT j.PtID, b._userId
-        FROM dev.default.jaeb_upload_to_userid j
-        INNER JOIN dev.default.bddp_sample_all_2 b
-            ON j.uploadID = b.uploadID
-    ;
-    """).toPandas()
-
-    print(f"  JAEB-linked users in mapping table: {jaeb_map['_userId'].nunique()}")
-
-    # --- Join ---
-    merged = endpoints.merge(jaeb_map, on="_userId", how="inner")
-    merged = merged.drop_duplicates(subset="PtID")
-    print(f"  Users after JAEB linkage: {len(merged)}")
-
-    # Diagnosis gate (defensive): the cohort is JAEB-linked, and JAEB members
-    # resolve to type-1 in user_diagnosis_type by definition, so this should
-    # drop nothing. Apply + assert to catch any lookup inconsistency.
-    type1_ids = load_type1_user_ids(spark)
-    pre_dx = merged["_userId"].nunique()
-    merged = merged[merged["_userId"].isin(type1_ids)].copy()
-    dropped = pre_dx - merged["_userId"].nunique()
-    assert dropped == 0, (
-        f"type-1 gate dropped {dropped} JAEB-linked user(s) — JAEB members "
-        f"should all resolve to type1 in user_diagnosis_type"
+    merged = load_stable_cohort(spark, predicate="in_jaeb_cohort").rename(columns={"jaeb_pt_id": "PtID"})
+    assert merged["is_primary_diagnosis"].all(), (
+        "a JAEB-linked user is outside the primary diagnosis group; JAEB members "
+        "resolve to type 1 in user_diagnosis_type by definition"
     )
-
+    print(f"  Users in the JAEB hand-off: {len(merged)}")
     return merged
 
 
 def run_analysis(spark, output_dir: str = OUTPUT_DIR):
+    # The analysis owns its output folder (STYLE.md §5).
+    shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)

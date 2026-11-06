@@ -40,6 +40,7 @@ import matplotlib.patches as mpatches
 from scipy import stats
 from typing import Dict, List, Optional, Tuple
 import os
+import shutil
 
 # Configuration
 OUTPUT_DIR = "outputs/analysis_8_5"
@@ -140,21 +141,11 @@ def load_data(spark, suffix: str = "") -> pd.DataFrame:
     wide["delta_tir"] = wide["tir_seg2"] - wide["tir_seg1"]
 
     # --- Demographics ---
-    demographics = (
-        spark.table(f"dev.fda_510k_rwd.valid_transition_segments{suffix}")
-        .select("_userId", "gender", "tb_to_ab_age_years", "tb_to_ab_years_lwd")
-        .toPandas()
-    )
-    # One row per user (take the first if multiple)
-    demographics = demographics.drop_duplicates(subset="_userId")
-    demographics["tb_to_ab_age_years"] = pd.to_numeric(
-        demographics["tb_to_ab_age_years"], errors="coerce"
-    )
-    demographics["tb_to_ab_years_lwd"] = pd.to_numeric(
-        demographics["tb_to_ab_years_lwd"], errors="coerce"
-    )
-
-    wide = wide.merge(demographics, on="_userId", how="left")
+    # The selected window's gender, age, and years with diabetes come with
+    # the cohort frame (transition_cohort); until 2026-11-05 they were taken
+    # from any of the user's windows (docs/pipeline_map.md section 6, item 7).
+    for column in ("tb_to_ab_age_years", "tb_to_ab_years_lwd"):
+        wide[column] = pd.to_numeric(wide[column], errors="coerce")
 
     # --- Subgroup bins ---
     wide["gender_group"] = wide["gender"].apply(_bin_gender)
@@ -604,6 +595,8 @@ def run_analysis(spark, output_dir=None, suffix: str = ""):
     # parallel output dir so the production outputs aren't clobbered.
     if output_dir is None:
         output_dir = OUTPUT_DIR + suffix
+    # The analysis owns its output folder (STYLE.md §5).
+    shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)

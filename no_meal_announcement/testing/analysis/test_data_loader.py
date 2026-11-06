@@ -18,6 +18,9 @@ _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "analysis")))
 
 from utils.data_loader import (  # type: ignore # noqa: E402
+    DIAGNOSIS_GROUPS,
+    assert_cohort_predicates,
+    cohort_predicates,
     filter_cohort,
     prepare_day_level,
     restrict_comparator,
@@ -58,21 +61,24 @@ def test_restrict_comparator_no_hma_column_is_ok():
 
 
 # ---------------------------------------------------------------------------
-# filter_cohort — §7.6 age cohort + §6 min-age floor
+# filter_cohort — §7.6 age cohort + the diagnosis-group selection (D23)
 # ---------------------------------------------------------------------------
 
 def _cohort_frame():
+    """Rows of the analysis cohort (the age gate is a staged column, applied by
+    prepare_day_level, so it is not re-applied here): an adult, a pediatric user, one
+    with an unknown DOB, and a LADA-labelled JAEB member (the primary cohort keeps it)."""
     return pd.DataFrame({
-        "_userId":        ["a", "p", "u", "y"],
-        "is_pediatric":   [False, True, np.nan, False],
-        "age_years":      [40.0, 12.0, np.nan, 4.0],   # 'y' is a known <6 user
-        "diagnosis_type": ["type1"] * 4,               # all type1 → the §7 gate is a no-op here
+        "_userId":         ["a", "p", "u", "l"],
+        "is_pediatric":    [False, True, np.nan, False],
+        "age_years":       [40.0, 12.0, np.nan, 50.0],
+        "diagnosis_group": ["type1", "type1", "type1", "type1 with LADA label"],
     })
 
 
-def test_filter_cohort_adult_drops_known_young_and_excludes_unknown():
+def test_filter_cohort_adult_excludes_unknown_dob():
     out = filter_cohort(_cohort_frame(), cohort="adult")
-    assert out["_userId"].tolist() == ["a"]
+    assert set(out["_userId"]) == {"a", "l"}
 
 
 def test_filter_cohort_pediatric():
@@ -80,72 +86,95 @@ def test_filter_cohort_pediatric():
     assert out["_userId"].tolist() == ["p"]
 
 
-def test_filter_cohort_all_retains_unknown_age_drops_known_young():
+def test_filter_cohort_all_retains_unknown_dob():
     out = filter_cohort(_cohort_frame(), cohort="all")
-    assert set(out["_userId"]) == {"a", "p", "u"}
+    assert set(out["_userId"]) == {"a", "p", "u", "l"}
 
-
-def test_filter_cohort_min_age_none_disables_floor():
-    out = filter_cohort(_cohort_frame(), cohort="all", min_age=None)
-    assert set(out["_userId"]) == {"a", "p", "u", "y"}
-
-
-# ---------------------------------------------------------------------------
-# filter_cohort — §7 type-1 diagnosis gate (strict == 'type1', default-on)
-# ---------------------------------------------------------------------------
 
 def _diagnosis_frame():
-    """All adult + age-eligible, so only the type-1 gate decides who survives."""
+    """All adult, so only the diagnosis-group selection decides who is kept."""
     return pd.DataFrame({
-        "_userId":        ["t1", "t2", "oth", "nul"],
-        "is_pediatric":   [False, False, False, False],
-        "age_years":      [40.0, 40.0, 40.0, 40.0],
-        "diagnosis_type": ["type1", "type2", "other", np.nan],
+        "_userId":         ["t1", "lada_jaeb", "lada", "t2", "oth", "unk"],
+        "is_pediatric":    [False] * 6,
+        "age_years":       [40.0] * 6,
+        "diagnosis_group": ["type1", "type1 with LADA label", "lada", "type2", "other", "unknown"],
     })
 
 
-def test_filter_cohort_type1_gate_keeps_only_type1():
-    # Default require_type1=True: type2 / other / NULL all drop (FDA-matching strict).
+def test_filter_cohort_primary_groups_by_default():
     out = filter_cohort(_diagnosis_frame(), cohort="all")
-    assert out["_userId"].tolist() == ["t1"]
+    assert out["_userId"].tolist() == ["t1", "lada_jaeb"], "the type-1 gate admits the LADA-labelled JAEB member"
 
 
-def test_filter_cohort_type1_gate_off_retains_all_diagnoses():
-    out = filter_cohort(_diagnosis_frame(), cohort="all", require_type1=False)
-    assert set(out["_userId"]) == {"t1", "t2", "oth", "nul"}
+def test_filter_cohort_every_group_on_request():
+    out = filter_cohort(_diagnosis_frame(), cohort="all", diagnosis_groups=None)
+    assert set(out["_userId"]) == {"t1", "lada_jaeb", "lada", "t2", "oth", "unk"}
+    lada = filter_cohort(_diagnosis_frame(), cohort="all", diagnosis_groups=("lada", "type1 with LADA label"))
+    assert set(lada["_userId"]) == {"lada_jaeb", "lada"}
 
 
-def test_filter_cohort_require_type1_raises_without_column():
-    """Default-on gate must FAIL LOUD on a pre-merge snapshot — never silently pass an
-    ungated cohort when `diagnosis_type` is absent."""
-    df = pd.DataFrame({
-        "_userId":      ["a"],
-        "is_pediatric": [False],
-        "age_years":    [40.0],
-    })
+def test_filter_cohort_refuses_an_unknown_group():
     raised = False
     try:
-        filter_cohort(df, cohort="all")   # require_type1 defaults True; no diagnosis_type column
-    except KeyError:
+        filter_cohort(_diagnosis_frame(), cohort="all", diagnosis_groups=("type1", "mody"))
+    except AssertionError:
         raised = True
+    assert raised
+    assert set(DIAGNOSIS_GROUPS) == {"type1", "type1 with LADA label", "lada", "type2", "other", "unknown"}
+
+
+# ---------------------------------------------------------------------------
+# prepare_day_level — numeric coercion, the predicate assertion, the cohort rows
+# ---------------------------------------------------------------------------
+
+def _cohort_table():
+    """Five user-days with one criterion failed at a time, and a neither day."""
+    df = pd.DataFrame({
+        "_userId":                  ["a", "b", "c", "d", "e", "n"],
+        "passes_loop_version_gate": [True, False, True, True, True, True],
+        "day_eligible":             [True, True, False, True, True, True],
+        "user_eligible":            [True, True, True, False, True, True],
+        "passes_age_gate":          [True, True, True, True, False, True],
+        "delivery_strategy":        ["autobolus_on", "autobolus_on", "temp_basal_only", "autobolus_on",
+                                     "temp_basal_only", None],
+        "diagnosis_group":          ["type1"] * 6,
+        "tir":                      ["80.0", "70.0", "60.0", "50.0", "40.0", "30.0"],
+    })
+    return pd.concat([df, cohort_predicates(df)], axis=1)
+
+
+def test_cohort_predicates_from_the_criteria():
+    df = _cohort_table()
+    assert df["in_analysis_cohort"].tolist() == [True, False, False, False, False, True]
+    assert df["in_strategy_contrast"].tolist() == [True, False, False, False, False, False], \
+        "a neither day is in the cohort and in no strategy contrast"
+
+
+def test_prepare_day_level_keeps_the_cohort_and_coerces_numeric():
+    out = prepare_day_level(_cohort_table())
+    assert out["_userId"].tolist() == ["a", "n"]
+    assert out["tir"].dtype.kind == "f" and out["tir"].iloc[0] == 80.0
+
+
+def test_prepare_day_level_refuses_a_disagreeing_predicate():
+    df = _cohort_table()
+    df.loc[1, "in_analysis_cohort"] = True      # the staged predicate contradicts the version gate
+    raised = False
+    try:
+        assert_cohort_predicates(df)
+    except AssertionError as error:
+        raised = "in_analysis_cohort" in str(error)
     assert raised
 
 
-# ---------------------------------------------------------------------------
-# prepare_day_level — numeric coercion + eligibility filter
-# ---------------------------------------------------------------------------
-
-def test_prepare_day_level_keeps_only_eligible_and_coerces_numeric():
-    df = pd.DataFrame({
-        "_userId":       ["a", "b", "c"],
-        "day_eligible":  [True, True, False],
-        "user_eligible": [True, False, True],
-        "tir":           ["80.0", "70.0", "60.0"],   # Spark returns Decimal/str → coerced
-    })
-    out = prepare_day_level(df)
-    assert out["_userId"].tolist() == ["a"]            # only the both-eligible row
-    assert out["tir"].dtype.kind == "f"
-    assert out["tir"].iloc[0] == 80.0
+def test_prepare_day_level_refuses_a_pre_migration_snapshot():
+    df = pd.DataFrame({"_userId": ["a"], "day_eligible": [True], "user_eligible": [True], "tir": [80.0]})
+    raised = False
+    try:
+        prepare_day_level(df)
+    except AssertionError as error:
+        raised = "predates" in str(error)
+    assert raised
 
 
 # ---------------------------------------------------------------------------

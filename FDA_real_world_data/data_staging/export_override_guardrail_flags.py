@@ -299,6 +299,15 @@ def run(
       GROUP BY _userId
     ),
 
+    -- The user's diagnosis group, a column of the day cohort table carried
+    -- onto every activation (one value per user).
+    user_diagnosis AS (
+      SELECT _userId, MAX(diagnosis_group) AS diagnosis_group,
+             MAX(CASE WHEN is_primary_diagnosis THEN 1 ELSE 0 END) = 1 AS is_primary_diagnosis
+      FROM {ab_day_cohort_table}
+      GROUP BY _userId
+    ),
+
     eligible_days AS (
       SELECT _userId, day
       FROM {ab_day_cohort_table}
@@ -371,6 +380,14 @@ def run(
        AND b.override_day >= u.first_eligible_ab_day) AS is_qualifying,
       (s.n_ab_days_in_span = DATEDIFF(b.end_day, b.override_day) + 1)
         AS is_all_days_ab,
+      -- The IR-3 population (PLN IR-1002 §7.5): a qualifying activation
+      -- every spanned day of which is an eligible AB day. The loader
+      -- asserts it against the two flags it combines.
+      (b.is_version_eligible
+       AND u.first_eligible_ab_day IS NOT NULL
+       AND b.override_day >= u.first_eligible_ab_day
+       AND s.n_ab_days_in_span = DATEDIFF(b.end_day, b.override_day) + 1)
+        AS in_characterization_cohort,
       -- TRUE for own-target decisions (no schedule lookup needed) and for
       -- fallback decisions where the user's UTC offset was known; FALSE when
       -- the time-of-day intersection ran on an assumed offset of 0.
@@ -378,10 +395,14 @@ def run(
         WHEN b.needs_exceeds_mitigation AND NOT b.has_own_target
           THEN COALESCE(f.tz_offset_known, FALSE)
         ELSE TRUE
-      END AS is_tz_offset_known
+      END AS is_tz_offset_known,
+      COALESCE(dx.diagnosis_group, 'unknown') AS diagnosis_group,
+      COALESCE(dx.is_primary_diagnosis, FALSE) AS is_primary_diagnosis
     FROM base b
     LEFT JOIN user_first_ab u
       ON b._userId = u._userId
+    LEFT JOIN user_diagnosis dx
+      ON b._userId = dx._userId
     LEFT JOIN span_counts s
       ON s._userId = b._userId AND s.override_time = b.override_time
     LEFT JOIN ir1002_m_fallback f
@@ -397,7 +418,11 @@ def run(
     WITH
 
     cohort_users AS (
-      SELECT _userId, MIN(first_eligible_ab_day) AS first_eligible_ab_day
+      SELECT _userId,
+             MIN(first_eligible_ab_day) AS first_eligible_ab_day,
+             MAX(diagnosis_group) AS diagnosis_group,
+             MAX(CASE WHEN is_primary_diagnosis THEN 1 ELSE 0 END) = 1 AS is_primary_diagnosis,
+             MAX(CASE WHEN is_outcome_day THEN 1 ELSE 0 END) = 1 AS has_outcome_day
       FROM {ab_day_cohort_table}
       WHERE is_eligible_ab_day
       GROUP BY _userId
@@ -417,6 +442,11 @@ def run(
     SELECT
       c._userId,
       c.first_eligible_ab_day,
+      c.diagnosis_group,
+      c.is_primary_diagnosis,
+      -- The IR-2 population (PLN IR-1002 §7.1): at least one outcome-eligible
+      -- AB day; the loader asserts it against the day table.
+      c.has_outcome_day AS in_outcome_cohort,
       COALESCE(r.n_qualifying, 0) AS n_qualifying_activations,
       COALESCE(r.ever_p_int, 0) = 1 AS ever_p,
       COALESCE(r.ever_m_int, 0) = 1 AS ever_m,

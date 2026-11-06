@@ -57,7 +57,6 @@ from utils.data_loader import (  # noqa: E402
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
     ENDPOINTS,
-    MIN_AGE,
     analysis_dir,
     default_analysis_ready_csv,
     filter_cohort,
@@ -340,7 +339,6 @@ def run(
     analysis_ready_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
     output_dir=None,
     cohort="all",
-    min_age=MIN_AGE,
     csv_path=None,
 ):
     """Run the supplement for one age cohort → outputs/analysis_8_supp/<cohort>/."""
@@ -364,7 +362,7 @@ def run(
         pdf = prepare_day_level(pd.read_csv(csv_path))
     else:
         pdf = load_day_level(spark, analysis_ready_table)
-    pdf = filter_cohort(pdf, cohort=cohort, min_age=min_age)
+    pdf = filter_cohort(pdf, cohort=cohort)
     pdf = restrict_comparator(pdf)
 
     # S1
@@ -410,11 +408,10 @@ def run(
 def main(
     spark=None,
     analysis_ready_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
-    min_age=MIN_AGE,
     csv_path=None,
 ):
     for cohort in ("adult", "pediatric", "all"):
-        run(spark, analysis_ready_table, output_dir=None, cohort=cohort, min_age=min_age,
+        run(spark, analysis_ready_table, output_dir=None, cohort=cohort,
             csv_path=csv_path)
 
 
@@ -424,7 +421,6 @@ if __name__ == "__main__":
     _parser.add_argument("--csv_path", default=None)
     _parser.add_argument("--output_dir", default=None)
     _parser.add_argument("--cohort", default=None, choices=["adult", "pediatric", "all"])
-    _parser.add_argument("--min_age", type=int, default=MIN_AGE)
     _args, _ = _parser.parse_known_args()
 
     try:
@@ -433,7 +429,7 @@ if __name__ == "__main__":
         _spark = None
 
     if _args.cohort is None:
-        main(_spark, _args.analysis_ready_table, min_age=_args.min_age, csv_path=_args.csv_path)
+        main(_spark, _args.analysis_ready_table, csv_path=_args.csv_path)
     else:
         run(_spark, _args.analysis_ready_table, _args.output_dir,
-            cohort=_args.cohort, min_age=_args.min_age, csv_path=_args.csv_path)
+            cohort=_args.cohort, csv_path=_args.csv_path)

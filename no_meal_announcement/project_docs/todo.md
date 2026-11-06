@@ -34,12 +34,13 @@ Forward-looking checklist: where work stopped and what's blocked. Past-tense det
 
 ## Pipeline / structure
 
-- [ ] **Apply the FDA type-1-diabetes (T1D) cohort gate to NMA** — full plan + lift in **[t1d_filter_plan.md](t1d_filter_plan.md)** (drafted 2026-06-24). Genuinely additive (T1D is NOT in the D21 carry-over set). Approach: staging pre-hash `LEFT JOIN user_diagnosis_type` carry-column + a strict `filter_cohort` gate (analysis-side join is blocked by the hashed `_userId`, D16). Code is ~6–8 lines; the lift is the Databricks regen + §8.1–8.4 re-run + RPT-1008 re-sync. ⚠️ **Step-0 pre-flight gates the design** (token spelling + N-dropped) and **4 MJC decisions are open** before coding.
+- [x] **The type-1 cohort gate landed as a column and a loader selection (2026-11-05, D23)** — `diagnosis_group` on the analysis-ready table from the FDA lookup; `filter_cohort` keeps the primary groups by default and every group on request. [t1d_filter_plan.md](t1d_filter_plan.md) is superseded by the cohort-table standard; its Databricks regen and the §8.1–8.4 re-run are the rebuild's.
+- [ ] **Run the NMA chain on the rebuilt FDA base tables (D23)** — the staging in `nma_pipeline.yml`'s order, the integration harness with a forced rebuild, the snapshot download, `analysis_7-1_cohort_flow.py --issued_csv <vintage snapshot>`, then §8.1–8.4 locally; RPT-1008 re-sync follows the report tools.
 - [ ] **Pseudonymize `_userId` in the FDA-pipeline exports too** (D16) — the FDA exports still write raw `_userId`; apply the same salted-hash-at-export treatment.
 - [ ] **Move NMA-day-frequency** (§4 secondary objective, bullet 3) out of `analysis_8-1` into a dedicated overview module (house CONSORT flow + PAF distribution there too). Table 8.1c stays in §8.1.
 - [ ] **Relocate the supplement outputs** per MJC ("move the supplement into the analysis folder") — clarify the exact target first; then update `lmm_weighting_sensitivity.py` `OUT_DIR` + `../docs/weighting_sensitivity.md`.
-- [ ] **Reconcile `nma_pipeline.yml`** — still references prior-scaffold phantom task names.
-- [ ] **FDA-pipeline wiring + test of the bolus classifier** (NMA-first was intentional; FDA deferred).
+- [x] **Reconcile `nma_pipeline.yml`** — done 2026-11-05: the real staging tasks with their files, after the FDA base tables.
+- [x] **FDA-pipeline wiring + test of the bolus classifier** — superseded 2026-11-05 (D23): the FDA dose classifier is the one classifier; the NMA reads it.
 
 ## Tests
 
@@ -60,7 +61,7 @@ Forward-looking checklist: where work stopped and what's blocked. Past-tense det
 
 - [x] **PLN-1001 inclusion-criteria carry-over — CONFIRMED: yes (MJC, 2026-06-09).** The PLN-1001 inclusion criteria (Loop <3.4.0, PAF=0.4, age ≥6, CGM ≥70%; plan lines 890–896) carry over to PLN-1008 — the prior working assumption is confirmed. _Worth a decisions.md entry for regulatory provenance._
 - [ ] **User-local day boundary** — all day-grain tables key on the UTC date; a `timezoneOffset` shift would change every day-grain table at once.
-- [ ] **Strategy "ambiguous" tie-cases** — how to label days with non-zero AB *and* non-zero manual counts below the §7.3 threshold.
+- [x] **Strategy "ambiguous" tie-cases** — settled 2026-11-05 (D23): a day the day table puts in neither class has a NULL `delivery_strategy`, stays in the universe and the analysis cohort, and is in no strategy contrast (`in_strategy_contrast` false).
 
 ## Flag for the report editor
 

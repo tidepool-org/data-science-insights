@@ -1,16 +1,14 @@
 """
 Unit test for export_ab_day_cohort.py.
 
-Tests: the type-1 restriction, the AB day read from the day projection's
-is_autobolus_day (a day of 2 automated boluses or of temporary basals is not
-one), the version-first / date-fallback rule for a NULL version and the
-version_int = 0 trap, the age gate (>= 6 on
-the day, DOB-unknown passes, young child fails), the daily coverage gate at the
-200/201 boundary with the plausibility filter, the eligible-vs-outcome day
-split, per-user first_eligible_ab_day (NULL when the user has none), and the
-LADA contingency switch: default off excludes LADA users and emits no is_lada
-column (bit-identical to today); include_lada=True admits them, carries
-is_lada per row, and leaves the type-1 rows untouched.
+Tests: every diagnosis group carried as a column (type 2 and LADA users keep
+their rows; a user absent from the lookup is 'unknown'), the AB day read from
+the day projection's is_autobolus_day (a day of 2 automated boluses or of
+temporary basals is not one), the version-first / date-fallback rule for a
+NULL version and the version_int = 0 trap, the age gate (>= 6 on the day,
+DOB-unknown passes, young child fails), the daily coverage gate at the 200/201
+boundary with the plausibility filter, the eligible-vs-outcome day split, and
+per-user first_eligible_ab_day (NULL when the user has none).
 
 Run on Databricks.
 """
@@ -46,10 +44,8 @@ LOOP_CBG_TABLE = f"{TEST_SCHEMA}._test_abdc_cbg"
 USER_DATES_TABLE = f"{TEST_SCHEMA}._test_abdc_user_dates"
 DIAGNOSIS_TABLE = f"{TEST_SCHEMA}._test_abdc_diagnosis"
 OUTPUT_TABLE = f"{TEST_SCHEMA}._test_abdc_output"
-OUTPUT_TABLE_LADA = f"{TEST_SCHEMA}._test_abdc_output_lada"
 
-ALL_TABLES = [LOOP_RECS_TABLE, LOOP_CBG_TABLE, USER_DATES_TABLE, DIAGNOSIS_TABLE,
-              OUTPUT_TABLE, OUTPUT_TABLE_LADA]
+ALL_TABLES = [LOOP_RECS_TABLE, LOOP_CBG_TABLE, USER_DATES_TABLE, DIAGNOSIS_TABLE, OUTPUT_TABLE]
 
 # --- Test data ---
 
@@ -82,12 +78,15 @@ def cbg_day(user, day, n_plausible, n_implausible=0):
     return rows
 
 
+# The lookup's columns the staging reads: the resolved diagnosis and the two
+# raw labels the LADA expression reads (cohort_constants); user_absent is
+# in the day table but not here.
 diagnosis_rows = [
-    {"_userId": "user_a", "diagnosis_type": "type1", "is_lada": False},
-    {"_userId": "user_b", "diagnosis_type": "type1", "is_lada": False},
-    {"_userId": "user_kid", "diagnosis_type": "type1", "is_lada": False},
-    {"_userId": "user_t2", "diagnosis_type": "type2", "is_lada": False},
-    {"_userId": "user_lada", "diagnosis_type": "lada", "is_lada": True},
+    {"_userId": "user_a", "diagnosis_type": "type1", "diagnosis_patients": "type1", "diagnosis_seagull": None},
+    {"_userId": "user_b", "diagnosis_type": "type1", "diagnosis_patients": None, "diagnosis_seagull": "type1"},
+    {"_userId": "user_kid", "diagnosis_type": "type1", "diagnosis_patients": "type1", "diagnosis_seagull": None},
+    {"_userId": "user_t2", "diagnosis_type": "type2", "diagnosis_patients": "type2", "diagnosis_seagull": None},
+    {"_userId": "user_lada", "diagnosis_type": "lada", "diagnosis_patients": "LADA", "diagnosis_seagull": None},
 ]
 
 user_dates_rows = [
@@ -111,11 +110,12 @@ loop_recs_rows = [
     rec("user_b", date(2024, 8, 1), boluses=5, loop_version=None, version_int=0),             # 0 -> date rule, post-cutoff
     # user_kid: AB day but age ~3.6 -> never eligible.
     rec("user_kid", date(2024, 1, 1), boluses=5),
-    # user_t2: excluded entirely by the diagnosis gate.
+    # user_t2 and user_lada: kept with their diagnosis groups (a column, never
+    # a filter); DOB unknown -> age-eligible; version-eligible AB days.
     rec("user_t2", date(2024, 1, 1), boluses=5),
-    # user_lada: excluded by default; admitted only under include_lada=True
-    # (DOB unknown -> age-eligible; version-eligible AB day).
     rec("user_lada", date(2024, 1, 1), boluses=5),
+    # user_absent: not in the lookup -> group 'unknown'.
+    rec("user_absent", date(2024, 1, 1), boluses=5),
 ]
 
 loop_cbg_rows = (
@@ -143,13 +143,17 @@ try:
     result = read_test_output(spark, OUTPUT_TABLE)
     by_key = {(r["_userId"], r["day"]): r for _, r in result.iterrows()}
 
-    # 1. 11 rows: user_a 6 + user_b 4 + user_kid 1; user_t2 and user_lada
-    #    excluded by the type-1 gate, and no is_lada column by default.
-    assert_row_count(result, 11, "ab_day_cohort rows")
-    assert "user_t2" not in set(result["_userId"]), "type-2 user should be excluded"
-    assert "user_lada" not in set(result["_userId"]), "LADA user should be excluded by default"
-    assert "is_lada" not in result.columns, "default output must not carry is_lada"
-    print("PASS: type-1 restriction (LADA excluded, no is_lada column)")
+    # 1. 14 rows: user_a 6 + user_b 4 + user_kid 1 + user_t2 1 + user_lada 1
+    #    + user_absent 1; every group carried as a column, the primary flag
+    #    on the type-1 rows only.
+    assert_row_count(result, 14, "ab_day_cohort rows")
+    groups = result.drop_duplicates("_userId").set_index("_userId")["diagnosis_group"].to_dict()
+    assert groups == {"user_a": "type1", "user_b": "type1", "user_kid": "type1", "user_t2": "type2",
+                      "user_lada": "lada", "user_absent": "unknown"}, groups
+    primary = result.drop_duplicates("_userId").set_index("_userId")["is_primary_diagnosis"]
+    assert bool(primary["user_a"]) and not bool(primary["user_t2"]) and not bool(primary["user_lada"])
+    assert bool(by_key[("user_t2", date(2024, 1, 1))]["is_eligible_ab_day"]), "a type-2 user's day is still flagged"
+    print("PASS: every diagnosis group carried as a column")
 
     # 2. The AB day is the projection's is_autobolus_day: 2 automated boluses
     #    or a temp-basal day are not AB days.
@@ -198,34 +202,12 @@ try:
     assert pd.isna(by_key[("user_kid", date(2024, 1, 1))]["first_eligible_ab_day"])
     print("PASS: per-user first_eligible_ab_day")
 
-    # 7. LADA contingency switch: include_lada=True admits user_lada (one
-    #    eligible AB day), carries is_lada on every row, and leaves the type-1
-    #    rows identical to the default build.
-    run(
-        spark,
-        output_table=OUTPUT_TABLE_LADA,
-        loop_recommendations_table=LOOP_RECS_TABLE,
-        loop_cbg_table=LOOP_CBG_TABLE,
-        user_dates_table=USER_DATES_TABLE,
-        diagnosis_table=DIAGNOSIS_TABLE,
-        include_lada=True,
-    )
-    lada_result = read_test_output(spark, OUTPUT_TABLE_LADA)
-    assert_row_count(lada_result, 12, "ab_day_cohort rows (include_lada)")
-    assert "user_t2" not in set(lada_result["_userId"]), "type-2 user still excluded"
-    lada_row = lada_result[lada_result["_userId"] == "user_lada"].iloc[0]
-    assert bool(lada_row["is_lada"])
-    assert bool(lada_row["is_eligible_ab_day"]), "user_lada AB day should be eligible"
-    assert not lada_result[lada_result["_userId"] != "user_lada"]["is_lada"].any(), \
-        "type-1 rows must carry is_lada = False"
-    t1_subset = (
-        lada_result[lada_result["_userId"] != "user_lada"][list(result.columns)]
-        .sort_values(["_userId", "day"]).reset_index(drop=True)
-    )
-    default_sorted = result.sort_values(["_userId", "day"]).reset_index(drop=True)
-    assert t1_subset.equals(default_sorted), \
-        "include_lada must not change the type-1 rows"
-    print("PASS: include_lada admits LADA users without touching the type-1 rows")
+    # 7. The predicates equal the flags they combine, on every row.
+    for _, row in result.iterrows():
+        eligible = bool(row["is_ab_day"]) and bool(row["is_version_eligible"]) and bool(row["is_age_eligible"])
+        assert bool(row["is_eligible_ab_day"]) == eligible, (row["_userId"], row["day"])
+        assert bool(row["is_outcome_day"]) == (eligible and bool(row["is_coverage_ok"])), (row["_userId"], row["day"])
+    print("PASS: the eligible and outcome predicates equal their flags")
 
     print("\nAll tests passed.")
 

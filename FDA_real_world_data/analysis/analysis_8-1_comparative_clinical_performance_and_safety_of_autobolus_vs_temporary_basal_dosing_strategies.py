@@ -6,9 +6,10 @@ FDA 510(k) Submission: Loop Autobolus Feature
 
 Objective: Evaluate the performance and safety of the 40% PAF parameter.
 
-Inputs:
-- dev.fda_510k_rwd.glycemic_endpoints_transition  (long: _userId, segment, tir, tbr, ..., hypo_events)
-- dev.fda_510k_rwd.valid_transition_guardrails     (_userId, violation_count)
+Inputs (through utils.data_loading.load_transition_endpoints, 2026-11-05):
+- dev.fda_510k_rwd.transition_cohort{suffix}       (one row per window, a boolean per criterion, the
+                                                    diagnosis group; in_transition_cohort selects the cohort)
+- dev.fda_510k_rwd.glycemic_endpoints_transition{suffix}  (long: _userId, segment, tir, tbr, ..., hypo_events)
 
 Outputs:
 - Table 8.1a (parametric): Glycemic Endpoints by Delivery Strategy — Mean ± SD,
@@ -28,6 +29,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, Optional, Tuple
 import os
+import shutil
 
 # Configuration
 NORMALITY_ALPHA = 0.05
@@ -742,6 +744,8 @@ def run_analysis(spark, output_dir=None, suffix: str = ""):
     # a suffixed build (a window-rule or classifier variant) names itself on
     # every figure; the production build's titles carry nothing
     cohort_note = f"Variant build {suffix}, not the production cohort" if suffix else ""
+    # The analysis owns its output folder (STYLE.md §5).
+    shutil.rmtree(output_dir, ignore_errors=True)
     results = write_outputs(df, df_all, output_dir, cohort_note)
 
     print("\n" + "=" * 60)

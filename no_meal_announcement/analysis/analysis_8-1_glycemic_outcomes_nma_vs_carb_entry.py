@@ -89,7 +89,6 @@ from utils.data_loader import (  # noqa: E402
     FIGURE_ARMS,
     HIGH_MA_FLAG,
     HIGH_MA_LABEL,
-    MIN_AGE,
     SUPPLEMENT_ARMS,
     WINDOW_DAYS,
     WINDOW_HALF,
@@ -839,7 +838,6 @@ def run(
     analysis_ready_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
     output_dir=None,
     cohort: Literal["adult", "pediatric", "all"] = "all",
-    min_age=MIN_AGE,
     csv_path=None,
     figures_only=False,
     figs_filter=None,
@@ -847,7 +845,7 @@ def run(
     """Run Analysis 8.1 for one age cohort. Outputs land in
     outputs/analysis_8_1/<cohort>/ unless an explicit output_dir is given.
 
-    `min_age` defaults to the §6 floor (MIN_AGE=6); pass None to disable.
+    
 
     Source priority: an explicit `csv_path`, else `spark.table(analysis_ready_table)` when
     a Spark session is given, else (running locally, no Spark) the CSV snapshot that
@@ -884,7 +882,7 @@ def run(
         pdf = prepare_day_level(pd.read_csv(csv_path))
     else:
         pdf = load_day_level(spark, analysis_ready_table)
-    pdf = filter_cohort(pdf, cohort=cohort, min_age=min_age)
+    pdf = filter_cohort(pdf, cohort=cohort)
     pdf = restrict_comparator(pdf)
 
     # ---- Tables (SLOW: LMM + cluster-bootstrap contrasts). Skipped under figures_only so a figure
@@ -959,18 +957,16 @@ def run(
 def main(
     spark=None,
     analysis_ready_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
-    min_age=MIN_AGE,
     csv_path=None,
     figures_only=False,
     figs_filter=None,
 ):
     """Orchestrate the §7.6 cohort split: adult and pediatric reported separately, plus a
-    pooled `all` sanity run. Each lands in its own outputs/analysis_8_1/<cohort>/ dir. The
-    §6 min-age floor (MIN_AGE=6) is applied to every cohort. Pass `csv_path` to run locally
+    pooled `all` sanity run. Each lands in its own outputs/analysis_8_1/<cohort>/ dir. Pass `csv_path` to run locally
     off the analysis-ready CSV snapshot (no Spark). figures_only / figs_filter forward the
     fast figure-only path to each cohort run."""
     for cohort in ("adult", "pediatric", "all"):
-        run(spark, analysis_ready_table, output_dir=None, cohort=cohort, min_age=min_age,
+        run(spark, analysis_ready_table, output_dir=None, cohort=cohort,
             csv_path=csv_path, figures_only=figures_only, figs_filter=figs_filter)
     # Combined Sample Information (Table 1) across the three cohorts (a table — skip in figures-only).
     if not (figures_only or figs_filter):
@@ -985,9 +981,6 @@ if __name__ == "__main__":
                               "outputs/<table-name>.csv when no Spark session is present")
     _parser.add_argument("--output_dir", default=None)
     _parser.add_argument("--cohort", default=None, choices=["adult", "pediatric", "all"])
-    _parser.add_argument("--min_age", type=int, default=MIN_AGE,
-                         help=f"§6 min-age floor in years (default {MIN_AGE}); known-younger "
-                              "users dropped, unknown-age retained")
     _parser.add_argument("--figures-only", dest="figures_only", action="store_true",
                          help="re-render figures only, skipping the slow LMM/bootstrap table writes "
                               "(do a full run first so the tables exist)")
@@ -1005,9 +998,9 @@ if __name__ == "__main__":
         _spark = None
 
     if _args.cohort is None:
-        main(_spark, _args.analysis_ready_table, min_age=_args.min_age, csv_path=_args.csv_path,
+        main(_spark, _args.analysis_ready_table, csv_path=_args.csv_path,
              figures_only=_args.figures_only, figs_filter=_args.figs_filter)
     else:
         run(_spark, _args.analysis_ready_table, _args.output_dir,
-            cohort=_args.cohort, min_age=_args.min_age, csv_path=_args.csv_path,
+            cohort=_args.cohort, csv_path=_args.csv_path,
             figures_only=_args.figures_only, figs_filter=_args.figs_filter)

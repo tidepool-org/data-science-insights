@@ -32,6 +32,7 @@ Outputs (local `--mode figures`, from partner-returned summary CSV):
 
 import argparse
 import os
+import shutil
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -39,7 +40,7 @@ import pandas as pd
 from scipy.stats import beta as beta_dist
 
 from utils.constants import COLORS_ACCENT, COLORS_PRIMARY, COLORS_SECONDARY, FONT
-from utils.data_loading import load_type1_user_ids
+from utils.data_loading import load_durability_cohort
 
 OUTPUT_DIR = "outputs/analysis_8_7"
 
@@ -61,43 +62,14 @@ SUBGROUP_ORDER = [
 
 
 def load_durability(spark, table_suffix: str = "") -> pd.DataFrame:
-    """Load the autobolus durability table, filtered to qualified users."""
-    df = spark.table(f"dev.fda_510k_rwd.autobolus_durability{table_suffix}").toPandas()
-
-    n_total = len(df)
-    df = df[
-        (df["is_adopted"] == True)  # noqa: E712
-        & (df["has_min_followup"] == True)  # noqa: E712
-        & (df["has_final_coverage"] == True)  # noqa: E712
-        & (df["is_age_eligible"] == True)  # noqa: E712
-    ].copy()
-
-    # Diagnosis gate: confirmed type-1 users only (FDA Loop indication).
-    type1_ids = load_type1_user_ids(spark)
-    pre_dx = len(df)
-    df = df[df["_userId"].isin(type1_ids)].copy()
-    print(f"  Type-1 filter kept {len(df)}/{pre_dx} qualified users")
-
-    for col in df.select_dtypes(include=["object"]).columns:
-        if col not in ("_userId", "gender"):
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    print(f"  Loaded {len(df)} qualified users (from {n_total} total)")
+    """The qualified users of autobolus_durability{table_suffix}: adopted,
+    followed up, a classifiable final period, age-eligible
+    (in_durability_cohort, asserted by the loader), the primary diagnosis
+    group. The frame carries the partner identifier (`jaeb_pt_id`) of the
+    users the hand-off exports."""
+    df = load_durability_cohort(spark, table_suffix=table_suffix)
+    print(f"  Loaded {len(df)} qualified users")
     return df
-
-
-def load_jaeb_map(spark) -> pd.DataFrame:
-    """Load PtID ↔ _userId linkage via uploadID join."""
-    jaeb_map = spark.sql("""
-        --begin-sql
-        SELECT DISTINCT j.PtID, b._userId
-        FROM dev.default.jaeb_upload_to_userid j
-        INNER JOIN dev.default.bddp_sample_all_2 b
-            ON j.uploadID = b.uploadID
-    ;
-    """).toPandas()
-    print(f"  JAEB-linked users in mapping table: {jaeb_map['_userId'].nunique()}")
-    return jaeb_map
 
 
 def load_event_times(spark, qualified_user_ids: set, table_suffix: str = "") -> pd.DataFrame:
@@ -388,9 +360,12 @@ def create_figure_8_7c(events: pd.DataFrame, filepath: str):
 # =============================================================================
 
 
-def export_by_jaeb_id(durability: pd.DataFrame, jaeb_map: pd.DataFrame, output_dir: str) -> pd.DataFrame:
-    """Per-user durability metrics keyed by JAEB PtID. Inner-joins qualified users
-    with the JAEB mapping; one row per PtID."""
+def export_by_jaeb_id(durability: pd.DataFrame, output_dir: str) -> pd.DataFrame:
+    """Per-user durability metrics keyed by the JAEB participant identifier:
+    the qualified users with a partner identifier (the staged
+    `jaeb_pt_id`, one per user), one row per PtID. The adoption date is
+    exported as days from the user's first observed dosing day, not as a
+    calendar date (docs/pipeline_map.md section 8, item 7)."""
     out_cols = [
         "PtID",
         "is_discontinued",
@@ -400,11 +375,12 @@ def export_by_jaeb_id(durability: pd.DataFrame, jaeb_map: pd.DataFrame, output_d
         "final_autobolus_pct",
         "final_days_with_data",
         "final_period_coverage",
-        "adoption_date",
+        "days_to_adoption",
     ]
 
-    merged = durability.merge(jaeb_map, on="_userId", how="inner")
-    merged = merged.drop_duplicates(subset="PtID")
+    merged = durability[durability["is_jaeb_linked"].eq(True)].copy()
+    merged = merged.rename(columns={"jaeb_pt_id": "PtID"})
+    assert merged["PtID"].is_unique, "the staged JAEB linkage is one identifier per user"
     print(f"  Users after JAEB linkage: {len(merged)}")
 
     out_df = merged[out_cols].sort_values("PtID").reset_index(drop=True)
@@ -428,6 +404,8 @@ def run_analysis(spark, output_dir=None, suffix: str = "", table_suffix: str = "
     # (production_runs/run_all_coverages.py passes the same value as `suffix`).
     if output_dir is None:
         output_dir = OUTPUT_DIR + suffix
+    # The analysis owns its output folder (STYLE.md §5).
+    shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)
@@ -466,8 +444,7 @@ def run_analysis(spark, output_dir=None, suffix: str = "", table_suffix: str = "
 
     # --- Per-user JAEB export (additive; does not affect cohort for tables/figures above) ---
     print("\n7. Exporting per-user durability keyed by JAEB PtID...")
-    jaeb_map = load_jaeb_map(spark)
-    export_by_jaeb_id(durability, jaeb_map, output_dir)
+    export_by_jaeb_id(durability, output_dir)
 
     # --- Summary statistics ---
     print("\n8. Summary statistics:")

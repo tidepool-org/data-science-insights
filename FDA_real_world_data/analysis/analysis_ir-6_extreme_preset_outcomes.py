@@ -16,11 +16,10 @@ Design decisions (plan: Drive 510k/claude/IR6/, 2026-08-20):
   extreme activation anywhere in S1-S3; all three bars show the SAME users.
   Each bar splits its n into "active" (had a category activation in that
   segment) vs "carried" (member via another segment only).
-- Whole-segment endpoints are computed HERE from loop_cbg x the rank-1
-  segment windows via the staging compute_glycemic_endpoints() function
-  (same bands / hypo detector as every staged endpoint table) because
-  glycemic_endpoints_transition has no seg3 rows; S1/S2 values are
-  cross-checked against that table in the data checks.
+- Whole-segment endpoints come from the shared glycemic_endpoints_transition
+  table, which carries all three periods since 2026-11-06 (the staging
+  export_extreme_preset_cohort.py joins them per member user and period),
+  so the §8 analyses and IR-6 read one computation.
 - The standard transition-analysis CGM-coverage criterion (>= 70% of
   expected readings over the 14-day segment, MIN_CBG_COUNT) is applied per
   user-segment; excluded user-segments are counted in Table IR-6b. Per-bar
@@ -62,33 +61,34 @@ from utils.constants import (  # noqa: E402
     COLORS_STACKED_BAR,
     FONT,
 )
-from utils.data_loading import (  # noqa: E402
-    CATALOG,
-    MIN_CBG_COUNT,
-    load_allowed_transition_segments,
+from utils.cohort_flow import (  # noqa: E402
+    assert_monotone,
+    count_flow,
+    extreme_preset_stages,
+    widen_flow,
 )
+from utils.data_loading import (  # noqa: E402
+    load_extreme_preset_activations,
+    load_extreme_preset_cohort,
+)
+from utils.figures import stacked_bar_with_callouts  # noqa: E402
 
-# compute_glycemic_endpoints lives in data_staging/ — resolve the subproject
-# root from the utils package location and put it on sys.path. (__file__ is
-# undefined when Databricks runs a Workspace .py via the Run button — it
-# executes as a notebook command under the hood — so this file's own path
-# can't be used.)
+# The category bounds live with the staging that applies them
+# (data_staging/export_extreme_preset_cohort.py, 2026-11-05); resolve the
+# subproject root from the utils package location and put it on sys.path.
+# (__file__ is undefined when Databricks runs a Workspace .py via the Run
+# button — it executes as a notebook command under the hood — so this file's
+# own path can't be used.)
 _SUBPROJECT_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(_constants_mod.__file__)))
 )
 sys.path.append(_SUBPROJECT_ROOT)
-from data_staging.compute_glycemic_endpoints import compute_glycemic_endpoints  # noqa: E402
+from data_staging.export_extreme_preset_cohort import (  # noqa: E402
+    CATEGORY_KEYS,
+    N_MARGINALS,
+)
 
 OUTPUT_DIR = "outputs/analysis_ir_6"
-
-# --- Extreme-preset definitions (locked 2026-08-19/20; see the IR6 plan) ----
-# Insulin needs: at or beyond the TL 2.0 guardrail bounds.
-NEEDS_LOW_MAX = 0.15    # needs <= 15%
-NEEDS_HIGH_MIN = 2.0    # needs >= 200%
-# Target bands with the +/- 0.5 mg/dL mmol-roundtrip tolerance (staged mg/dL
-# values are mmol/L * 18.018, so nominal integers land an epsilon off).
-TARGET_LOW_BAND_HIGH_MAX = 100.5   # own target high <= 100 -> low band
-TARGET_HIGH_BAND_LOW_MIN = 179.5   # own target low >= 180 -> high band
 
 SEGMENT_DAYS = 14
 MIN_PER_READING = 5   # CGM cadence; cbg_count -> hours
@@ -108,7 +108,9 @@ CATEGORIES = [
     ("needs_low_x_target_high",  "Needs ≤15% × target 180–250"),
     ("needs_high_x_target_high", "Needs ≥200% × target 180–250"),
 ]
-N_MARGINALS = 4  # CATEGORIES[:N_MARGINALS] are the marginals, rest the grid
+# The category keys are the staging's (CATEGORY_KEYS), the first N_MARGINALS
+# the marginals; the labels are this analysis's.
+assert tuple(key for key, _ in CATEGORIES) == CATEGORY_KEYS, "CATEGORIES drifted from the staging's keys"
 
 # Short category labels for the crowded violin x-axis.
 SHORT_LABELS = {
@@ -164,109 +166,29 @@ FALLBACK_COLOR = "#4F6D7A"  # non-range metrics (mean glucose, CV, hypo rate)
 # Data loading
 # =============================================================================
 
-def _derive_flags(acts: pd.DataFrame) -> pd.DataFrame:
-    """Insulin needs (basal factor, else 1/CR, else 1/ISF — the
-    derive_insulin_needs convention) and the six category flags."""
-    brsf, crsf, issf = acts["brsf"], acts["crsf"], acts["issf"]
-    needs = brsf.where(brsf > 0)
-    needs = needs.fillna(1.0 / crsf.where(crsf > 0))
-    needs = needs.fillna(1.0 / issf.where(issf > 0))
-    acts["needs_frac"] = needs
-
-    needs_low = (needs <= NEEDS_LOW_MAX).fillna(False)
-    needs_high = (needs >= NEEDS_HIGH_MIN).fillna(False)
-    target_low = (acts["bth"] <= TARGET_LOW_BAND_HIGH_MAX).fillna(False)
-    target_high = (acts["btl"] >= TARGET_HIGH_BAND_LOW_MIN).fillna(False)
-
-    acts["needs_le_15pct"] = needs_low
-    acts["needs_ge_200pct"] = needs_high
-    acts["target_low_band"] = target_low
-    acts["target_high_band"] = target_high
-    acts["needs_low_x_target_low"] = needs_low & target_low
-    acts["needs_low_x_target_high"] = needs_low & target_high
-    acts["needs_high_x_target_low"] = needs_high & target_low
-    acts["needs_high_x_target_high"] = needs_high & target_high
-    acts["any_extreme"] = needs_low | needs_high | target_low | target_high
-    return acts
-
-
 def load_data(spark):
-    """Flagged transition-window activations + whole-segment endpoints for
-    every extreme user, freshly computed from loop_cbg (seg1/2/3)."""
-    allowed = load_allowed_transition_segments(spark)
-    allowed.createOrReplaceTempView("ir6o_allowed_segments")
-
-    # Rank-1 window activations by eligible cohort users (grain A mechanics:
-    # overrides_by_segment is staged rank-1-only; the (user, seg1_start) join
-    # key pairs each activation with exactly one gated cohort row).
-    acts = spark.sql(f"""
-        SELECT
-          o._userId,
-          o.segment,
-          CAST(o.duration AS DOUBLE)                          AS duration,
-          TRY_CAST(o.basalRateScaleFactor AS DOUBLE)          AS brsf,
-          TRY_CAST(o.bg_target_low AS DOUBLE)                 AS btl,
-          TRY_CAST(o.bg_target_high AS DOUBLE)                AS bth,
-          TRY_CAST(o.carbRatioScaleFactor AS DOUBLE)          AS crsf,
-          TRY_CAST(o.insulinSensitivityScaleFactor AS DOUBLE) AS issf,
-          CAST(o.tb_to_ab_seg1_start AS STRING)               AS seg1_start,
-          CAST(o.tb_to_ab_seg1_end   AS STRING)               AS seg1_end,
-          CAST(o.tb_to_ab_seg2_start AS STRING)               AS seg2_start,
-          CAST(o.tb_to_ab_seg2_end   AS STRING)               AS seg2_end,
-          CAST(o.tb_to_ab_seg3_start AS STRING)               AS seg3_start,
-          CAST(o.tb_to_ab_seg3_end   AS STRING)               AS seg3_end
-        FROM {CATALOG}.overrides_by_segment o
-        JOIN ir6o_allowed_segments a
-          ON o._userId = a._userId
-         AND o.tb_to_ab_seg1_start = a.tb_to_ab_seg1_start
-    """).toPandas()
-    for col in ["duration", "brsf", "btl", "bth", "crsf", "issf"]:
+    """The extreme-preset activations and the member user-periods with their
+    whole-period endpoints, through the loaders (extreme_preset_activations
+    and extreme_preset_cohort, data_staging/export_extreme_preset_cohort.py;
+    the primary diagnosis group). Until 2026-11-05 this analysis derived the
+    category flags and computed the endpoints from loop_cbg itself."""
+    acts = load_extreme_preset_activations(spark)
+    for col in ["duration", "brsf", "btl", "bth", "crsf", "issf", "needs_frac"]:
         acts[col] = pd.to_numeric(acts[col], errors="coerce")
-    acts = _derive_flags(acts)
+    for key in CATEGORY_KEYS + ("any_extreme",):
+        acts[key] = acts[key].eq(True)
+    print(f"  Extreme users in the transition windows: "
+          f"{acts.loc[acts['any_extreme'], '_userId'].nunique()}")
 
-    member_users = sorted(acts.loc[acts["any_extreme"], "_userId"].unique())
-    print(f"  Extreme users in the transition windows: {len(member_users)}")
-
-    # One rank-1 window per member user; dates cross the driver boundary as
-    # strings (Spark Connect Arrow chokes on tz-naive pandas timestamps).
-    windows = (
-        acts.loc[acts["_userId"].isin(member_users),
-                 ["_userId", "seg1_start", "seg1_end", "seg2_start",
-                  "seg2_end", "seg3_start", "seg3_end"]]
-        .drop_duplicates("_userId")
-    )
-    spark.createDataFrame(windows).createOrReplaceTempView("ir6o_windows")
-
-    # Whole-segment CBG (S1/S2/S3) for the member users only, then the
-    # standard endpoint computation at (_userId, segment) grain.
-    cbg = spark.sql(f"""
-        SELECT
-          c._userId,
-          c.cbg_mg_dl,
-          c.cbg_timestamp,
-          CASE
-            WHEN CAST(c.cbg_timestamp AS DATE)
-                 BETWEEN CAST(w.seg1_start AS DATE) AND CAST(w.seg1_end AS DATE)
-              THEN 'tb_to_ab_seg1'
-            WHEN CAST(c.cbg_timestamp AS DATE)
-                 BETWEEN CAST(w.seg2_start AS DATE) AND CAST(w.seg2_end AS DATE)
-              THEN 'tb_to_ab_seg2'
-            WHEN CAST(c.cbg_timestamp AS DATE)
-                 BETWEEN CAST(w.seg3_start AS DATE) AND CAST(w.seg3_end AS DATE)
-              THEN 'tb_to_ab_seg3'
-          END AS segment
-        FROM {CATALOG}.loop_cbg c
-        JOIN ir6o_windows w ON c._userId = w._userId
-        WHERE CAST(c.cbg_timestamp AS DATE)
-              BETWEEN CAST(w.seg1_start AS DATE) AND CAST(w.seg3_end AS DATE)
-    """).where("segment IS NOT NULL")
-
-    endpoints = compute_glycemic_endpoints(
-        spark, cbg, group_cols=["_userId", "segment"]
-    ).toPandas()
+    # Every member user-period (the loader's predicate off), so the data
+    # checks can count the periods without CGM and below the coverage floor;
+    # the category frames keep in_extreme_cohort.
+    endpoints = load_extreme_preset_cohort(spark, predicate=None)
     for col in ["cbg_count", "tbr_very_low", "tbr", "tir", "tar",
                 "tar_very_high", "mean_glucose", "cv", "hypo_events"]:
         endpoints[col] = pd.to_numeric(endpoints[col], errors="coerce")
+    for col in ["has_cgm", "passes_cgm_coverage", "in_extreme_cohort"]:
+        endpoints[col] = endpoints[col].eq(True)
 
     # Disjoint stack bands from the cumulative columns, CGM hours, hypo rate.
     endpoints["band_lt54"] = endpoints["tbr_very_low"]
@@ -278,10 +200,9 @@ def load_data(spark):
     endpoints["hypo_rate_per_hour"] = (
         endpoints["hypo_events"] / endpoints["cgm_hours"]
     )
-    # Standard §8-1 coverage criterion, per user-segment: >= 70% of expected
-    # readings over the 14-day segment. Sub-threshold user-segments are
-    # excluded from the category frames; Table IR-6b reports the count.
-    endpoints["is_coverage_ok"] = endpoints["cbg_count"] >= MIN_CBG_COUNT
+    # The standard §8-1 coverage criterion per user-period is the staged
+    # passes_cgm_coverage; Table IR-6b reports the periods it removes.
+    endpoints["is_coverage_ok"] = endpoints["passes_cgm_coverage"]
     return acts, endpoints
 
 
@@ -304,7 +225,7 @@ def build_category_frames(acts: pd.DataFrame, endpoints: pd.DataFrame) -> dict:
             f = endpoints[
                 (endpoints["segment"] == seg)
                 & endpoints["_userId"].isin(members)
-                & endpoints["is_coverage_ok"]
+                & endpoints["in_extreme_cohort"]
             ].copy()
             f["is_active"] = f["_userId"].isin(active)
             f["exposure_hours"] = f["_userId"].map(exposure).fillna(0.0)
@@ -375,7 +296,7 @@ def create_table_ir6b(spark, acts, endpoints, frames) -> pd.DataFrame:
 
     # 2. Member-segment cells with no CGM at all (drop out of the bars).
     n_members = len(set().union(*(frames[k]["members"] for k, _ in CATEGORIES)))
-    have = endpoints.groupby("segment")["_userId"].nunique()
+    have = endpoints[endpoints["has_cgm"]].groupby("segment")["_userId"].nunique()
     for seg, seg_label in SEGMENTS:
         checks.append({
             "check": f"extreme users with no CGM in {seg_label}",
@@ -384,42 +305,16 @@ def create_table_ir6b(spark, acts, endpoints, frames) -> pd.DataFrame:
 
     # 3. Coverage gate accounting: user-segments below the 70% criterion
     #    (excluded from every frame above), and the minimum observed coverage.
-    n_low = int((~endpoints["is_coverage_ok"]).sum())
-    min_cov = float(endpoints["cbg_count"].min()) / (SEGMENT_DAYS * 288) * 100
+    with_cgm = endpoints[endpoints["has_cgm"]]
+    n_low = int((~with_cgm["is_coverage_ok"]).sum())
+    min_cov = float(with_cgm["cbg_count"].min()) / (SEGMENT_DAYS * 288) * 100 if len(with_cgm) else float("nan")
     checks.append({
         "check": "user-segments below 70% CGM coverage (excluded) / "
                  "minimum observed coverage (%)",
         "value": f"{n_low} / {min_cov:.1f}",
     })
 
-    # 4. S1/S2 cross-check against the staged transition endpoints: the same
-    #    (user, segment) whole-segment computation should reproduce the
-    #    staged table's values on the shared segments.
-    ref = spark.sql(f"""
-        SELECT g._userId, g.segment,
-               g.tir AS tir_ref, g.mean_glucose AS mean_glucose_ref
-        FROM {CATALOG}.glycemic_endpoints_transition g
-        JOIN ir6o_allowed_segments a
-          ON g._userId = a._userId
-         AND g.tb_to_ab_seg1_start = a.tb_to_ab_seg1_start
-        WHERE g.segment_rank = 1
-    """).toPandas()
-    for col in ["tir_ref", "mean_glucose_ref"]:
-        ref[col] = pd.to_numeric(ref[col], errors="coerce")
-    merged = endpoints.merge(ref, on=["_userId", "segment"], how="inner")
-    if len(merged):
-        checks.append({
-            "check": "S1/S2 cross-check vs glycemic_endpoints_transition "
-                     f"(n={len(merged)} user-segments): max |TIR diff| / "
-                     "max |mean glucose diff|",
-            "value": f"{(merged['tir'] - merged['tir_ref']).abs().max():.3f} / "
-                     f"{(merged['mean_glucose'] - merged['mean_glucose_ref']).abs().max():.3f}",
-        })
-    else:
-        checks.append({"check": "S1/S2 cross-check vs glycemic_endpoints_transition",
-                       "value": "no overlapping rows — investigate"})
-
-    # 5. Band closure: the five disjoint bands must sum to ~100 per user-segment.
+    # 4. Band closure: the five disjoint bands must sum to ~100 per user-segment.
     band_sum = (endpoints["band_lt54"] + endpoints["band_54_70"]
                 + endpoints["tir"] + endpoints["band_180_250"]
                 + endpoints["tar_very_high"])
@@ -448,37 +343,11 @@ def _stacked_panel(ax, info: dict, label: str):
 
     segs = info["segments"]
     x = np.arange(len(segs))
-    bottom = np.zeros(len(segs))
-    for band_label, col in RANGE_BANDS:
-        values = np.array([
-            seg["frame"][col].mean() if len(seg["frame"]) else 0.0
-            for seg in segs
-        ])
-        ax.bar(x, values, bottom=bottom, label=band_label,
-               color=COLORS_STACKED_BAR[band_label],
-               edgecolor="white", linewidth=0.6)
-        for xi, (value, base) in enumerate(zip(values, bottom)):
-            if value >= 6:
-                ax.text(xi, base + value / 2, f"{value:.1f}", ha="center",
-                        va="center", fontsize=FONT["annotation"],
-                        color="black")
-        bottom += values
-
-    # Below-range callouts (IR-2a style): <70 total left, <54 right.
     for xi, seg in enumerate(segs):
         f = seg["frame"]
-        if not len(f):
-            continue
-        lt54 = float(f["band_lt54"].mean())
-        tbr_mean = float(f["tbr"].mean())
-        for cx, y_anchor, text in [(xi - 0.16, tbr_mean, f"{tbr_mean:.1f}"),
-                                   (xi + 0.16, lt54, f"{lt54:.1f}")]:
-            ax.annotate(text, xy=(cx, y_anchor),
-                        xytext=(cx, y_anchor + 6.0),
-                        ha="center", va="bottom",
-                        fontsize=FONT["annotation"], color="black",
-                        arrowprops={"arrowstyle": "-", "color": "#555555",
-                                    "linewidth": 0.9})
+        means = {band_label: float(f[col].mean()) if len(f) else 0.0
+                 for band_label, col in RANGE_BANDS}
+        stacked_bar_with_callouts(ax, xi, means, width=0.6, legend=(xi == 0))
 
     labels = []
     for seg in segs:
@@ -683,6 +552,17 @@ def run_analysis(spark, output_dir=None):
 
     print("\n1. Loading activations + computing whole-segment endpoints...")
     acts, endpoints = load_data(spark)
+
+    print("\n1b. Cohort flow by diagnosis group (every member user-period)...")
+    every_group = load_extreme_preset_cohort(spark, diagnosis_groups=None, predicate=None)
+    for col in ["has_cgm", "passes_cgm_coverage", "in_extreme_cohort"]:
+        every_group[col] = every_group[col].eq(True)
+    flow = count_flow(every_group, extreme_preset_stages(), unit="user_periods")
+    assert_monotone(flow)
+    widen_flow(flow).to_csv(f"{output_dir}/table_ir6_cohort_flow_by_diagnosis_group.csv", index=False)
+    assert int(flow.loc[(flow["stage"] == "CGM coverage filter") & (flow["group"] == "primary"),
+                        "n_user_periods"].iloc[0]) == int(endpoints["in_extreme_cohort"].sum()), (
+        "the flow's final stage differs from the loaded cohort")
 
     print("\n2. Building category frames...")
     frames = build_category_frames(acts, endpoints)

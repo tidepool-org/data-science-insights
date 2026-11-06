@@ -30,7 +30,6 @@ from nma_test_helpers import (  # type: ignore # noqa: E402
     make_bolus_events,
     make_cbg_rows,
     make_cbg_rows_at_target_tir,
-    make_loop_recs,
 )
 
 # Imports FDA's BDDP_COLUMNS / BDDP_SCHEMA so the saved table matches
@@ -215,17 +214,17 @@ def _archetype_pediatric(uid="nma_user_pediatric"):
 
 
 def _archetype_ambiguous_strategy(uid="nma_user_ambiguous_strategy"):
-    """6.6 — 14 days of CE=0/BE=0 days with NO autobolus and NO TB recs.
-    All bolus activity comes from manual normal boluses; export_user_day_strategy
-    assigns `ambiguous` for every day."""
+    """6.6 — 14 days that are NEITHER class under the day table's rules: one
+    automated bolus a day (below the three an autobolus day needs), one manual
+    normal bolus, and no basal record, so the day projection recognises a dose
+    (the day stays in the universe) but sets neither flag. The analysis-ready
+    `delivery_strategy` is NULL on every day, and the user is in the analysis
+    cohort but in no delivery-strategy contrast (D23, choice 4)."""
     rows = []
     for d in range(14):
         day = START_DAY + timedelta(days=d)
         rows.extend(make_cbg_rows(uid, day))
-        # Replace the standard 5 autoboluses with 0 — manual boluses only.
-        # Use ce0_bele1 shape (1 non-meal) to keep BE>0 days for variety.
-        rows.extend(make_bolus_events(uid, day, n_meal=0, n_non_meal=1, n_autobolus=0))
-        rows.append(make_basal_row(uid, day))
+        rows.extend(make_bolus_events(uid, day, n_meal=0, n_non_meal=1, n_autobolus=1))
     return rows
 
 
@@ -513,52 +512,21 @@ def build_user_gender(spark, table_name: str) -> None:
     print(f"Wrote {len(rows)} gender rows to {table_name}")
 
 
-def build_loop_recommendations(spark, table_name: str) -> None:
-    """Write the synthetic `loop_recommendations` valid-day universe.
-
-    This FDA-produced table is the day anchor + Loop-version source for the NMA
-    pipeline (export_user_day_{bolus_classification,carbs,age,classification,
-    analysis_ready}). NMA does not rebuild it from BDDP, so the test seeds it
-    directly: one row per (user, day) over each archetype's window, via
-    make_loop_recs. loop_version='3.2.0' (version_int=3_002_000 < 3_004_000) so
-    days survive the §cohort Loop-version filter in analysis_ready.
-
-    The dosing-mode counts are unused by the current pipeline (delivery_strategy
-    now derives from the bolus classifier's automatic_bolus_count), so every user
-    is emitted as 'autobolus' for simplicity.
-    """
-    rows = []
-    for uid, n_days in ARCHETYPE_DAYS.items():
-        rows.extend(make_loop_recs(uid, START_DAY, n_days, dosing_mode="autobolus"))
-    pdf = pd.DataFrame(rows, columns=[
-        "_userId", "day", "dd_autobolus_count", "hk_autobolus_count",
-        "dd_temp_basal_count", "hk_temp_basal_count", "loop_version", "version_int",
-    ])
-    schema = (
-        "`_userId` string, `day` date, "
-        "`dd_autobolus_count` bigint, `hk_autobolus_count` bigint, "
-        "`dd_temp_basal_count` bigint, `hk_temp_basal_count` bigint, "
-        "`loop_version` string, `version_int` bigint"
-    )
-    spark.createDataFrame(pdf, schema=schema).write.mode("overwrite").saveAsTable(table_name)
-    print(f"Wrote {len(rows):,} loop_recommendations rows to {table_name}")
-
-
 def build_user_diagnosis_type(spark, table_name: str, loop_recommendations_table: str) -> None:
     """Write the synthetic `user_diagnosis_type` lookup — one row per synthetic Loop
     user, resolved diagnosis = 'type1'.
 
     Mirrors dev.fda_510k_rwd.user_diagnosis_type (FDA data_staging/
     export_user_diagnosis_type.py): the Loop-user universe is the distinct `_userId` in
-    loop_recommendations. export_user_day_analysis_ready LEFT JOINs this on the RAW
-    `_userId` (pre-hash) to carry `diagnosis_type`, and filter_cohort gates every cohort
-    on `diagnosis_type == 'type1'`. Marking every synthetic user type1 keeps the cohorts at
-    their pre-gate composition so the existing user-survival invariants hold; the gate's
-    *exclusion* path (type2/other/NULL dropped) is exercised by
-    testing/analysis/test_data_loader.py.
+    the day table. export_user_day_analysis_ready LEFT JOINs this on the RAW `_userId`
+    (pre-hash) and derives `diagnosis_group` from its label columns; the loader selects
+    the primary groups. Marking every synthetic user type1 keeps the cohorts at their
+    pre-selection composition so the existing user-survival invariants hold; the
+    selection's exclusion path (type 2, other, unknown left out of the primary) is
+    exercised by testing/analysis/test_data_loader.py.
 
     Columns match production: `_userId, diagnosis_patients, diagnosis_seagull, is_jaeb,
-    diagnosis_type`.
+    is_lada, diagnosis_type, diagnosis_group`.
     """
     spark.sql(f"""
         CREATE OR REPLACE TABLE {table_name} AS
@@ -567,7 +535,9 @@ def build_user_diagnosis_type(spark, table_name: str, loop_recommendations_table
             'type1'              AS diagnosis_patients,
             CAST(NULL AS STRING) AS diagnosis_seagull,
             FALSE                AS is_jaeb,
-            'type1'              AS diagnosis_type
+            FALSE                AS is_lada,
+            'type1'              AS diagnosis_type,
+            'type1'              AS diagnosis_group
         FROM {loop_recommendations_table}
     """)
     n = spark.table(table_name).count()

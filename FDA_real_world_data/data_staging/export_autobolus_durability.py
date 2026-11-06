@@ -1,4 +1,28 @@
 import argparse
+import os
+import sys
+
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _HERE = os.path.join(
+        os.environ.get(
+            "FDA_RWD_ROOT",
+            "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data",
+        ),
+        "data_staging",
+    )
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from cohort_constants import (  # noqa: E402
+    MIN_AGE_YEARS,
+    PRIMARY_DIAGNOSIS_GROUPS,
+    diagnosis_group_sql,
+    is_lada_sql,
+    jaeb_link_sql,
+)
 
 
 CATALOG = "dev.fda_510k_rwd"
@@ -20,7 +44,18 @@ def run(
     user_dates_table="dev.default.bddp_user_dates",
     user_gender_table="dev.default.user_gender",
     min_coverage=DEFAULT_MIN_COVERAGE,
+    diagnosis_table=f"{CATALOG}.user_diagnosis_type",
+    jaeb_table="dev.default.jaeb_upload_to_userid",
+    bddp_table="dev.default.bddp_sample_all_2",
 ):
+    """One row per Loop user with the adoption-durability facts and, since
+    2026-11-05, the cohort criteria as columns (execution plan Step 3: this
+    table is the §8-7 population's cohort table), the diagnosis group, and
+    the JAEB study linkage the partner hand-off needs."""
+    primary_groups = ", ".join(f"'{g}'" for g in PRIMARY_DIAGNOSIS_GROUPS)
+    diagnosis_group = diagnosis_group_sql(
+        "d.diagnosis_type", is_lada_sql("d.diagnosis_patients", "d.diagnosis_seagull")
+    )
     spark.sql(f"""
     --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
@@ -151,14 +186,31 @@ def run(
         ON eb._userId = df._userId
         AND df.day BETWEEN DATE_SUB(eb.effective_last_day, 27) AND eb.effective_last_day
       GROUP BY eb._userId
-    )
+    ),
 
+    -- The diagnosis group of every user in the lookup (cohort_constants);
+    -- a user absent from it is 'unknown' below.
+    diagnosis AS (
+      SELECT d._userId, {diagnosis_group} AS diagnosis_group
+      FROM {diagnosis_table} d
+    ),
+
+    -- One partner identifier per user (cohort_constants.jaeb_link_sql).
+    jaeb AS (
+      {jaeb_link_sql(jaeb_table, bddp_table)}
+    ),
+
+    durability AS (
     SELECT
       u._userId,
       u.first_day,
       u.last_day,
 
       a.adoption_date,
+      -- Days from the user's first observed dosing day to adoption: the
+      -- partner hand-off carries this instead of the calendar date
+      -- (docs/pipeline_map.md section 8, item 7).
+      DATEDIFF(a.adoption_date, u.first_day) AS days_to_adoption,
       a.adoption_date IS NOT NULL AS is_adopted,
 
       DATEDIFF(u.last_day, a.adoption_date) AS days_post_adoption,
@@ -223,7 +275,14 @@ def run(
       g.gender,
       ROUND(DATEDIFF(a.adoption_date, dd.dob) / 365.25, 1) AS age_at_adoption,
       ROUND(DATEDIFF(a.adoption_date, dd.diagnosis_date) / 365.25, 1) AS years_lwd_at_adoption,
-      ROUND(DATEDIFF(a.adoption_date, dd.dob) / 365.25, 1) >= 6 OR dd.dob IS NULL AS is_age_eligible
+      -- The age gate at adoption (cohort_constants.MIN_AGE_YEARS; unknown
+      -- date of birth kept).
+      ROUND(DATEDIFF(a.adoption_date, dd.dob) / 365.25, 1) >= {MIN_AGE_YEARS} OR dd.dob IS NULL AS is_age_eligible,
+
+      COALESCE(dg.diagnosis_group, 'unknown') AS diagnosis_group,
+      COALESCE(dg.diagnosis_group, 'unknown') IN ({primary_groups}) AS is_primary_diagnosis,
+      j.jaeb_pt_id,
+      j.jaeb_pt_id IS NOT NULL AS is_jaeb_linked
 
     FROM user_bounds u
     CROSS JOIN params p
@@ -234,7 +293,21 @@ def run(
     LEFT JOIN pre_dropoff_period pdp ON u._userId = pdp._userId
     LEFT JOIN {user_dates_table} dd ON u._userId = dd.userid
     LEFT JOIN {user_gender_table} g ON u._userId = g.userid
-    ORDER BY u._userId
+    LEFT JOIN diagnosis dg ON u._userId = dg._userId
+    LEFT JOIN jaeb j ON u._userId = j._userId
+    )
+
+    -- The §8-7 cohort predicate, asserted by the loader: adopted, followed
+    -- up long enough, a classifiable final period, and age-eligible. The
+    -- diagnosis group is a column the loader selects on, never a filter.
+    SELECT
+      *,
+      COALESCE(is_adopted AND has_min_followup AND has_final_coverage AND is_age_eligible, FALSE)
+        AS in_durability_cohort,
+      COALESCE(is_adopted AND has_min_followup AND has_final_coverage AND is_age_eligible, FALSE)
+        AND is_jaeb_linked AS in_jaeb_cohort
+    FROM durability
+    ORDER BY _userId
     ;
     """)
 

@@ -77,12 +77,17 @@ def ov(user, ts, duration, brsf, low=None, high=None, end_day=None, veligible=Tr
     }
 
 
-def cohort(user, day, eligible=True, first=date(2024, 1, 5)):
+def cohort(user, day, eligible=True, first=date(2024, 1, 5), group="type1", outcome=True):
+    """One ab_day_cohort-shaped row; the diagnosis group and the outcome
+    flag are the columns the flags and groups tables carry through."""
     return {
         "_userId": user,
         "day": day,
         "is_eligible_ab_day": eligible,
         "first_eligible_ab_day": first,
+        "diagnosis_group": group,
+        "is_primary_diagnosis": group in ("type1", "type1 with LADA label"),
+        "is_outcome_day": eligible and outcome,
     }
 
 
@@ -390,6 +395,18 @@ try:
     assert int(by_user["u6"]["n_qualifying_activations"]) == 1
     assert int(by_user["u9"]["n_qualifying_activations"]) == 1
     print("PASS: five-group rollup, zero-fill, depends_on_indeterminate, counts")
+
+    # 9. The cohort columns of 2026-11-05: the diagnosis group and the outcome
+    #    predicate on the groups table, the diagnosis group and the IR-3
+    #    predicate on every activation, each equal to the flags it combines.
+    for user, row in by_user.items():
+        assert row["diagnosis_group"] == "type1" and bool(row["is_primary_diagnosis"]), user
+        assert bool(row["in_outcome_cohort"]), f"{user}: every fixture user has an outcome day"
+    for _, row in flags.iterrows():
+        expected = bool(row["is_qualifying"]) and bool(row["is_all_days_ab"])
+        assert bool(row["in_characterization_cohort"]) == expected, (row["_userId"], row["override_time"])
+        assert row["diagnosis_group"] == ("type1" if row["_userId"] in EXPECTED_GROUPS else "unknown"), row["_userId"]
+    print("PASS: diagnosis group and the outcome and characterization predicates")
 
     print("\nAll tests passed.")
 

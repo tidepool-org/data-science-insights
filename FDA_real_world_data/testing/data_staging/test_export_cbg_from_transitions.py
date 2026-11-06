@@ -1,7 +1,7 @@
 """
 Unit test for export_cbg_from_transitions.py.
 
-Tests: CBG assignment to seg1/seg2, exclusion of CBG outside segment windows,
+Tests: CBG assignment to seg1/seg2/seg3, exclusion of CBG outside segment windows,
 exclusion of CBG in the gap between segments, and non-matching users.
 
 Run on Databricks.
@@ -39,7 +39,7 @@ OUTPUT_TABLE = f"{TEST_SCHEMA}._test_cft_output"
 
 ALL_TABLES = [CBG_TABLE, SEGMENTS_TABLE, OUTPUT_TABLE]
 
-# --- Transition segments: seg1 = Jan 1-14, seg2 = Jan 15-28 ---
+# --- Transition segments: seg1 = Jan 1-14, seg2 = Jan 15-28, seg3 = Jan 29 - Feb 11 ---
 segments_rows = [
     {
         "_userId": "user_a",
@@ -47,6 +47,8 @@ segments_rows = [
         "tb_to_ab_seg1_end": date(2025, 1, 14),
         "tb_to_ab_seg2_start": date(2025, 1, 15),
         "tb_to_ab_seg2_end": date(2025, 1, 28),
+        "tb_to_ab_seg3_start": date(2025, 1, 29),
+        "tb_to_ab_seg3_end": date(2025, 2, 11),
         "segment_rank": 1,
     },
 ]
@@ -68,10 +70,15 @@ cbg_rows = [
         "cbg_timestamp": datetime(2024, 12, 31, 12, 0),
         "cbg_mg_dl": 110.0,
     },
-    {  # Row 4: after seg2 — excluded
+    {  # Row 4: in seg3 — included as tb_to_ab_seg3 (2026-11-06; IR-6 reads it)
         "_userId": "user_a",
         "cbg_timestamp": datetime(2025, 1, 29, 12, 0),
         "cbg_mg_dl": 130.0,
+    },
+    {  # Row 6: after seg3 — excluded
+        "_userId": "user_a",
+        "cbg_timestamp": datetime(2025, 2, 12, 12, 0),
+        "cbg_mg_dl": 135.0,
     },
     {  # Row 5: non-matching user — excluded
         "_userId": "user_b",
@@ -95,32 +102,34 @@ try:
 
     result = read_test_output(spark, OUTPUT_TABLE)
 
-    # 1. Only 2 rows: seg1 and seg2 CBG readings for user_a
-    assert_row_count(result, 2, "CBG rows within transition segments")
+    # 1. Only 3 rows: the seg1, seg2, and seg3 readings of user_a
+    assert_row_count(result, 3, "CBG rows within the three periods")
 
     # 2. Correct segment labels
     assert_column_values(
-        result, "segment", ["tb_to_ab_seg1", "tb_to_ab_seg2"], "segment labels"
+        result, "segment", ["tb_to_ab_seg1", "tb_to_ab_seg2", "tb_to_ab_seg3"], "segment labels"
     )
 
     # 3. Only user_a
-    assert_column_values(result, "_userId", ["user_a", "user_a"], "user filtering")
+    assert_column_values(result, "_userId", ["user_a", "user_a", "user_a"], "user filtering")
 
     # 4. Correct glucose values mapped to correct segments
     seg1 = result[result["segment"] == "tb_to_ab_seg1"]
     assert seg1.iloc[0]["cbg_mg_dl"] == 120.0, "seg1 should have 120 mg/dL"
     seg2 = result[result["segment"] == "tb_to_ab_seg2"]
     assert seg2.iloc[0]["cbg_mg_dl"] == 140.0, "seg2 should have 140 mg/dL"
+    seg3 = result[result["segment"] == "tb_to_ab_seg3"]
+    assert seg3.iloc[0]["cbg_mg_dl"] == 130.0, "seg3 should have 130 mg/dL"
     print("PASS: glucose values correctly assigned to segments")
 
     # 5. Segment identifier and rank carried through
     assert_column_values(
         result, "tb_to_ab_seg1_start",
-        [date(2025, 1, 1), date(2025, 1, 1)],
+        [date(2025, 1, 1)] * 3,
         "tb_to_ab_seg1_start propagated",
     )
     assert_column_values(
-        result, "segment_rank", [1, 1], "segment_rank propagated",
+        result, "segment_rank", [1, 1, 1], "segment_rank propagated",
     )
 
     print("\nAll tests passed.")

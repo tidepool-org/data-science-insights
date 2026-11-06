@@ -135,9 +135,13 @@ def test_analysis_loaders_read_the_suffixed_tables():
     path = os.path.join(_here, "..", "..", "analysis", run_all_coverages.ANALYSIS_FILE)
     with open(path) as f:
         text = f.read()
+    # the durability table through the cohort loader (2026-11-05), the event
+    # times inline, both with the table suffix and never without it
+    assert text.count("load_durability_cohort(spark, table_suffix=table_suffix)") == 1, \
+        "8-7 must read autobolus_durability through load_durability_cohort with the table suffix"
+    assert text.count('spark.table(f"dev.fda_510k_rwd.autobolus_event_times{table_suffix}")') == 1, \
+        "8-7 must read autobolus_event_times with the table suffix"
     for table in ("autobolus_durability", "autobolus_event_times"):
-        call = f'spark.table(f"dev.fda_510k_rwd.{table}{{table_suffix}}")'
-        assert text.count(call) == 1, f"8-7 must read {table} with the table suffix"
         assert f'spark.table("dev.fda_510k_rwd.{table}")' not in text, (
             f"8-7 still reads {table} without the table suffix"
         )

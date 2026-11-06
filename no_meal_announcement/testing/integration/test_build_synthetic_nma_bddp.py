@@ -142,11 +142,15 @@ def test_pediatric_has_mixed_day_types():
 # 6.6 nma_user_ambiguous_strategy
 # ---------------------------------------------------------------------------
 
-def test_ambiguous_strategy_has_no_autobolus():
+def test_ambiguous_strategy_is_a_neither_day():
+    """One automated bolus a day (below the three an autobolus day needs), one manual
+    bolus, no basal record: the day projection sets neither flag (D23, choice 4)."""
     rows = nb._archetype_ambiguous_strategy()
-    assert len(_by_type(rows, "bolus", subtype="automated")) == 0
-    # Manual normal boluses present for strategy=ambiguous classification.
-    assert len(_by_type(rows, "bolus", subtype="normal")) == 14
+    boluses = _by_type(rows, "bolus", subtype="normal")
+    assert len(boluses) == 28
+    automated = [r for r in boluses if r.get("payload")]
+    assert len(automated) == 14, "one automated bolus a day"
+    assert len(_by_type(rows, "basal")) == 0, "no basal record, so no temp-basal day"
 
 
 # ---------------------------------------------------------------------------

@@ -53,13 +53,13 @@ def _d(n):
 # real table shape.
 ROWS = [
     {"_userId": "u1", "local_day": _d(1), "total_bolus_count": 5, "manual_bolus_count": 0,
-     "manual_normal_bolus_count": 0, "automatic_bolus_count": 5, "auto_hk_count": 5, "auto_dd_count": 0},
+     "manual_normal_bolus_count": 0, "automatic_bolus_count": 5},
     {"_userId": "u1", "local_day": _d(2), "total_bolus_count": 6, "manual_bolus_count": 1,
-     "manual_normal_bolus_count": 1, "automatic_bolus_count": 5, "auto_hk_count": 5, "auto_dd_count": 0},
+     "manual_normal_bolus_count": 1, "automatic_bolus_count": 5},
     {"_userId": "u1", "local_day": _d(3), "total_bolus_count": 9, "manual_bolus_count": 4,
-     "manual_normal_bolus_count": 4, "automatic_bolus_count": 5, "auto_hk_count": 5, "auto_dd_count": 0},
+     "manual_normal_bolus_count": 4, "automatic_bolus_count": 5},
     {"_userId": "u2", "local_day": _d(1), "total_bolus_count": 2, "manual_bolus_count": 2,
-     "manual_normal_bolus_count": 2, "automatic_bolus_count": 0, "auto_hk_count": 0, "auto_dd_count": 0},
+     "manual_normal_bolus_count": 2, "automatic_bolus_count": 0},
 ]
 
 try:

@@ -99,19 +99,25 @@ _SUBPROJECT_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(_constants_mod.__file__)))
 )
 sys.path.append(_SUBPROJECT_ROOT)
-from data_staging.compute_glycemic_endpoints import compute_glycemic_endpoints  # noqa: E402
+# The episode construction lives in the staging since 2026-11-05
+# (data_staging/export_dose_response_episodes.py): the plan's filters 1 to 7
+# are columns of dose_response_candidates and dose_response_episodes, which
+# this analysis reads through the loaders. The geometry constants are the
+# staging's.
+from data_staging.export_dose_response_episodes import READING_MINUTES  # noqa: E402
+from utils.cohort_flow import (  # noqa: E402
+    assert_monotone,
+    count_flow,
+    dose_response_stages,
+    widen_flow,
+)
+from utils.data_loading import (  # noqa: E402
+    load_dose_response_candidates,
+    load_dose_response_episodes,
+)
 
 OUTPUT_DIR = "outputs/analysis_ir_6b"
 CATALOG = "dev.fda_510k_rwd"
-
-# --- Episode construction (plan section 3; all settled decisions) -----------
-PRE_WINDOW_HOURS = 1          # baseline arm of the window
-POST_WINDOW_HOURS = 3         # post arm (absent for truncated episodes)
-MAX_DURATION_HOURS = 24       # longer activations truncate, never drop
-START_LOOKBACK_MINUTES = 30   # starting-glucose anchor lookback
-MIN_COVERAGE = 0.70           # readings / expected over the full window
-READING_MINUTES = 5           # CGM cadence
-HYPO_MAX_GAP_MINUTES = 15     # hypo runs cannot span a sensor dropout
 
 # --- Guardrail bounds (marketed envelope; drawn as vertical references) -----
 NEEDS_GUARDRAIL_LOW_PCT = 15
@@ -206,347 +212,28 @@ def round_half_up(values, decimals=0):
 # =============================================================================
 
 def build_episode_frames(spark):
-    """Build the per-episode frame, the candidate frame (for the funnel) and
-    the episode-tagged CGM Spark frame (for the hypo detector and parity).
-
-    Reads overrides_all and aligns each activation with the staged IR-1002
-    flags (C2 membership), and the user's rank-1 transition window (C1
-    membership + TB/AB phase); scores filters 3-5; joins the starting-glucose
-    anchor and the window CGM with per-band, per-phase reading counts.
+    """The per-episode frame (the filter-5 survivors of the candidate pool,
+    with their window CGM counts, starting glucose, hypo events, and
+    filters 6 and 7 as columns) and the candidate frame (the pool, with
+    filters 3 to 5 as columns) from the staged tables, the primary diagnosis
+    group, each loader asserting its table's predicates. The exposure
+    levels and the starting bins are derived here, one place.
     """
-    max_duration_seconds = MAX_DURATION_HOURS * 3600
-
-    spark.sql("SET TIME ZONE 'UTC'")
-
-    spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW ir6b_a_activations AS
-        WITH staged_flags AS (
-          SELECT _userId, override_time,
-                 is_qualifying, is_all_days_ab,
-                 is_p_violation, is_m_violation, is_m_indeterminate
-          FROM {CATALOG}.override_guardrail_flags
-        ),
-        transition_window AS (
-          -- The PLN-1001 transition cohort: rank-1 segment per user, with the
-          -- load_allowed_transition_segments gates (version, age, type-1,
-          -- pump-settings-guardrail exclusion). DISTINCT guards against a
-          -- duplicated userid upstream fanning out the user-level join.
-          SELECT DISTINCT
-            s._userId,
-            s.tb_to_ab_seg1_start, s.tb_to_ab_seg1_end,
-            s.tb_to_ab_seg2_start, s.tb_to_ab_seg2_end,
-            s.tb_to_ab_seg3_start, s.tb_to_ab_seg3_end
-          FROM {CATALOG}.valid_transition_segments s
-          WHERE s.segment_rank = 1
-            AND ((s.tb_to_ab_max_loop_version_int IS NOT NULL
-                  AND s.tb_to_ab_max_loop_version_int > 0
-                  AND s.tb_to_ab_max_loop_version_int < 3004000)
-              OR ((s.tb_to_ab_max_loop_version_int IS NULL OR s.tb_to_ab_max_loop_version_int = 0)
-                  AND s.tb_to_ab_seg2_end < DATE '2024-07-13'))
-            AND (s.tb_to_ab_age_years >= 6 OR s.tb_to_ab_age_years IS NULL)
-            AND s._userId IN (SELECT _userId FROM {CATALOG}.user_diagnosis_type
-                              WHERE diagnosis_type = 'type1')
-            AND NOT EXISTS (
-              SELECT 1 FROM {CATALOG}.valid_transition_guardrails v
-              WHERE v._userId = s._userId
-                AND TRY_CAST(v.segment_start AS DATE) = s.tb_to_ab_seg1_start
-                AND COALESCE(TRY_CAST(v.violation_count AS DOUBLE), 0) > 0
-            )
-        )
-        SELECT
-          o._userId,
-          o.override_time                                   AS t0,
-          o.override_day,
-          o.duration                                        AS duration_seconds,
-          (o.stated_duration IS NULL)                       AS is_indefinite,
-          (o.duration > {max_duration_seconds})             AS is_truncated,
-
-          -- grain memberships. The REPORT's transition cohort is the
-          -- SYMMETRIC fortnight pair seg1 (temp basal) | seg2 (first
-          -- autobolus fortnight) — settled 2026-08-26 (MC, supersedes plan
-          -- decision D10). Seg3, the second autobolus fortnight, stays OUT
-          -- of the report series but its label rides on every row
-          -- (transition_phase_extended = 'AB2'), so a seg3 cut is a
-          -- one-line filter — data and machinery retained (MC).
-          (tc._userId IS NOT NULL
-             AND o.override_day BETWEEN tc.tb_to_ab_seg1_start
-                                    AND tc.tb_to_ab_seg2_end) AS in_c1,
-          CASE
-            WHEN tc._userId IS NULL THEN NULL
-            WHEN o.override_day BETWEEN tc.tb_to_ab_seg1_start
-                                    AND tc.tb_to_ab_seg1_end THEN 'TB'
-            WHEN o.override_day BETWEEN tc.tb_to_ab_seg2_start
-                                    AND tc.tb_to_ab_seg2_end THEN 'AB'
-          END                                               AS transition_phase,
-          CASE
-            WHEN tc._userId IS NULL THEN NULL
-            WHEN o.override_day BETWEEN tc.tb_to_ab_seg1_start
-                                    AND tc.tb_to_ab_seg1_end THEN 'TB'
-            WHEN o.override_day BETWEEN tc.tb_to_ab_seg2_start
-                                    AND tc.tb_to_ab_seg2_end THEN 'AB'
-            WHEN o.override_day BETWEEN tc.tb_to_ab_seg3_start
-                                    AND tc.tb_to_ab_seg3_end THEN 'AB2'
-          END                                               AS transition_phase_extended,
-          COALESCE(f.is_qualifying AND f.is_all_days_ab
-                     AND NOT f.is_p_violation
-                     AND NOT f.is_m_violation
-                     AND NOT f.is_m_indeterminate, FALSE)   AS in_c2,
-          COALESCE(f.is_qualifying AND f.is_all_days_ab, FALSE)
-                                                            AS in_c2_base,
-
-          -- exposure axes: insulin needs by the derive_insulin_needs
-          -- convention (basal factor, else 1/CR, else 1/ISF, each guarded
-          -- positive); target midpoint only when both bounds exist; the raw
-          -- bounds ride along for the sentinel invariant and the safety-floor
-          -- sensitivity axis
-          o.basalRateScaleFactor,
-          o.carbRatioScaleFactor,
-          o.insulinSensitivityScaleFactor,
-          COALESCE(
-            CASE WHEN o.basalRateScaleFactor          > 0 THEN o.basalRateScaleFactor        END,
-            CASE WHEN o.carbRatioScaleFactor          > 0 THEN 1.0 / o.carbRatioScaleFactor  END,
-            CASE WHEN o.insulinSensitivityScaleFactor > 0 THEN 1.0 / o.insulinSensitivityScaleFactor END
-          )                                                 AS needs_fraction,
-          CASE
-            WHEN o.basalRateScaleFactor          > 0 THEN 'basal'
-            WHEN o.carbRatioScaleFactor          > 0 THEN 'cr_fallback'
-            WHEN o.insulinSensitivityScaleFactor > 0 THEN 'isf_fallback'
-            ELSE 'none'
-          END                                               AS needs_source,
-          o.bg_target_low                                   AS target_low,
-          o.bg_target_high                                  AS target_high,
-          CASE WHEN o.bg_target_low IS NOT NULL AND o.bg_target_high IS NOT NULL
-               THEN (o.bg_target_low + o.bg_target_high) / 2.0
-          END                                               AS target_midpoint,
-
-          -- window bounds; a truncated episode has no post arm
-          o.override_time - INTERVAL '{PRE_WINDOW_HOURS}' HOUR AS window_start,
-          CASE
-            WHEN o.duration > {max_duration_seconds}
-              THEN o.override_time + INTERVAL '{MAX_DURATION_HOURS}' HOUR
-            ELSE o.override_time + o.duration * INTERVAL '1' SECOND
-                                 + INTERVAL '{POST_WINDOW_HOURS}' HOUR
-          END                                               AS window_end,
-          o.override_time
-            + LEAST(o.duration, {max_duration_seconds}) * INTERVAL '1' SECOND
-                                                            AS during_end
-        FROM {CATALOG}.overrides_all o
-        LEFT JOIN staged_flags       f  ON f._userId = o._userId
-                                       AND f.override_time = o.override_time
-        LEFT JOIN transition_window  tc ON tc._userId = o._userId
-    """)
-
-    spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW ir6b_b_candidates AS
-        WITH neighbours AS (
-          -- Filter 4, FULL WINDOW DISJOINTNESS (settled 2026-08-25, MC):
-          -- every activation owns a hypothetical episode window, and an
-          -- episode is retained only if its window is disjoint from BOTH
-          -- neighbours' windows — equivalently, at least 4 hours from one
-          -- capped activation end to the next activation start. Symmetric by
-          -- construction: both members of a clashing pair fail (the earlier
-          -- rule was activation-vs-window and kept 3-4h cross-midnight pairs
-          -- whose tails shared readings). LAG/LEAD(1) suffice because the
-          -- window bounds are monotone in activation order: gap-clipping
-          -- bounds each window_end by the successor's t0 + 3h, and every
-          -- window_end is at least its own t0 + 3h.
-          SELECT
-            _userId, t0,
-            LAG(window_end)
-                OVER (PARTITION BY _userId ORDER BY t0) AS previous_window_end,
-            LEAD(window_start)
-                OVER (PARTITION BY _userId ORDER BY t0) AS next_window_start
-          FROM ir6b_a_activations
-        ),
-        activations_per_day AS (
-          -- Filter 3 counts activations of ANY kind: an out-of-grain
-          -- activation spoils the day too, since its glucose effect is
-          -- present either way.
-          SELECT _userId, override_day, COUNT(*) AS n_activations_on_day
-          FROM {CATALOG}.overrides_all
-          GROUP BY _userId, override_day
-        )
-        SELECT
-          a.*,
-          (d.n_activations_on_day = 1)                          AS pass_single_day,
-          (COALESCE(n.previous_window_end, TIMESTAMP '1900-01-01') <= a.window_start
-             AND COALESCE(n.next_window_start, TIMESTAMP '2999-01-01') >= a.window_end)
-                                                                AS pass_isolation,
-          (a.duration_seconds > 0)                              AS pass_duration
-        FROM ir6b_a_activations a
-        JOIN activations_per_day d ON d._userId = a._userId
-                                  AND d.override_day = a.override_day
-        JOIN neighbours          n ON n._userId = a._userId
-                                  AND n.t0 = a.t0
-        WHERE a.in_c1 OR a.in_c2
-    """)
-
-    spark.sql("""
-        CREATE OR REPLACE TEMP VIEW ir6b_c_survivors AS
-        SELECT * FROM ir6b_b_candidates
-        WHERE pass_single_day AND pass_isolation AND pass_duration
-    """)
-
-    # Episode-tagged CGM: every plausible reading inside a surviving episode's
-    # window, joined on (user, calendar day) from an exploded day list so
-    # Spark gets a real equi-join key instead of a per-user cross product.
-    spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW ir6b_d_window_cgm AS
-        WITH window_days AS (
-          SELECT _userId, t0, during_end,
-                 EXPLODE(sequence(
-                   CAST(window_start AS DATE),
-                   CAST(window_end - INTERVAL '1' SECOND AS DATE)
-                 )) AS window_day,
-                 window_start, window_end
-          FROM ir6b_c_survivors
-        )
-        SELECT
-          w._userId,
-          w.t0,
-          c.cbg_mg_dl,
-          c.cbg_timestamp,
-          CASE
-            WHEN c.cbg_timestamp <  w.t0         THEN 'pre'
-            WHEN c.cbg_timestamp <  w.during_end THEN 'during'
-            ELSE                                      'post'
-          END AS phase
-        FROM window_days w
-        JOIN {CATALOG}.loop_cbg c
-          ON  c._userId = w._userId
-          AND CAST(c.cbg_timestamp AS DATE) = w.window_day
-          AND c.is_plausible
-          AND c.cbg_timestamp >= w.window_start
-          AND c.cbg_timestamp <  w.window_end
-    """)
-
-    episodes = spark.sql(f"""
-        WITH anchor_days AS (
-          -- The two calendar days a 30-minute lookback can touch, exploded so
-          -- the CGM join gets a (user, day) equi-key.
-          SELECT _userId, t0,
-                 EXPLODE(ARRAY(CAST(t0 AS DATE),
-                               CAST(t0 - INTERVAL '1' DAY AS DATE))) AS anchor_day
-          FROM ir6b_c_survivors
-        ),
-        starting_glucose AS (
-          -- Single BG at session start: the latest plausible reading strictly
-          -- before t0 (a reading exactly at t0 is outcome time, not anchor).
-          SELECT _userId, t0, cbg_mg_dl AS starting_glucose, anchor_age_seconds
-          FROM (
-            SELECT d._userId, d.t0, c.cbg_mg_dl,
-                   UNIX_TIMESTAMP(d.t0) - UNIX_TIMESTAMP(c.cbg_timestamp)
-                     AS anchor_age_seconds,
-                   ROW_NUMBER() OVER (PARTITION BY d._userId, d.t0
-                                      ORDER BY c.cbg_timestamp DESC) AS rn
-            FROM anchor_days d
-            JOIN {CATALOG}.loop_cbg c
-              ON  c._userId = d._userId
-              AND CAST(c.cbg_timestamp AS DATE) = d.anchor_day
-              AND c.is_plausible
-              AND c.cbg_timestamp >= d.t0 - INTERVAL '{START_LOOKBACK_MINUTES}' MINUTE
-              AND c.cbg_timestamp <  d.t0
-          ) ranked WHERE rn = 1
-        ),
-        window_counts AS (
-          SELECT
-            _userId, t0,
-            COUNT(*)                                                    AS n_valid,
-            SUM(CASE WHEN phase = 'pre'    THEN 1 ELSE 0 END)           AS n_pre,
-            SUM(CASE WHEN phase = 'during' THEN 1 ELSE 0 END)           AS n_during,
-            SUM(CASE WHEN phase = 'post'   THEN 1 ELSE 0 END)           AS n_post,
-            SUM(CASE WHEN cbg_mg_dl <  54 THEN 1 ELSE 0 END)            AS n_below54,
-            SUM(CASE WHEN cbg_mg_dl <  70 THEN 1 ELSE 0 END)            AS n_below,
-            SUM(CASE WHEN cbg_mg_dl >= 70 AND cbg_mg_dl <= 180
-                     THEN 1 ELSE 0 END)                                 AS n_in,
-            SUM(CASE WHEN cbg_mg_dl > 180 THEN 1 ELSE 0 END)            AS n_above,
-            SUM(CASE WHEN cbg_mg_dl > 250 THEN 1 ELSE 0 END)            AS n_above250,
-            SUM(CASE WHEN phase = 'during' AND cbg_mg_dl < 70
-                     THEN 1 ELSE 0 END)                                 AS n_below_during,
-            SUM(CASE WHEN phase = 'during' AND cbg_mg_dl >= 70
-                      AND cbg_mg_dl <= 180 THEN 1 ELSE 0 END)           AS n_in_during,
-            SUM(CASE WHEN phase = 'during' AND cbg_mg_dl > 180
-                     THEN 1 ELSE 0 END)                                 AS n_above_during,
-            SUM(CASE WHEN phase = 'pre' AND cbg_mg_dl < 70
-                     THEN 1 ELSE 0 END)                                 AS n_below_pre,
-            SUM(CASE WHEN phase = 'pre' AND cbg_mg_dl >= 70
-                      AND cbg_mg_dl <= 180 THEN 1 ELSE 0 END)           AS n_in_pre,
-            SUM(CASE WHEN phase = 'pre' AND cbg_mg_dl > 180
-                     THEN 1 ELSE 0 END)                                 AS n_above_pre,
-            AVG(cbg_mg_dl)                                              AS mean_glucose,
-            STDDEV(cbg_mg_dl) * 100.0 / AVG(cbg_mg_dl)                  AS cv,
-            -- window-audit bounds for the hard invariant, kept as raw
-            -- timestamps: UNIX_TIMESTAMP floors to whole seconds, and a
-            -- floored comparison false-alarms whenever t0 carries fractional
-            -- seconds (a reading admitted just inside a fractional window_end
-            -- floors to exactly the span). The comparison happens below at
-            -- full precision instead.
-            MIN(cbg_timestamp)                                          AS first_reading_ts,
-            MAX(cbg_timestamp)                                          AS last_reading_ts
-          FROM ir6b_d_window_cgm
-          GROUP BY _userId, t0
-        )
-        SELECT
-          s._userId,
-          CAST(s.t0 AS STRING)                              AS t0,
-          s.is_indefinite, s.is_truncated,
-          s.in_c1, s.transition_phase, s.transition_phase_extended,
-          s.in_c2, s.in_c2_base,
-          s.needs_fraction, s.needs_source,
-          s.target_low, s.target_high, s.target_midpoint,
-          s.duration_seconds,
-          (UNIX_TIMESTAMP(s.window_end) - UNIX_TIMESTAMP(s.window_start)) / 60.0
-                                                            AS window_minutes,
-          b.starting_glucose,
-          b.anchor_age_seconds,
-          COALESCE(w.n_valid, 0)        AS n_valid,
-          COALESCE(w.n_pre, 0)          AS n_pre,
-          COALESCE(w.n_during, 0)       AS n_during,
-          COALESCE(w.n_post, 0)         AS n_post,
-          COALESCE(w.n_below54, 0)      AS n_below54,
-          COALESCE(w.n_below, 0)        AS n_below,
-          COALESCE(w.n_in, 0)           AS n_in,
-          COALESCE(w.n_above, 0)        AS n_above,
-          COALESCE(w.n_above250, 0)     AS n_above250,
-          COALESCE(w.n_below_during, 0) AS n_below_during,
-          COALESCE(w.n_in_during, 0)    AS n_in_during,
-          COALESCE(w.n_above_during, 0) AS n_above_during,
-          COALESCE(w.n_below_pre, 0)    AS n_below_pre,
-          COALESCE(w.n_in_pre, 0)       AS n_in_pre,
-          COALESCE(w.n_above_pre, 0)    AS n_above_pre,
-          w.mean_glucose,
-          w.cv,
-          -- Full-precision window audit (see the window_counts comment).
-          -- Scope honestly stated: both sides of this comparison share the
-          -- survivor row's window bounds, so it guards the CGM view's join
-          -- predicate (an edit or regression there fires it) — it cannot
-          -- independently re-derive the bounds themselves; those are pinned
-          -- by the synthetic fixture instead.
-          (w.first_reading_ts < s.window_start
-             OR w.last_reading_ts >= s.window_end)     AS has_reading_outside_window,
-          CAST(s.window_start AS STRING)               AS window_start,
-          CAST(s.window_end   AS STRING)               AS window_end,
-          CAST(s.override_day AS STRING)               AS override_day,
-          s.basalRateScaleFactor                       AS basal_rate_scale_factor,
-          s.carbRatioScaleFactor                       AS carb_ratio_scale_factor,
-          s.insulinSensitivityScaleFactor              AS insulin_sensitivity_scale_factor
-        FROM ir6b_c_survivors s
-        LEFT JOIN starting_glucose b ON b._userId = s._userId AND b.t0 = s.t0
-        LEFT JOIN window_counts    w ON w._userId = s._userId AND w.t0 = s.t0
-    """).toPandas()
+    episodes = load_dose_response_episodes(spark, predicate="is_survivor")
+    candidates = load_dose_response_candidates(spark, predicate="in_candidate_pool")
 
     for column in ["needs_fraction", "target_low", "target_high",
                    "target_midpoint", "starting_glucose", "anchor_age_seconds",
                    "mean_glucose", "cv", "window_minutes",
                    "basal_rate_scale_factor", "carb_ratio_scale_factor",
-                   "insulin_sensitivity_scale_factor"]:
+                   "insulin_sensitivity_scale_factor", "duration_seconds"]:
         episodes[column] = pd.to_numeric(episodes[column], errors="coerce")
-
-    # Filters 6-7, exposure levels and starting bins — pandas side, one place.
-    expected_readings = episodes["window_minutes"] / READING_MINUTES
-    episodes["pass_start_bg"] = episodes["starting_glucose"].notna()
-    episodes["pass_coverage"] = episodes["n_valid"] >= MIN_COVERAGE * expected_readings
-    episodes["is_retained"] = episodes["pass_start_bg"] & episodes["pass_coverage"]
+    for column in ["is_indefinite", "is_truncated", "in_c1", "in_c2", "in_c2_base",
+                   "pass_single_day", "pass_isolation", "pass_duration",
+                   "pass_start_bg", "pass_coverage", "is_retained",
+                   "in_series_C1a", "in_series_C1b", "in_series_C2",
+                   "has_reading_outside_window"]:
+        episodes[column] = episodes[column].eq(True)
 
     needs_pct = round_half_up(episodes["needs_fraction"] * 100)
     episodes["needs_pct"] = pd.array(
@@ -561,27 +248,35 @@ def build_episode_frames(spark):
         default=None,
     )
 
-    # Membership in the three reported series (C1b and C2 can overlap — an
-    # in-window AB activation that meets the guardrails is legitimately both).
-    episodes["in_series_C1a"] = episodes["in_c1"] & (episodes["transition_phase"] == "TB")
-    episodes["in_series_C1b"] = episodes["in_c1"] & (episodes["transition_phase"] == "AB")
-    episodes["in_series_C2"] = episodes["in_c2"]
-
-    candidates = spark.sql("""
-        SELECT _userId, CAST(t0 AS STRING) AS t0,
-               in_c1, transition_phase, in_c2, in_c2_base, is_indefinite,
-               needs_fraction, target_midpoint,
-               pass_single_day, pass_isolation, pass_duration
-        FROM ir6b_b_candidates
-    """).toPandas()
-    for column in ["needs_fraction", "target_midpoint"]:
+    for column in ["needs_fraction", "target_midpoint", "duration_seconds"]:
         candidates[column] = pd.to_numeric(candidates[column], errors="coerce")
-    candidates["in_series_C1a"] = candidates["in_c1"] & (candidates["transition_phase"] == "TB")
-    candidates["in_series_C1b"] = candidates["in_c1"] & (candidates["transition_phase"] == "AB")
-    candidates["in_series_C2"] = candidates["in_c2"]
+    for column in ["is_indefinite", "in_c1", "in_c2", "in_c2_base",
+                   "pass_single_day", "pass_isolation", "pass_duration",
+                   "in_series_C1a", "in_series_C1b", "in_series_C2", "is_survivor"]:
+        candidates[column] = candidates[column].eq(True)
+    return episodes, candidates
 
-    cgm_spark = spark.table("ir6b_d_window_cgm")
-    return episodes, candidates, cgm_spark
+
+def build_cohort_flows(spark):
+    """The population's flow per series by diagnosis group, counted from the
+    staged columns: every candidate of every group with the episode filters
+    joined on (False where the activation did not survive filters 3 to 5)."""
+    candidates = load_dose_response_candidates(spark, diagnosis_groups=None, predicate=None)
+    episodes = load_dose_response_episodes(spark, diagnosis_groups=None, predicate=None)
+    joined = candidates.merge(
+        episodes[["_userId", "t0", "pass_start_bg", "pass_coverage"]],
+        on=["_userId", "t0"], how="left", validate="one_to_one",
+    )
+    for column in ["pass_single_day", "pass_isolation", "pass_duration", "pass_start_bg",
+                   "pass_coverage", "in_series_C1a", "in_series_C1b", "in_series_C2"]:
+        joined[column] = joined[column].eq(True)
+    flows = {}
+    for series_key, _ in SERIES:
+        flow = count_flow(joined, dose_response_stages(series_key), unit="activations")
+        assert_monotone(flow)
+        flows[series_key] = widen_flow(flow, value="n_activations").merge(
+            widen_flow(flow), on=["stage", "description"], suffixes=("_activations", "_users"))
+    return flows
 
 
 def build_funnel(candidates, episodes):
@@ -628,34 +323,19 @@ def build_funnel(candidates, episodes):
     return pd.DataFrame(rows)
 
 
-def attach_hypo_and_parity(spark, episodes, cgm_spark):
-    """Hypo events per episode via the staging detector, plus the parity
-    recomputation: the staging function's counts and percentages must agree
-    with this script's own SQL counts. The merge is asserted one-to-one so a
-    silent key/type mismatch cannot make parity pass vacuously."""
-    endpoint_frame = compute_glycemic_endpoints(
-        spark,
-        cgm_spark.selectExpr("_userId", "CAST(t0 AS STRING) AS t0",
-                             "cbg_mg_dl", "cbg_timestamp"),
-        group_cols=["_userId", "t0"],
-        hypo_max_gap_minutes=HYPO_MAX_GAP_MINUTES,
-    ).toPandas()
-    for column in ["cbg_count", "tbr", "tir", "tar", "hypo_events"]:
-        endpoint_frame[column] = pd.to_numeric(endpoint_frame[column], errors="coerce")
+def attach_hypo_and_parity(episodes):
+    """Hypo events per episode from the staging detector's run over the
+    window readings (staged on dose_response_episodes), plus the parity
+    check: the staging endpoint function's count and percentages must agree
+    with the staging SQL's own counts over the same readings."""
+    episodes = episodes.copy()
+    episodes["hypo_events"] = pd.to_numeric(episodes["hypo_events"], errors="coerce").fillna(0).astype(int)
+    for staged, name in [("endpoint_cbg_count", "cbg_count"), ("endpoint_tbr", "tbr"),
+                         ("endpoint_tir", "tir"), ("endpoint_tar", "tar")]:
+        episodes[name] = pd.to_numeric(episodes[staged], errors="coerce")
 
-    row_count_before = len(episodes)
-    merged = episodes.merge(
-        endpoint_frame[["_userId", "t0", "cbg_count", "tbr", "tir", "tar",
-                        "hypo_events"]],
-        on=["_userId", "t0"], how="left", validate="one_to_one",
-    )
-    if len(merged) != row_count_before:
-        raise ValueError("hypo/parity merge changed the episode row count")
-    with_cgm_but_unmatched = int(
-        ((merged["n_valid"] > 0) & merged["cbg_count"].isna()).sum())
-    merged["hypo_events"] = merged["hypo_events"].fillna(0).astype(int)
-
-    with_cgm = merged[merged["n_valid"] > 0]
+    with_cgm = episodes[episodes["n_valid"] > 0]
+    with_cgm_but_unmatched = int(with_cgm["cbg_count"].isna().sum())
     count_mismatches = int((with_cgm["cbg_count"] != with_cgm["n_valid"]).sum())
     # identical operation order on both sides: k * 100.0 / n
     own_tb70 = with_cgm["n_below"] * 100.0 / with_cgm["n_valid"]
@@ -664,7 +344,7 @@ def attach_hypo_and_parity(spark, episodes, cgm_spark):
     parity = {"count_mismatches": count_mismatches,
               "max_percent_difference": max_percent_difference,
               "unmatched_with_cgm": with_cgm_but_unmatched}
-    return merged, parity
+    return episodes, parity
 
 
 # =============================================================================
@@ -779,7 +459,7 @@ def run_hard_invariants(spark, episodes, candidates, parity, funnel):
         WHERE is_qualifying AND is_all_days_ab
     """).collect()[0]["n"]
     activation_base = spark.sql(
-        "SELECT COUNT(*) AS n FROM ir6b_a_activations WHERE in_c2_base"
+        f"SELECT COUNT(*) AS n FROM {CATALOG}.dose_response_candidates WHERE in_c2_base"
     ).collect()[0]["n"]
     if staged_base != activation_base:
         failures.append(f"C2 base tie-out: staged flags say {staged_base}, "
@@ -792,10 +472,10 @@ def run_hard_invariants(spark, episodes, candidates, parity, funnel):
           FROM {CATALOG}.ab_day_cohort GROUP BY _userId, day
         )
         SELECT COUNT(*) AS n
-        FROM ir6b_b_candidates c
+        FROM {CATALOG}.dose_response_candidates c
         LEFT JOIN eligible_days d
           ON d._userId = c._userId AND d.day = c.override_day
-        WHERE c.in_c2 AND NOT COALESCE(d.is_eligible_ab_day, FALSE)
+        WHERE c.in_candidate_pool AND c.in_c2 AND NOT COALESCE(d.is_eligible_ab_day, FALSE)
     """).collect()[0]["n"]
     if c2_day_violations:
         failures.append(f"C2 day tie-out: {c2_day_violations} C2 activations "
@@ -1132,7 +812,7 @@ def create_data_checks(spark, episodes, parity, summary):
           FROM {CATALOG}.overrides_by_segment
         )
         SELECT s._userId, s.t0, s.staged_anchor
-        FROM staged s JOIN ir6b_c_survivors c
+        FROM staged s JOIN {CATALOG}.dose_response_episodes c
           ON c._userId = s._userId AND CAST(c.t0 AS STRING) = s.t0
         WHERE c.in_c1
     """).toPandas()
@@ -1158,7 +838,7 @@ def create_data_checks(spark, episodes, parity, summary):
           SUM(CASE WHEN a.needs_fraction >= 2.00 THEN 1 ELSE 0 END) AS needs_high,
           SUM(CASE WHEN a.target_high <= 100.5   THEN 1 ELSE 0 END) AS target_low_band,
           SUM(CASE WHEN a.target_low  >= 179.5   THEN 1 ELSE 0 END) AS target_high_band
-        FROM ir6b_a_activations a
+        FROM {CATALOG}.dose_response_candidates a
         JOIN {CATALOG}.override_guardrail_flags f
           ON f._userId = a._userId AND f.override_time = a.t0
         WHERE f.is_qualifying
@@ -1793,12 +1473,13 @@ def run_analysis(spark, output_dir=None):
     print("Analysis IR-6B: glycemia around preset activation vs configuration")
     print("=" * 60)
 
-    print("\n1. Building episodes (filters 1-7)...")
-    episodes, candidates, cgm_spark = build_episode_frames(spark)
+    print("\n1. Loading the staged episodes and candidates (filters 1-7)...")
+    episodes, candidates = build_episode_frames(spark)
     funnel = build_funnel(candidates, episodes)
+    flows = build_cohort_flows(spark)
 
     print("2. Hypo events + parity against the staging endpoint function...")
-    episodes, parity = attach_hypo_and_parity(spark, episodes, cgm_spark)
+    episodes, parity = attach_hypo_and_parity(episodes)
 
     print("3. Hard invariants (construction)...")
     run_hard_invariants(spark, episodes, candidates, parity, funnel)
@@ -1813,6 +1494,8 @@ def run_analysis(spark, output_dir=None):
 
     print("5. Tables...")
     tables = {"table_funnel.csv": funnel}
+    for series_key, flow in flows.items():
+        tables[f"table_cohort_flow_by_diagnosis_group_{series_key}.csv"] = flow
     for axis in PRIMARY_AXES:
         tables[f"table_counts_{axis}.csv"] = create_counts_table(
             summary[axis], episodes, axis)

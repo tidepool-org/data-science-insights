@@ -120,7 +120,8 @@ def test_build_tables_hands_the_day_table_to_the_window_search():
     restores = [patched(run_transition_variant, "build_segments", lambda spark, **kw: segments_calls.append(kw))]
     for module_name in ("export_cbg_from_transitions", "compute_glycemic_endpoints", "export_segments_within_guardrails",
                         "export_overrides_from_transitions", "export_cbg_from_overrides",
-                        "export_carbohydrates_from_transitions"):
+                        "export_carbohydrates_from_transitions",
+                        "export_transition_cohort", "export_transition_activation_cohort"):
         restores.append(patched(getattr(run_transition_variant, module_name), "run", lambda spark, **kw: None))
     try:
         run_transition_variant.build_tables(object(), "_x", 12, loop_recommendations_table="day_x")

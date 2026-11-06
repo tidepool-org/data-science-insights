@@ -28,6 +28,8 @@ DAG order (mirrors `fda_analysis_pipeline.yml`):
             -> cbg_from_overrides -> compute_glycemic_endpoints (override)
          -> segments_within_guardrails (transition)
          -> segments_within_guardrails (stable)
+         -> transition_cohort -> transition_activation_cohort   (Step 3 cohort tables)
+         -> stable_cohort
          -> overrides_all             \\
          -> correction_range_history   ) -> override_guardrail_flags
          -> ab_day_cohort             /     (+ user_guardrail_groups)
@@ -74,6 +76,10 @@ TABLES = {
     "glycemic_endpoints_override": f"{P}glycemic_endpoints_override",
     "valid_transition_guardrails": f"{P}valid_transition_guardrails",
     "valid_stable_guardrails": f"{P}valid_stable_guardrails",
+    # the cohort tables of execution plan Step 3 (2026-11-05)
+    "transition_cohort": f"{P}transition_cohort",
+    "transition_activation_cohort": f"{P}transition_activation_cohort",
+    "stable_cohort": f"{P}stable_cohort",
     # IR-1002 (guardrail groups + AB-day characterization)
     "overrides_all": f"{P}overrides_all",
     "correction_range_history": f"{P}correction_range_history",
@@ -82,6 +88,11 @@ TABLES = {
     "user_guardrail_groups": f"{P}user_guardrail_groups",
     "ab_day_cbg": f"{P}ab_day_cbg",
     "glycemic_endpoints_ab_days": f"{P}glycemic_endpoints_ab_days",
+    # the interactive-review cohort tables (2026-11-05)
+    "extreme_preset_activations": f"{P}extreme_preset_activations",
+    "extreme_preset_cohort": f"{P}extreme_preset_cohort",
+    "dose_response_candidates": f"{P}dose_response_candidates",
+    "dose_response_episodes": f"{P}dose_response_episodes",
 }
 
 # When all of these exist, run() short-circuits. user_diagnosis_type is included
@@ -105,6 +116,13 @@ TERMINAL_TABLES = (
     # picks up the new archetypes and the activeSchedule fixture column.
     "user_guardrail_groups",
     "glycemic_endpoints_ab_days",
+    # the cohort tables (2026-11-05): their absence forces the rebuild that
+    # puts the cohort columns on autobolus_durability and the diagnosis
+    # group on the lookup
+    "transition_activation_cohort",
+    "stable_cohort",
+    "extreme_preset_cohort",
+    "dose_response_episodes",
 )
 
 
@@ -187,6 +205,11 @@ def run(spark, force=False):
     import export_ab_day_cohort  # type: ignore # noqa: E402
     import export_override_guardrail_flags  # type: ignore # noqa: E402
     import export_cbg_from_ab_days  # type: ignore # noqa: E402
+    import export_transition_cohort  # type: ignore # noqa: E402
+    import export_transition_activation_cohort  # type: ignore # noqa: E402
+    import export_stable_cohort  # type: ignore # noqa: E402
+    import export_extreme_preset_cohort  # type: ignore # noqa: E402
+    import export_dose_response_episodes  # type: ignore # noqa: E402
 
     # ── Step 1: fixtures ──────────────────────────────────────────────────
     print("[integration.run_pipeline] building synthetic BDDP fixture...")
@@ -247,6 +270,9 @@ def run(spark, force=False):
         loop_recommendations_table=TABLES["loop_recommendations"],
         user_dates_table=TABLES["user_dates"],
         user_gender_table=TABLES["user_gender"],
+        diagnosis_table=TABLES["user_diagnosis_type"],
+        jaeb_table=TABLES["jaeb_link"],
+        bddp_table=TABLES["bddp"],
     )
     print("[integration.run_pipeline] export_autobolus_event_times...")
     export_autobolus_event_times.run(
@@ -335,6 +361,36 @@ def run(spark, force=False):
         output_table=TABLES["valid_stable_guardrails"],
     )
 
+    # ── Step 6b: the cohort tables (execution plan Step 3) ────────────────
+    print("[integration.run_pipeline] export_transition_cohort...")
+    export_transition_cohort.run(
+        spark,
+        output_table=TABLES["transition_cohort"],
+        segments_table=TABLES["valid_transition_segments"],
+        endpoints_table=TABLES["glycemic_endpoints_transition"],
+        guardrails_table=TABLES["valid_transition_guardrails"],
+        carbs_table=TABLES["valid_transition_carbs"],
+        diagnosis_table=TABLES["user_diagnosis_type"],
+    )
+    print("[integration.run_pipeline] export_transition_activation_cohort...")
+    export_transition_activation_cohort.run(
+        spark,
+        output_table=TABLES["transition_activation_cohort"],
+        overrides_table=TABLES["overrides_by_segment"],
+        cohort_table=TABLES["transition_cohort"],
+    )
+    print("[integration.run_pipeline] export_stable_cohort...")
+    export_stable_cohort.run(
+        spark,
+        output_table=TABLES["stable_cohort"],
+        segments_table=TABLES["stable_autobolus_segments"],
+        endpoints_table=TABLES["glycemic_endpoints_stable"],
+        guardrails_table=TABLES["valid_stable_guardrails"],
+        diagnosis_table=TABLES["user_diagnosis_type"],
+        jaeb_table=TABLES["jaeb_link"],
+        bddp_table=TABLES["bddp"],
+    )
+
     # ── Step 7: IR-1002 dataset-wide guardrail pipeline ───────────────────
     # Independent of the transition/stable subtrees: needs only the phase-1
     # base tables (loop_recommendations, loop_cbg, user_diagnosis_type).
@@ -387,6 +443,30 @@ def run(spark, force=False):
         output_table=TABLES["glycemic_endpoints_ab_days"],
     )
 
+    # ── Step 8: the interactive-review cohort tables (2026-11-05) ─────────
+    print("[integration.run_pipeline] export_extreme_preset_cohort...")
+    export_extreme_preset_cohort.run(
+        spark,
+        activations_table=TABLES["extreme_preset_activations"],
+        output_table=TABLES["extreme_preset_cohort"],
+        activation_cohort_table=TABLES["transition_activation_cohort"],
+        overrides_table=TABLES["overrides_by_segment"],
+        segments_table=TABLES["valid_transition_segments"],
+        endpoints_table=TABLES["glycemic_endpoints_transition"],
+    )
+    print("[integration.run_pipeline] export_dose_response_episodes...")
+    export_dose_response_episodes.run(
+        spark,
+        candidates_table=TABLES["dose_response_candidates"],
+        episodes_table=TABLES["dose_response_episodes"],
+        overrides_table=TABLES["overrides_all"],
+        flags_table=TABLES["override_guardrail_flags"],
+        cohort_table=TABLES["transition_cohort"],
+        segments_table=TABLES["valid_transition_segments"],
+        diagnosis_table=TABLES["user_diagnosis_type"],
+        loop_cbg_table=TABLES["loop_cbg"],
+    )
+
     print("[integration.run_pipeline] pipeline complete")
     return TABLES
 
@@ -431,6 +511,9 @@ PROD_TO_TEST = {
     "dev.fda_510k_rwd.glycemic_endpoints_override": TABLES["glycemic_endpoints_override"],
     "dev.fda_510k_rwd.valid_transition_guardrails": TABLES["valid_transition_guardrails"],
     "dev.fda_510k_rwd.valid_stable_guardrails": TABLES["valid_stable_guardrails"],
+    "dev.fda_510k_rwd.transition_cohort": TABLES["transition_cohort"],
+    "dev.fda_510k_rwd.transition_activation_cohort": TABLES["transition_activation_cohort"],
+    "dev.fda_510k_rwd.stable_cohort": TABLES["stable_cohort"],
     "dev.fda_510k_rwd.user_diagnosis_type": TABLES["user_diagnosis_type"],
     "dev.fda_510k_rwd.overrides_all": TABLES["overrides_all"],
     "dev.fda_510k_rwd.correction_range_history": TABLES["correction_range_history"],
@@ -439,6 +522,10 @@ PROD_TO_TEST = {
     "dev.fda_510k_rwd.user_guardrail_groups": TABLES["user_guardrail_groups"],
     "dev.fda_510k_rwd.ab_day_cbg": TABLES["ab_day_cbg"],
     "dev.fda_510k_rwd.glycemic_endpoints_ab_days": TABLES["glycemic_endpoints_ab_days"],
+    "dev.fda_510k_rwd.extreme_preset_activations": TABLES["extreme_preset_activations"],
+    "dev.fda_510k_rwd.extreme_preset_cohort": TABLES["extreme_preset_cohort"],
+    "dev.fda_510k_rwd.dose_response_candidates": TABLES["dose_response_candidates"],
+    "dev.fda_510k_rwd.dose_response_episodes": TABLES["dose_response_episodes"],
     "dev.default.bddp_sample_all_2": TABLES["bddp"],
     "dev.default.bddp_user_dates": TABLES["user_dates"],
     "dev.default.user_gender": TABLES["user_gender"],

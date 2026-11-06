@@ -1,53 +1,85 @@
-# PLN-1008 No Meal Announcement Pipeline (Databricks asset bundle)
+# PLN-1008 No Meal Announcement staging (Databricks job definition)
 #
-# Task DAG mirroring the FDA pipeline (fda_analysis_pipeline.yml). Filled in
-# during Phase C once each data_staging script is implemented. The DAG below
-# is illustrative — task definitions, cluster spec, and access mode TBD.
+# The NMA chain reads four tables the FDA pipeline builds and never rebuilds
+# them: loop_dose_classification and loop_recommendations (the dose classifier
+# and its day projection, fda_analysis_pipeline.yml tasks
+# Export_Loop_Dose_Classification and Export_Loop_Recommendations), loop_cbg
+# (Export_CBG_From_Loop), and user_diagnosis_type (built out of band). Run this
+# job after the FDA pipeline's base tables, or after
+# production_runs/run_production_staging.py --steps base. Since 2026-11-05
+# (decision D23) the NMA has no classifier of its own: every manual-versus-
+# automatic verdict and every day class is the FDA table's.
 #
-# Run via: `databricks bundle deploy && databricks bundle run nma_pipeline`
+# The analyses are not tasks: they run locally off the CSV snapshot the last
+# task writes (project_docs/conventions.md), as does the cohort flow
+# (analysis/analysis_7-1_cohort_flow.py).
+#
+# Run via the Databricks UI job created from this definition, or
+# `databricks bundle deploy && databricks bundle run nma_pipeline` once the job
+# file is included in the repo's bundle.
 
 resources:
   jobs:
     nma_pipeline:
-      name: PLN-1008 No Meal Announcement Pipeline
+      name: PLN-1008 No Meal Announcement Staging
       tasks:
-        # ── Staging layer ────────────────────────────────────────────────
-        - task_key: export_user_day_bolus_classification
-          # Classifies every bolus manual vs automatic (HealthKit AutomaticallyIssued flag +
-          # dosingDecision fallback) — the source of truth for BE (manual) and delivery_strategy
-          # (automatic). Reads bddp + loop_recommendations. spark_python_task TBD.
-        - task_key: export_user_day_bolus_counts
-          # BE = manual_normal_bolus_count projected from the classifier.
+        - task_key: Export_User_Day_CBG
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/no_meal_announcement/data_staging/export_user_day_cbg.py
+          environment_key: Default
+        - task_key: Compute_User_Day_Glycemic_Endpoints
           depends_on:
-            - task_key: export_user_day_bolus_classification
-        - task_key: export_user_day_carb_grams
-        - task_key: export_user_day_tdd
-        - task_key: export_nma_cbg
-        - task_key: compute_nma_glycemic_endpoints
+            - task_key: Export_User_Day_CBG
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/no_meal_announcement/data_staging/compute_user_day_glycemic_endpoints.py
+          environment_key: Default
+        # Bolus counts by the FDA verdict: a projection of loop_dose_classification
+        # onto the day universe (manual, manual-normal, automatic, total).
+        - task_key: Export_User_Day_Bolus_Classification
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/no_meal_announcement/data_staging/export_user_day_bolus_classification.py
+          environment_key: Default
+        - task_key: Export_User_Day_Bolus_Counts
           depends_on:
-            - task_key: export_nma_cbg
-        - task_key: export_user_day_age
-        - task_key: export_user_day_classification
+            - task_key: Export_User_Day_Bolus_Classification
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/no_meal_announcement/data_staging/export_user_day_bolus_counts.py
+          environment_key: Default
+        - task_key: Export_User_Day_Carbs
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/no_meal_announcement/data_staging/export_user_day_carbs.py
+          environment_key: Default
+        - task_key: Export_User_Day_TDD
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/no_meal_announcement/data_staging/export_user_day_tdd.py
+          environment_key: Default
+        - task_key: Export_User_Day_Age
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/no_meal_announcement/data_staging/export_user_day_age.py
+          environment_key: Default
+        - task_key: Export_User_Day_Classification
           depends_on:
-            - task_key: export_user_day_bolus_counts
-            - task_key: export_user_day_carb_grams
-        - task_key: export_user_day_analysis_ready
+            - task_key: Export_User_Day_CBG
+            - task_key: Export_User_Day_Bolus_Counts
+            - task_key: Export_User_Day_Carbs
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/no_meal_announcement/data_staging/export_user_day_classification.py
+          environment_key: Default
+        # The cohort table (one boolean per criterion, the diagnosis group as a
+        # column) and the CSV snapshot the analyses read.
+        - task_key: Export_User_Day_Analysis_Ready
           depends_on:
-            - task_key: export_user_day_classification
-            - task_key: export_user_day_bolus_classification
-            - task_key: compute_nma_glycemic_endpoints
-            - task_key: export_user_day_tdd
-            - task_key: export_user_day_age
-        # ── Analysis layer ───────────────────────────────────────────────
-        - task_key: analysis_8_1_nma_vs_ce_outcomes
-          depends_on:
-            - task_key: export_user_day_analysis_ready
-        - task_key: analysis_8_2_nma_by_delivery_strategy
-          depends_on:
-            - task_key: export_user_day_analysis_ready
-        - task_key: analysis_8_3_nma_tdd_stratified
-          depends_on:
-            - task_key: export_user_day_analysis_ready
-        - task_key: data_overview
-          depends_on:
-            - task_key: export_user_day_analysis_ready
+            - task_key: Export_User_Day_Classification
+            - task_key: Export_User_Day_Bolus_Classification
+            - task_key: Compute_User_Day_Glycemic_Endpoints
+            - task_key: Export_User_Day_TDD
+            - task_key: Export_User_Day_Age
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/no_meal_announcement/data_staging/export_user_day_analysis_ready.py
+          environment_key: Default
+      queue:
+        enabled: true
+      environments:
+        - environment_key: Default
+          spec:
+            environment_version: "4"

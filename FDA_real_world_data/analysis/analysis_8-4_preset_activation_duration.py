@@ -30,6 +30,7 @@ import matplotlib.pyplot as plt
 from scipy import stats
 from typing import Dict, Optional, Tuple
 import os
+import shutil
 
 # Configuration
 OUTPUT_DIR = "outputs/analysis_8_4"
@@ -39,7 +40,7 @@ S_PER_HOUR = 3_600   # override duration is stored in seconds
 
 from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT
 from utils.statistics import test_normality, compute_paired_statistics, format_p
-from utils.data_loading import load_allowed_transition_segments
+from utils.data_loading import load_activation_cohort, load_transition_cohort
 
 
 # =============================================================================
@@ -54,21 +55,17 @@ def load_data(spark, suffix: str = "") -> pd.DataFrame:
 
     suffix='_box080' reads the parallel 0.80-box cohort tables.
     """
-    # Eligible transition segments: cohort gate + guardrail exclusion + type-1
-    # diagnosis gate (load_allowed_transition_segments) — the same gates the
-    # 8-1/8-5/8-8 loader applies, kept in one place.
-    allowed_segments = load_allowed_transition_segments(spark, suffix=suffix)
+    # The denominator: every user with a rank-1 window in the preset cohort
+    # (transition_cohort.in_preset_cohort: the version gate, the age gate,
+    # the guardrail check).
+    users_df = load_transition_cohort(spark, suffix=suffix, predicate="in_preset_cohort")[["_userId"]].drop_duplicates()
 
-    users_df = allowed_segments.select("_userId").distinct().toPandas()
-
-    # All override events — no is_valid filter; we want total preset activity
-    overrides_df = (
-        spark.table(f"dev.fda_510k_rwd.overrides_by_segment{suffix}")
-        .join(allowed_segments, on=["_userId", "tb_to_ab_seg1_start"], how="inner")
-        .filter("segment IN ('tb_to_ab_seg1', 'tb_to_ab_seg2')")
-        .select("_userId", "dosing_mode", "duration")
-        .toPandas()
-    )
+    # Every activation of those windows in the temp-basal or the first
+    # autobolus period; no validity filter, since total preset activity is
+    # the quantity (transition_activation_cohort.in_duration_cohort).
+    overrides_df = load_activation_cohort(spark, suffix=suffix, predicate="in_duration_cohort")[
+        ["_userId", "dosing_mode", "duration"]
+    ]
 
     overrides_df["duration"] = pd.to_numeric(overrides_df["duration"], errors="coerce")
     overrides_df["duration_hr"] = overrides_df["duration"] / S_PER_HOUR
@@ -291,6 +288,8 @@ def run_analysis(spark, output_dir=None, suffix: str = ""):
     # parallel output dir so the production outputs aren't clobbered.
     if output_dir is None:
         output_dir = OUTPUT_DIR + suffix
+    # The analysis owns its output folder (STYLE.md §5).
+    shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)

@@ -24,14 +24,32 @@ builds, in the same order:
   ab_days     the IR-1002 chain: overrides_all, correction_range_history,
               ab_day_cohort, override_guardrail_flags and user_guardrail_groups,
               ab_day_cbg, glycemic_endpoints_ab_days
+  cohorts     the cohort tables of execution plan Step 3 (2026-11-05):
+              stable_cohort; transition_cohort and
+              transition_activation_cohort for each window build in --boxes
+              (run_all_boxes builds them with the subtree, so this step
+              rebuilds them only when the subtree was built elsewhere); the
+              durability table carries its own cohort columns; then the
+              interactive-review populations on the primary build and the
+              IR-1002 chain, extreme_preset_activations and
+              extreme_preset_cohort (IR-6) and dose_response_candidates and
+              dose_response_episodes (IR-6B)
+  issued      the issued vintage's cohort tables beside the corrected ones
+              (transition_cohort_issued{suffix}): the same cohort script on
+              the `_vintage_2026_10_29` copies under the version gate the
+              loader applied at that time, so the flow tables show both
+              vintages. The primary's issued vintage is the `_box080` subtree
+              behind RPT-1001 Rev 02; the sensitivity builds' are their own
+              2026-08-05 copies.
 
-No analysis runs here: the analyses run on these tables in Step 4.
+No analysis runs here: production_runs/run_production_analyses.py runs them.
 
 Run (Databricks Run button = every step, the primary builds only):
   production_runs/run_production_staging.py
   production_runs/run_production_staging.py --steps base,transition      # the §8-1 plots first
   production_runs/run_production_staging.py --steps transition --boxes all   # the primary and both window variants
   production_runs/run_production_staging.py --boxes prod,_box070 --coverages all
+  production_runs/run_production_staging.py --steps issued --boxes all   # the issued-vintage cohort tables
 """
 
 import argparse
@@ -64,14 +82,47 @@ import export_loop_dose_classification  # noqa: E402
 import export_loop_recommendations  # noqa: E402
 import export_override_guardrail_flags  # noqa: E402
 import export_overrides_all  # noqa: E402
+import export_dose_response_episodes  # noqa: E402
+import export_extreme_preset_cohort  # noqa: E402
 import export_segments_within_guardrails  # noqa: E402
 import export_stable_autobolus_segments  # noqa: E402
+import export_stable_cohort  # noqa: E402
+import export_transition_activation_cohort  # noqa: E402
+import export_transition_cohort  # noqa: E402
 import export_user_diagnosis_type  # noqa: E402
 import run_all_boxes  # noqa: E402
 import run_all_coverages  # noqa: E402
 
 # CLI spelling for the production (empty-suffix) build in --boxes / --coverages.
 PROD_TOKEN = run_all_boxes.PROD_TOKEN
+
+CATALOG = export_transition_cohort.CATALOG
+
+# The issued vintage behind each window build (production_runs/
+# snapshot_vintage.py, label 2026_10_29; docs/vintage_inventory_2026-10-27.md):
+# the primary's is the `_box080` subtree RPT-1001 Rev 02 was rendered from,
+# the sensitivity builds' their own 2026-08-05 supplement tables. The copies
+# sit beside their sources as <name><source suffix>_vintage_<label>.
+VINTAGE_LABEL = "2026_10_29"
+ISSUED_SOURCE_SUFFIX = {"": "_box080", "_box070": "_box070", "_box090": "_box090"}
+# The issued vintage's loader gated a Loop version of 0 as a known version
+# (the loader before 2026-10-30); the cohort script reproduces that gate.
+ISSUED_ZERO_VERSION_IS_MISSING = False
+# The window tables the issued cohort table reads, by their production names.
+ISSUED_WINDOW_TABLES = ("valid_transition_segments", "glycemic_endpoints_transition",
+                        "valid_transition_guardrails", "valid_transition_carbs")
+
+
+def issued_table_names(suffix):
+    """The vintage copies a build's issued cohort table reads, and the
+    lookup copy, as {role: table}."""
+    source = ISSUED_SOURCE_SUFFIX[suffix]
+    names = {role: f"{CATALOG}.{name}{source}_vintage_{VINTAGE_LABEL}"
+             for role, name in zip(("segments_table", "endpoints_table", "guardrails_table", "carbs_table"),
+                                   ISSUED_WINDOW_TABLES)}
+    names["diagnosis_table"] = f"{CATALOG}.user_diagnosis_type_vintage_{VINTAGE_LABEL}"
+    names["output_table"] = f"{CATALOG}.transition_cohort_issued{suffix}"
+    return names
 
 
 def _say(step, what):
@@ -125,13 +176,43 @@ def build_ab_days(spark):
     compute_glycemic_endpoints.run(spark, mode="ab_days")
 
 
-# Every step in dependency order: base first, then the four independent subtrees.
+def build_cohorts(spark, boxes=None):
+    """The cohort tables (execution plan Step 3): the stable cohort, and the
+    transition and activation cohorts of each window build."""
+    _say("cohorts", "stable_cohort")
+    export_stable_cohort.run(spark)
+    for suffix in (boxes if boxes is not None else [s for s, _ in run_all_boxes.BOX_CONFIGS]):
+        _say("cohorts", f"transition_cohort{suffix} and transition_activation_cohort{suffix}")
+        export_transition_cohort.run(spark, suffix=suffix)
+        export_transition_activation_cohort.run(spark, suffix=suffix)
+    # The interactive-review populations (2026-11-05), on the primary build
+    # and the IR-1002 chain: IR-6's extreme-preset tables and IR-6B's
+    # dose-response episodes.
+    _say("cohorts", "extreme_preset_activations and extreme_preset_cohort")
+    export_extreme_preset_cohort.run(spark)
+    _say("cohorts", "dose_response_candidates and dose_response_episodes")
+    export_dose_response_episodes.run(spark)
+
+
+def build_issued_cohorts(spark, boxes=None):
+    """The issued vintage's cohort table beside each window build's, from the
+    snapshot copies under the version gate of that time."""
+    for suffix in (boxes if boxes is not None else [s for s, _ in run_all_boxes.BOX_CONFIGS]):
+        names = issued_table_names(suffix)
+        _say("issued", f"{names['output_table']} from the {ISSUED_SOURCE_SUFFIX[suffix] or 'unsuffixed'} copies of {VINTAGE_LABEL}")
+        export_transition_cohort.run(spark, zero_version_is_missing=ISSUED_ZERO_VERSION_IS_MISSING, **names)
+
+
+# Every step in dependency order: base first, then the four independent
+# subtrees, then the cohort tables that close them, then the issued vintage's.
 STEPS = [
     ("base", build_base),
     ("transition", build_transition),
     ("stable", build_stable),
     ("durability", build_durability),
     ("ab_days", build_ab_days),
+    ("cohorts", build_cohorts),
+    ("issued", build_issued_cohorts),
 ]
 
 
@@ -168,7 +249,7 @@ def run(spark, steps=None, boxes=None, coverages=None):
         print("=" * 72)
         print(f"[production staging {i}/{len(selected)}] {name}")
         print("=" * 72)
-        if name == "transition":
+        if name in ("transition", "cohorts", "issued"):
             build(spark, boxes=boxes)
         elif name == "durability":
             build(spark, coverages=coverages)

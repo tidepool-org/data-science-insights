@@ -55,6 +55,8 @@ import export_carbohydrates_from_transitions
 import export_loop_recommendations
 import export_overrides_from_transitions
 import export_segments_within_guardrails
+import export_transition_activation_cohort
+import export_transition_cohort
 from export_valid_transition_segments import CATALOG, DEFAULT_MIN_PERIOD_DAYS, run as build_segments
 
 # Defaults are the report primary (12 of 14) in the UNSUFFIXED namespace — the
@@ -94,6 +96,10 @@ BOX_TABLES = (
     "valid_override_cbg",
     "glycemic_endpoints_override",
     "valid_transition_carbs",
+    # the cohort tables of execution plan Step 3 (2026-11-05), built last
+    # from the subtree above
+    "transition_cohort",
+    "transition_activation_cohort",
 )
 
 
@@ -161,6 +167,16 @@ def build_tables(spark, suffix, min_period_days, loop_recommendations_table=None
     print(f"[variant{suffix}] carbs           -> {carbs}")
     export_carbohydrates_from_transitions.run(spark, output_table=carbs,
                                               transition_segments_table=segments)
+
+    cohort = _t("transition_cohort", suffix)
+    activation_cohort = _t("transition_activation_cohort", suffix)
+    print(f"[variant{suffix}] cohort          -> {cohort}")
+    export_transition_cohort.run(spark, output_table=cohort, segments_table=segments,
+                                 endpoints_table=endpoints, guardrails_table=guardrails,
+                                 carbs_table=carbs)
+    print(f"[variant{suffix}] activations     -> {activation_cohort}")
+    export_transition_activation_cohort.run(spark, output_table=activation_cohort,
+                                            overrides_table=overrides, cohort_table=cohort)
 
     print(f"[variant{suffix}] staging subtree built.")
 

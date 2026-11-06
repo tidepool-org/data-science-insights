@@ -13,10 +13,15 @@
 #                             rule tagged on each dose) means the whole job
 #                             must re-run.
 #   Phase 2  Primary build    The UNSUFFIXED transition subtree IS the report
-#                             primary (symmetric 0.80 box) as of 2026-08-05.
-#                             Stable-AB and durability subtrees are
-#                             box-independent and build alongside it.
-#   Phase 3  Analyses         6-3a, 8-1..8-8, IR-1 on the primary build.
+#                             primary (12 of 14 days per period) as of
+#                             2026-10-30. Stable-AB and durability subtrees are
+#                             box-independent and build alongside it. Each
+#                             subtree ends in its cohort table (execution plan
+#                             Step 3, 2026-11-05): transition_cohort and
+#                             transition_activation_cohort, stable_cohort; the
+#                             durability table carries its own cohort columns.
+#   Phase 3  Analyses         6-3a, 8-1..8-8, IR-1 on the primary build, every
+#                             one reading its cohort table through the loaders.
 #   Phase 4  IR-1002          Dataset-wide guardrail pipeline + IR-2 / IR-3.
 #                             Box-independent; needs only Phase 1.
 #   Phase 5  Sensitivity      _box070 and _box090 builds (10 and 13 of 14 days
@@ -109,10 +114,16 @@ resources:
               - --mode
               - stable
           environment_key: Default
-        - task_key: Analysis_8-6
+        - task_key: Export_Stable_Cohort
           depends_on:
             - task_key: Compute_Glycemic_Endpoints_Stable
             - task_key: Export_Stable_within_Guardrails
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_stable_cohort.py
+          environment_key: Default
+        - task_key: Analysis_8-6
+          depends_on:
+            - task_key: Export_Stable_Cohort
           spark_python_task:
             python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-6_socioeconomic_subgroup_analysis.py
           environment_key: Default
@@ -175,47 +186,66 @@ resources:
               - --mode
               - transition
           environment_key: Default
-        - task_key: Analysis_8-1
+        # The cohort tables close the transition subtree: one row per window
+        # with a boolean per criterion, then one row per preset activation
+        # with its window's flags. Every transition analysis reads them.
+        - task_key: Export_Transition_Cohort
           depends_on:
             - task_key: Compute_Glycemic_Endpoints_Transitions
             - task_key: Export_Transition_within_Guardrails
+            - task_key: Export_Carbohydrates_from_Transition
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_transition_cohort.py
+          environment_key: Default
+        - task_key: Export_Transition_Activation_Cohort
+          depends_on:
+            - task_key: Export_Transition_Cohort
+            - task_key: Export_Overrides_From_Transition
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_transition_activation_cohort.py
+          environment_key: Default
+        - task_key: Analysis_6-3a
+          depends_on:
+            - task_key: Export_Transition_Activation_Cohort
+            - task_key: Export_Stable_Cohort
+            - task_key: Export_Autobolus_Event_Times
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_6-3a_cohort_flow.py
+          environment_key: Default
+        - task_key: Analysis_8-1
+          depends_on:
+            - task_key: Export_Transition_Cohort
           spark_python_task:
             python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-1_comparative_clinical_performance_and_safety_of_autobolus_vs_temporary_basal_dosing_strategies.py
           environment_key: Default
         - task_key: Analysis_8-2
           depends_on:
             - task_key: Compute_Glycemic_Endpoints_Overrides
-            - task_key: Export_Transition_within_Guardrails
+            - task_key: Export_Transition_Activation_Cohort
           spark_python_task:
             python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-2_glycemic_outcomes_during_preset_activation.py
           environment_key: Default
         - task_key: Analysis_8-3
           depends_on:
-            - task_key: Export_Overrides_From_Transition
-            - task_key: Export_CBG_From_Transitions
-            - task_key: Export_Transition_within_Guardrails
+            - task_key: Export_Transition_Activation_Cohort
           spark_python_task:
             python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-3_preset_parameter_changes.py
           environment_key: Default
         - task_key: Analysis_8-4
           depends_on:
-            - task_key: Export_Overrides_From_Transition
-            - task_key: Export_Transition_within_Guardrails
+            - task_key: Export_Transition_Activation_Cohort
           spark_python_task:
             python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-4_preset_activation_duration.py
           environment_key: Default
         - task_key: Analysis_8-5
           depends_on:
-            - task_key: Compute_Glycemic_Endpoints_Transitions
-            - task_key: Export_Transition_within_Guardrails
+            - task_key: Export_Transition_Cohort
           spark_python_task:
             python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-5_demographic_subgroup_analysis.py
           environment_key: Default
         - task_key: Analysis_8-8
           depends_on:
-            - task_key: Export_Carbohydrates_from_Transition
-            - task_key: Compute_Glycemic_Endpoints_Transitions
-            - task_key: Export_Transition_within_Guardrails
+            - task_key: Export_Transition_Cohort
           spark_python_task:
             python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_8-8_carbohydrate_consumption_consistency.py
           environment_key: Default
@@ -272,9 +302,7 @@ resources:
         # variant builds run their own copy of IR-1 in Phase 5.
         - task_key: Analysis_IR-1
           depends_on:
-            - task_key: Export_Overrides_From_Transition
-            - task_key: Compute_Glycemic_Endpoints_Transitions
-            - task_key: Export_Transition_within_Guardrails
+            - task_key: Export_Transition_Activation_Cohort
           spark_python_task:
             python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_ir-1_preset_characterization.py
           environment_key: Default
@@ -291,6 +319,36 @@ resources:
             - task_key: Export_AB_Day_Cohort
           spark_python_task:
             python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_ir-3_preset_characterization_ab_days.py
+          environment_key: Default
+        # The IR-6 and IR-6B populations (2026-11-05): the extreme-preset
+        # tables from the preset cohort's activations, the dose-response
+        # episodes from every activation with the IR-1002 flags and the
+        # transition cohort; each analysis reads its tables through the loaders.
+        - task_key: Export_Extreme_Preset_Cohort
+          depends_on:
+            - task_key: Export_Transition_Activation_Cohort
+            - task_key: Compute_Glycemic_Endpoints_Transitions
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_extreme_preset_cohort.py
+          environment_key: Default
+        - task_key: Analysis_IR-6
+          depends_on:
+            - task_key: Export_Extreme_Preset_Cohort
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_ir-6_extreme_preset_outcomes.py
+          environment_key: Default
+        - task_key: Export_Dose_Response_Episodes
+          depends_on:
+            - task_key: Export_Override_Guardrail_Flags
+            - task_key: Export_Transition_Cohort
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_dose_response_episodes.py
+          environment_key: Default
+        - task_key: Analysis_IR-6B
+          depends_on:
+            - task_key: Export_Dose_Response_Episodes
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/analysis/analysis_ir-6b_dose_response.py
           environment_key: Default
         # ── Phase 5: sensitivity builds ──────────────────────────────────────
         # Each rebuilds its own suffixed transition subtree ("branch from the

@@ -13,6 +13,7 @@ The rebuild (execution plan 2026-10-27, Step 2; MC's decisions of 2026-10-29 and
 - Day classes come from `data_staging/export_loop_recommendations.py` (`is_autobolus_day`, `is_temp_basal_day`), the day projection of the new dose classifier (`data_staging/export_loop_dose_classification.py`). The per-method count columns and every `min_autobolus_count` parameter are gone.
 - Table 6.3a's day-coverage stage is now part of the window-rule stage.
 - The CGM-coverage gate (70% of a period's readings) is unchanged.
+- Since 2026-11-05 every population has a staged cohort table with a boolean per criterion and the diagnosis group as a column (`data_staging/export_transition_cohort.py` and its companions); the loaders read those tables and assert them, Table 6.3a is counted from the same columns with the issued vintage beside, and every analysis wipes its output folder before writing.
 
 The specification is `docs/dosing_strategy_classification.md`. Every §6.3 and §8 number changes at the rebuild; until then the issued report keeps its vintage of record (`docs/vintage_inventory_2026-10-27.md`).
 

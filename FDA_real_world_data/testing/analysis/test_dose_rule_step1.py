@@ -53,7 +53,6 @@ from export_sql_results_to_csv import (  # noqa: E402
     DEFAULT_JOBS, SIDE_EFFECT_PREFIXES, result_labels, split_statements,
 )
 import export_ab_day_cohort as ab_day  # noqa: E402
-import export_user_diagnosis_type as diagnosis_staging  # noqa: E402
 
 CENSUS = os.path.join(PROJECT, "exploratory", "dose_marker_census.sql")
 ESTIMATE = os.path.join(PROJECT, "exploratory", "dose_rule_estimate.sql")
@@ -69,7 +68,10 @@ STAGING = os.path.join(FROZEN, "export_valid_transition_segments.py.txt")
 LOADER = os.path.join(FROZEN, "data_loading.py.txt")
 EXPORTER = os.path.join(PROJECT, "analysis", "export_sql_results_to_csv.py")
 SNAPSHOT = os.path.join(PROJECT, "production_runs", "snapshot_vintage.py")
-DIAGNOSIS_STAGING = os.path.join(PROJECT, "data_staging", "export_user_diagnosis_type.py")
+# The diagnosis lookup's staging as the Step 1 files copied it (frozen
+# 2026-11-05, when the live script moved its LADA expression to
+# cohort_constants.py and gained diagnosis_group).
+DIAGNOSIS_STAGING = os.path.join(FROZEN, "export_user_diagnosis_type.py.txt")
 ALL_FILES = (CENSUS, ESTIMATE, CHECK, WALKTHROUGH, GATE_B)
 COHORT_VIEW_CARRIERS = (ESTIMATE, CHECK, WALKTHROUGH, GATE_B)   # files that copy the by-age cohort views verbatim
 WINDOW_SEARCH_CARRIERS = (ESTIMATE, WALKTHROUGH)        # files that copy the staging's window search verbatim
@@ -362,17 +364,22 @@ def rendered_diagnosis_region():
     end_marker = "LEFT JOIN jaeb_users  jb ON u._userId = jb._userId"
     end = source.index(end_marker, start) + len(end_marker)
     region = textwrap.dedent(source[start:end])
-    defaults = {name: parameter.default
-                for name, parameter in inspect.signature(diagnosis_staging.run).parameters.items()
-                if parameter.default is not inspect.Parameter.empty}
+    # The frozen text cannot be imported, so its run() defaults and module
+    # constants are read from the source.
+    signature = source[source.index("def run("):source.index("):", source.index("def run("))]
+    defaults = dict(re.findall(r'(\w+)="([^"]*)"', signature))
+
+    def constant(name):
+        return re.search(rf'^{name} = "([^"]*)"', source, re.MULTILINE).group(1)
+
     tokens = {
         "{patients_table}": defaults["patients_table"],
         "{seagull_table}": defaults["seagull_table"],
         "{jaeb_table}": defaults["jaeb_table"],
         "{bddp_table}": defaults["bddp_table"],
-        "{SEAGULL_USERID_COL}": diagnosis_staging.SEAGULL_USERID_COL,
-        "{LADA_PATTERN}": diagnosis_staging.LADA_PATTERN,
-        "{JAEB_DIAGNOSIS}": diagnosis_staging.JAEB_DIAGNOSIS,
+        "{SEAGULL_USERID_COL}": constant("SEAGULL_USERID_COL"),
+        "{LADA_PATTERN}": constant("LADA_PATTERN"),
+        "{JAEB_DIAGNOSIS}": constant("JAEB_DIAGNOSIS"),
     }
     for token, value in tokens.items():
         region = region.replace(token, value)

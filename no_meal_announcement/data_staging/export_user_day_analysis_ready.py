@@ -1,82 +1,103 @@
-"""Denormalized analysis-ready table joining every per-user-day signal — analysis handoff.
+"""The NMA cohort table: every user-day of the universe, one boolean per criterion — the analysis handoff.
 
-Anchor is `nma_user_day_classification` (one row per (user, local_day) in the
-loop_recommendations valid-day universe). The §7.3 delivery strategy and Loop version
-come from `loop_recommendations` directly; endpoints and TDD are LEFT JOINed.
+Since 2026-11-05 (decision D23; the PLN-1001 standard of STYLE.md §5) this
+table is the PLN-1008 cohort table. It keeps every row of the day universe
+(`loop_recommendations`, one row per classified user-day) and carries each
+inclusion criterion as a column instead of applying it:
 
-The PLN-1001 Loop-version cohort filter is applied here:
-  - version known          → keep iff `version_int < 3_004_000` (Loop < 3.4.0)
-  - version unknown (NULL) → keep iff `local_day < 2024-07-13` (Loop 3.4.0 release date)
-Matches FDA `analysis/utils/data_loading.MAX_LOOP_VERSION_INT` and `MAX_SEG2_END_DATE`.
-Per-day `age_years` and `is_pediatric` come from `nma_user_day_age` (LEFT JOIN; NULL
-when DOB is unknown) — the §6 age-eligibility (>=6) and §7.6 pediatric/adult split are
-applied downstream by the analysis on these fields. Per-user `gender` comes from
-`dev.default.user_gender` (LEFT JOIN; NULL when unknown), for §8.1 Sample Information.
+  passes_loop_version_gate   a known Loop version below 3.4.0, or no version and
+                             a day before 2024-07-13 (cohort_constants.loop_version_gate_sql;
+                             until 2026-11-05 a WHERE clause here)
+  day_eligible               CGM coverage >= 70% on the day (export_user_day_classification)
+  user_eligible              the user has >= 10 eligible days (export_user_day_classification)
+  passes_age_gate            age >= 6 on the day, or unknown (cohort_constants.age_gate_sql;
+                             until 2026-11-05 applied in the analysis loader)
 
-§7.5 TDD reference is computed inline at this step (now that eligibility is known):
-  mean_tdd_user / median_tdd_user / n_eligible_days_for_tdd  — over the user's
-  day_eligible days (any arm; PLN-1008 §7.5 specifies the overall mean).
-  tdd_ratio = tdd_units / mean_tdd_user, for §8.3 stratification.
+the predicates the analysis loader asserts and selects on:
 
-The §7.3 delivery strategy uses the central bolus classifier's per-day automatic_bolus_count
-(nma_user_day_bolus_classification):
-    delivery_strategy = CASE WHEN automatic_bolus_count >= 3
-                             THEN 'autobolus_on' ELSE 'temp_basal_only' END
-automatic_bolus_count combines the HealthKit AutomaticallyIssued flag with a dosingDecision
-fallback over ALL subType='normal' boluses, so it also catches subType='normal' + HK-silent +
-dd-automatic boluses that loop_recommendations.dd_autobolus_count / hk_autobolus_count each
-miss. Loop version still comes from loop_recommendations.
+  in_analysis_cohort         all four criteria (every §8 analysis starts here;
+                             the loader then selects diagnosis groups and the
+                             adult or pediatric split)
+  in_strategy_contrast       in_analysis_cohort and a delivery strategy (§8.2, §8.4)
+
+and the diagnosis group as a column, never a filter (`diagnosis_group`,
+`is_primary_diagnosis`; cohort_constants.diagnosis_group_sql on the FDA lookup,
+joined on the raw id before the alias is applied). The type-1 primary is the
+loader's default selection; every group stays for the appendix.
+
+The §7.3 delivery strategy is read from the day table's own flags
+(`is_autobolus_day`, `is_temp_basal_day`): 'autobolus_on', 'temp_basal_only',
+or NULL for a day that is neither (1 or 2 automated boluses and no temporary
+basal, or a temp-basal day whose unrecognised boluses look automated). A
+neither day stays in the universe and in no strategy contrast. The day table's
+automated and temporary-basal counts and its per-rule bolus counts are carried
+for the rule checks; the NMA classifier's auto_hk_count / auto_dd_count are gone
+with the classifier.
+
+§7.5 TDD reference is computed here: mean_tdd_user / median_tdd_user /
+n_eligible_days_for_tdd over the user's eligible days that pass the version
+gate (any arm; PLN-1008 §7.5 specifies the overall mean); tdd_ratio =
+tdd_units / mean_tdd_user, for §8.3 stratification.
 
 Inputs:
-    dev.fda_510k_rwd.loop_recommendations  (loop_version + version_int; day-anchor join + cohort filter)
-    nma_user_day_bolus_classification      (delivery_strategy via §7.3 automatic_bolus_count threshold)
-    nma_user_day_classification            (anchor — arm flags, eligibility, BE/CE counts/grams)
+    dev.fda_510k_rwd.loop_recommendations  (the day universe; flags, counts, Loop version)
+    nma_user_day_bolus_classification      (manual / automatic bolus counts; the FDA verdict)
+    nma_user_day_classification            (arm flags, eligibility, BE/CE counts/grams)
     nma_user_day_glycemic_endpoints        (per-day TIR / TBR / TAR / CV / mean glucose / hypo events)
     nma_user_day_tdd                       (delivered basal+bolus per day)
     nma_user_day_age                       (age_years, is_pediatric per §7.6)
-    dev.default.user_gender                (per-user sex for Sample Information; LEFT JOIN, null if unknown)
-    dev.fda_510k_rwd.user_diagnosis_type   (per-user resolved diabetes diagnosis, built by the FDA
-                                            pipeline; LEFT JOIN on the RAW _userId, carried pre-hash for
-                                            the §7 type-1 cohort gate applied downstream at the loader)
+    dev.default.user_gender                (per-user sex for Sample Information; LEFT JOIN)
+    dev.fda_510k_rwd.user_diagnosis_type   (the FDA lookup; the diagnosis group)
 
 Privacy: `_userId` is PSEUDONYMIZED at the final SELECT (deterministic salted SHA-256, see
-USERID_SALT) so the analysis-ready table + its CSV snapshot never carry the raw user id off
-Databricks. Raw ids remain only in the upstream staging tables (traceback by recomputing the
-hash). The column name is unchanged, so analyses keep a stable per-user key with no code change.
+USERID_SALT; decision D16) so the analysis-ready table and its CSV snapshot never carry the
+raw user id off Databricks. The column name is unchanged.
 
 Outputs:
     nma_user_day_analysis_ready
-        One row per (user, local_day) — classification flags, endpoints, TDD + ratio,
-        delivery strategy, Loop version, eligibility, age + sex + diabetes diagnosis
-        (`_userId` pseudonymized).
-        Analysis-ready for §8.1/§8.2/§8.3.
+        One row per (user, local_day) of the universe — criteria and predicates,
+        classification flags, endpoints, TDD + ratio, delivery strategy, Loop
+        version, age + sex + diagnosis group (`_userId` pseudonymized).
     <outputs>/nma_user_day_analysis_ready.csv
-        A single-file CSV snapshot of the same table (pandas dump from the driver), for
-        download / inspection. The estimated CSV size is always printed first; the file is
-        then written to outputs/<table-name>.csv by default (override with --output_csv,
-        or pass --no_csv to print the size only and skip the write).
+        A single-file CSV snapshot of the same table (pandas dump from the driver). The
+        estimated CSV size is always printed first; the file is then written to
+        outputs/<table-name>.csv by default (override with --output_csv, or pass --no_csv).
 
 Maps to PLN-1008:
+    §7.1 Cohort and day inclusion (as columns).
     §7.3 Delivery strategy.
     §7.5 TDD ratio reference.
-    §8.1 / §8.2 / §8.3 all read from this single table.
+    §8.1 / §8.2 / §8.3 / §8.4 all read from this single table.
 """
 
 import argparse
 import os
+import sys
 
-# PLN-1001 / §6 cohort filter:
-#   - Loop version known: keep version_int < MAX_LOOP_VERSION_INT (Loop < 3.4.0).
-#   - Loop version unknown: keep local_day < MAX_DAY_IF_VERSION_UNKNOWN (Loop 3.4.0
-#     release date — before this, undeclared versions can only be <3.4.0).
-# Matches FDA `analysis/utils/data_loading.{MAX_LOOP_VERSION_INT, MAX_SEG2_END_DATE}`.
-MAX_LOOP_VERSION_INT = 3_004_000
-MAX_DAY_IF_VERSION_UNKNOWN = "2024-07-13"
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _HERE = ("/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
+             "no_meal_announcement/data_staging")
+# The thresholds and the diagnosis-group rule live once, in the FDA staging
+# (FDA_real_world_data/data_staging/cohort_constants.py); the day table's rule
+# list comes from its own script.
+_FDA_STAGING_DIR = os.path.normpath(os.path.join(_HERE, "..", "..", "FDA_real_world_data", "data_staging"))
+if _FDA_STAGING_DIR not in sys.path:
+    sys.path.insert(0, _FDA_STAGING_DIR)
 
-# §7.3 strategy threshold: autobolus_on if automatic_bolus_count (from the bolus classifier)
-# >= this. The classifier combines the HealthKit AutomaticallyIssued flag with a dosingDecision
-# fallback; dd alone (loop_recommendations) misses ~97% of HealthKit-tagged autobolus days.
-MIN_AUTOBOLUS_COUNT = 3
+from cohort_constants import (  # noqa: E402
+    PRIMARY_DIAGNOSIS_GROUPS,
+    age_gate_sql,
+    diagnosis_group_sql,
+    is_lada_sql,
+    loop_version_gate_sql,
+)
+from export_loop_recommendations import BOLUS_TAGS  # noqa: E402
+
+# The §7.3 strategy labels, as the analyses read them (analysis/utils/data_loader.STRATEGIES).
+STRATEGY_AUTOBOLUS = "autobolus_on"
+STRATEGY_TEMP_BASAL = "temp_basal_only"
 
 # Pseudonymize the user id at this final export so the analysis-ready table AND its CSV snapshot
 # never carry the raw `_userId` (a direct identifier into the BDDP) off Databricks onto a local
@@ -92,14 +113,7 @@ USERID_SALT = "pln1008-nma-v1"
 def _default_outputs_dir():
     """`no_meal_announcement/outputs/`, with the Databricks notebook fallback where
     __file__ is undefined (mirrors the other scripts' path handling)."""
-    try:
-        here = os.path.dirname(os.path.abspath(__file__))
-    except NameError:
-        here = (
-            "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-            "no_meal_announcement/data_staging"
-        )
-    return os.path.normpath(os.path.join(here, "..", "outputs"))
+    return os.path.normpath(os.path.join(_HERE, "..", "outputs"))
 
 
 def _human_bytes(n):
@@ -145,6 +159,13 @@ def run(
     output_table="dev.fda_510k_rwd.nma_user_day_analysis_ready",
     output_csv=None,
 ):
+    primary_groups = ", ".join(f"'{g}'" for g in PRIMARY_DIAGNOSIS_GROUPS)
+    rule_counts = ",\n    ".join(f"lr.boluses_{tag}" for tag in BOLUS_TAGS)
+    version_gate = loop_version_gate_sql("lr.version_int", "cls.local_day")
+    age_gate = age_gate_sql("age.age_years")
+    diagnosis_group = diagnosis_group_sql(
+        "dx.diagnosis_type", is_lada_sql("dx.diagnosis_patients", "dx.diagnosis_seagull")
+    )
     spark.sql(f"""
 --begin-sql
 CREATE OR REPLACE TABLE {output_table} AS
@@ -157,9 +178,12 @@ WITH base AS (
     cls.bolus_entry_count,
     cls.carb_entry_count,
     cls.carb_grams_total,
-    -- Eligibility flags (from classification)
+    -- Eligibility criteria (from classification) and the two gates that were
+    -- filters until 2026-11-05, now columns
     cls.day_eligible,
     cls.user_eligible,
+    {version_gate} AS passes_loop_version_gate,
+    {age_gate} AS passes_age_gate,
     -- Classification booleans + arm membership (from classification)
     cls.ce_eq_0,
     cls.be_eq_0,
@@ -187,25 +211,30 @@ WITH base AS (
     -- Age + pediatric flag (LEFT JOIN — null if DOB unknown)
     age.age_years,
     age.is_pediatric,
-    -- Sex (LEFT JOIN dev.default.user_gender — null if unknown; per-user constant; for §8.1 Sample Information)
+    -- Sex (LEFT JOIN dev.default.user_gender — null if unknown; per-user constant)
     g.gender,
-    -- Resolved diabetes diagnosis (LEFT JOIN dev.fda_510k_rwd.user_diagnosis_type on the RAW _userId).
-    -- Carried into the snapshot here, pre-hash, because the hashed export key (line below) can't be
-    -- joined to the FDA lookup downstream. Per-user constant; NULL when the user is absent from the
-    -- lookup. The §7 type-1 cohort gate filters on this column at the analysis loader (not here).
-    dx.diagnosis_type,
-    -- Strategy + Loop version. delivery_strategy uses the central bolus classifier's per-day
-    -- automatic_bolus_count (HealthKit flag OR dosingDecision fallback, over subType='normal'
-    -- boluses too) — this also catches subType='normal' + HK-silent + dd-automatic boluses that
-    -- loop_recommendations.dd_autobolus_count / hk_autobolus_count each miss. Loop version still
-    -- comes from loop_recommendations.
+    -- The diagnosis group (cohort_constants.diagnosis_group_sql on the FDA lookup,
+    -- joined on the RAW _userId before the alias below); a user absent from the
+    -- lookup is 'unknown'. A column, never a filter (MC, 2026-10-29).
+    COALESCE({diagnosis_group}, 'unknown') AS diagnosis_group,
+    COALESCE({diagnosis_group}, 'unknown') IN ({primary_groups}) AS is_primary_diagnosis,
+    -- Bolus counts by the FDA verdict (nma_user_day_bolus_classification)
+    bc.total_bolus_count,
+    bc.manual_bolus_count,
     bc.automatic_bolus_count,
-    bc.auto_hk_count,
-    bc.auto_dd_count,
+    -- The day table's own classification: the flags, the automated counts,
+    -- and how many of the day's boluses each bolus rule recognised
+    lr.is_autobolus_day,
+    lr.is_temp_basal_day,
+    lr.automated_boluses,
+    lr.temp_basals,
+    {rule_counts},
     lr.loop_version,
     lr.version_int AS loop_version_int,
-    CASE WHEN COALESCE(bc.automatic_bolus_count, 0) >= {MIN_AUTOBOLUS_COUNT}
-         THEN 'autobolus_on' ELSE 'temp_basal_only' END AS delivery_strategy
+    -- §7.3 delivery strategy from the day table's flags; NULL for a neither day
+    CASE WHEN lr.is_autobolus_day = 1 THEN '{STRATEGY_AUTOBOLUS}'
+         WHEN lr.is_temp_basal_day = 1 THEN '{STRATEGY_TEMP_BASAL}'
+         ELSE NULL END AS delivery_strategy
   FROM {classification_table} cls
   JOIN {loop_recommendations_table} lr
     ON cls._userId = lr._userId
@@ -226,19 +255,29 @@ WITH base AS (
     ON cls._userId = g.userid
   LEFT JOIN {diagnosis_table} dx
     ON cls._userId = dx._userId
-  WHERE (lr.version_int IS NOT NULL AND lr.version_int < {MAX_LOOP_VERSION_INT})
-     OR (lr.version_int IS NULL AND cls.local_day < DATE '{MAX_DAY_IF_VERSION_UNKNOWN}')
 ),
 
--- §7.5 TDD reference: per-user mean / median / count of eligible days with TDD.
--- Eligible-day filter via CASE so NULL on ineligible rows; AVG/percentile_approx ignore NULL.
+-- The predicates the analysis loader asserts and selects on.
+predicates AS (
+  SELECT
+    *,
+    COALESCE(passes_loop_version_gate AND day_eligible AND user_eligible AND passes_age_gate, FALSE)
+      AS in_analysis_cohort,
+    COALESCE(passes_loop_version_gate AND day_eligible AND user_eligible AND passes_age_gate, FALSE)
+      AND delivery_strategy IS NOT NULL AS in_strategy_contrast
+  FROM base
+),
+
+-- §7.5 TDD reference: per-user mean / median / count of eligible days with TDD,
+-- over the days that pass the version gate (the rows the table held before the
+-- gate became a column). CASE gives NULL on other rows; AVG/percentile_approx ignore NULL.
 user_tdd_ref AS (
   SELECT
     _userId,
-    AVG(CASE WHEN day_eligible THEN tdd_units END) AS mean_tdd_user,
-    percentile_approx(CASE WHEN day_eligible THEN tdd_units END, 0.5) AS median_tdd_user,
-    SUM(CASE WHEN day_eligible AND tdd_units IS NOT NULL THEN 1 ELSE 0 END) AS n_eligible_days_for_tdd
-  FROM base
+    AVG(CASE WHEN day_eligible AND passes_loop_version_gate THEN tdd_units END) AS mean_tdd_user,
+    percentile_approx(CASE WHEN day_eligible AND passes_loop_version_gate THEN tdd_units END, 0.5) AS median_tdd_user,
+    SUM(CASE WHEN day_eligible AND passes_loop_version_gate AND tdd_units IS NOT NULL THEN 1 ELSE 0 END) AS n_eligible_days_for_tdd
+  FROM predicates
   GROUP BY _userId
 )
 
@@ -253,7 +292,7 @@ SELECT
   CASE WHEN ref.mean_tdd_user > 0
        THEN b.tdd_units / ref.mean_tdd_user
        ELSE NULL END AS tdd_ratio
-FROM base b
+FROM predicates b
 LEFT JOIN user_tdd_ref ref
   ON b._userId = ref._userId
 ;

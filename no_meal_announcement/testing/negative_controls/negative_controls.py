@@ -57,7 +57,6 @@ nma_stats = data_loader.load_nma_statistics()
 CLASSIFICATIONS = data_loader.CLASSIFICATIONS          # 3 nested NMA arms: (flag, label)
 COMPARATOR_FLAG = data_loader.COMPARATOR_FLAG          # "in_ce_gt0"
 ENDPOINTS = data_loader.ENDPOINTS                      # 8 precomputed per-day endpoint columns
-MIN_AGE = data_loader.MIN_AGE
 
 # The headline NMA arm (D20): the single arm featured wherever one arm is shown.
 HEADLINE_NMA_FLAG = "in_ce0_be_le1"
@@ -87,9 +86,9 @@ def _binom_band(p0, B, k=BAND_K):
 
 def load_eligible(csv_path=SNAPSHOT, cohort="all"):
     """The eligible-day frame the analyses run on: prepare_day_level → filter_cohort →
-    restrict_comparator (the exact §7.1/§7.6/§8.1 pipeline preamble, reused unchanged)."""
+    restrict_comparator (the exact §7.1/§7.6/§8.1 pipeline preamble, reused unchanged; the cohort table's predicates asserted on the way)."""
     pdf = data_loader.prepare_day_level(pd.read_csv(csv_path))
-    pdf = data_loader.filter_cohort(pdf, cohort=cohort, min_age=MIN_AGE)
+    pdf = data_loader.filter_cohort(pdf, cohort=cohort)
     pdf = data_loader.restrict_comparator(pdf)
     return pdf
 

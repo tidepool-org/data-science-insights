@@ -72,12 +72,13 @@ letter doesn't appear twice:
 """
 
 import os
+import shutil
 
 import pandas as pd
 
 from utils.data_loading import (
-    CATALOG,
-    load_allowed_transition_segments,
+    load_activation_cohort,
+    load_transition_cohort,
     load_transition_endpoints,
 )
 from utils.preset_characterization import (
@@ -121,19 +122,14 @@ def load_data(spark, suffix: str = ""):
 
     suffix='_box080' reads the parallel 0.80-box cohort tables.
     """
-    # Cohort gate + guardrail exclusion + type-1 diagnosis — the same eligible
-    # segments Analyses 8.3 / 8.4 build from.
-    allowed_segments = load_allowed_transition_segments(spark, suffix=suffix)
+    # The preset cohort's rank-1 windows (transition_cohort.in_preset_cohort:
+    # the version gate, the age gate, the guardrail check), the same
+    # population analyses 8-3 and 8-4 build from.
+    cohort_users = load_transition_cohort(spark, suffix=suffix, predicate="in_preset_cohort")[["_userId"]].drop_duplicates()
 
-    cohort_users = allowed_segments.select("_userId").distinct().toPandas()
-
-    # All override events for eligible segments — no validity or
+    # Every activation of those windows, any period, no validity or
     # starting-glucose filter (descriptive characterization).
-    overrides = (
-        spark.table(f"{CATALOG}.overrides_by_segment{suffix}")
-        .join(allowed_segments, on=["_userId", "tb_to_ab_seg1_start"], how="inner")
-        .toPandas()
-    )
+    overrides = load_activation_cohort(spark, suffix=suffix, predicate="in_activation_cohort")
 
     if "stated_duration" not in overrides.columns:
         print("  Warning: stated_duration not in overrides_by_segment — "
@@ -327,6 +323,9 @@ def run_analysis(spark, output_dir=None, suffix: str = ""):
     # parallel output dir so the production outputs aren't clobbered.
     if output_dir is None:
         output_dir = OUTPUT_DIR + suffix
+    # The analysis owns its output folder (STYLE.md §5); the docstring's
+    # warning about stale files no longer applies.
+    shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)

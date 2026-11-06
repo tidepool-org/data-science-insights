@@ -34,23 +34,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
 from scipy.stats import pearsonr
-from pyspark.sql import functions as F
-from pyspark.sql.window import Window
 from typing import Dict, Optional, Tuple
 import os
+import shutil
 
 # Configuration
 OUTPUT_DIR = "outputs/analysis_8_3"
 SEG1 = "temp_basal"
 SEG2 = "autobolus"
-CBG_LOOKBACK_MINUTES  = 30    # minutes before override_time to search for CBG
 
 from utils.constants import (
     FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT,
-    STARTING_GLUCOSE_LOW, STARTING_GLUCOSE_HIGH,
 )
 from utils.statistics import test_normality, compute_paired_statistics, format_p
-from utils.data_loading import load_allowed_transition_segments
+from utils.data_loading import load_activation_cohort
 
 # =============================================================================
 # Parameter definitions: (display_name, seg1_col, seg2_col, unit)
@@ -79,66 +76,21 @@ def load_data(spark, suffix: str = "") -> pd.DataFrame:
     suffix='_box080' reads the parallel 0.80-box cohort tables.
     """
     # ── Step 1: eligible override events ─────────────────────────────────────
-    # Eligible transition segments: cohort gate + guardrail exclusion + type-1
-    # diagnosis gate (load_allowed_transition_segments) — the same gates the
-    # 8-1/8-5/8-8 loader applies, kept in one place.
-    allowed_segments = load_allowed_transition_segments(spark, suffix=suffix)
-
-    # Restrict to seg1 (TB) and seg2 (initial AB); seg3 (days 14–28) was added
-    # for Analysis 8-2 Table 8.2c and is out of scope for the parameter-change
-    # comparison here. is_valid_name_only_seg2 enforces ≥2 same-name activations
-    # in each of seg1 and seg2.
-    overrides_sdf = (
-        spark.table(f"dev.fda_510k_rwd.overrides_by_segment{suffix}")
-        .join(allowed_segments, on=["_userId", "tb_to_ab_seg1_start"], how="inner")
-        .filter(F.col("segment").isin("tb_to_ab_seg1", "tb_to_ab_seg2"))
-        .filter(F.col("is_valid_name_only_seg2") == True)
-        .select(
-            "_userId", "override_time", "dosing_mode", "overridePreset",
-            "basalRateScaleFactor", "carbRatioScaleFactor",
-            "insulinSensitivityScaleFactor", "bg_target_low", "bg_target_high",
-            "duration",
-        )
-    )
-
-    # ── Step 2: join to nearest CBG within lookback window ────────────────────
-    cbg_sdf = spark.table(f"dev.fda_510k_rwd.valid_transition_cbg{suffix}").select(
-        F.col("_userId").alias("_cbg_userId"),
-        "cbg_timestamp",
-        "cbg_mg_dl",
-    )
-
-    # Left-join: for each override, match CBG readings within the lookback window
-    joined = overrides_sdf.join(
-        cbg_sdf,
-        on=(
-            (overrides_sdf["_userId"] == cbg_sdf["_cbg_userId"]) &
-            (cbg_sdf["cbg_timestamp"].between(
-                overrides_sdf["override_time"] - F.expr(f"INTERVAL {CBG_LOOKBACK_MINUTES} MINUTES"),
-                overrides_sdf["override_time"],
-            ))
-        ),
-        how="left",
-    ).drop("_cbg_userId")
-
-    # Pick the single closest CBG per override event (most recent in window)
-    w_cbg = Window.partitionBy(
-        "_userId", "override_time", "overridePreset", "dosing_mode"
-    ).orderBy(F.col("cbg_timestamp").desc_nulls_last())
-
-    eligible = (
-        joined
-        .withColumn("_rn", F.row_number().over(w_cbg))
-        .filter(F.col("_rn") == 1)
-        .drop("_rn", "cbg_timestamp")
-    )
-
-    # ── Step 3: apply starting-glucose inclusion filter ───────────────────────
-    eligible = eligible.filter(
-        F.col("cbg_mg_dl").between(STARTING_GLUCOSE_LOW, STARTING_GLUCOSE_HIGH)
-    )
-
-    df = eligible.toPandas()
+    # The paired-outcome activation cohort (transition_activation_cohort):
+    # a window in the preset cohort, the temp-basal or the first autobolus
+    # period, a starting glucose in range by the staged flag (the CBG within
+    # 30 minutes before activation, between 70 and 180 mg/dL, computed once
+    # in export_overrides_from_transitions.py), and at least two same-name
+    # activations in each of the two periods. Until 2026-11-05 this analysis
+    # recomputed the starting glucose from valid_transition_cbg; the staged
+    # flag is now the one source (docs/pipeline_map.md section 6, item 4).
+    df = load_activation_cohort(spark, suffix=suffix, predicate="in_paired_outcome_cohort_seg2")
+    df = df[[
+        "_userId", "override_time", "dosing_mode", "overridePreset",
+        "basalRateScaleFactor", "carbRatioScaleFactor",
+        "insulinSensitivityScaleFactor", "bg_target_low", "bg_target_high",
+        "duration", "starting_glucose",
+    ]].rename(columns={"starting_glucose": "cbg_mg_dl"})
     print(f"  Override events passing inclusion criteria: {len(df)}")
 
     # ── Step 4: cast parameters to numeric; compute derived columns ───────────
@@ -434,6 +386,8 @@ def run_analysis(spark, output_dir=None, suffix: str = ""):
     # parallel output dir so the production outputs aren't clobbered.
     if output_dir is None:
         output_dir = OUTPUT_DIR + suffix
+    # The analysis owns its output folder (STYLE.md §5).
+    shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)

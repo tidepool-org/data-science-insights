@@ -4,26 +4,31 @@
 returns the table-name dict without re-running. Pass `force=True` to wipe and rebuild.
 
 Mirrors `FDA_real_world_data/testing/integration/run_pipeline.py`, with two differences:
-  - The NMA pipeline reads two FDA-produced tables it does NOT rebuild —
-    `loop_recommendations` (the valid-day universe + Loop version) and `loop_cbg`
-    (cleaned CGM). The test seeds both directly from the synthetic fixture
-    (build_loop_recommendations / build_loop_cbg) rather than running FDA staging.
+  - The NMA pipeline reads FDA-produced tables it does NOT rebuild. Since 2026-11-05
+    (decision D23) the harness runs the FDA dose classifier and its day projection on
+    the synthetic NMA extract, so the dose table and the day table carry the real
+    rules (the automated boluses and basals of the fixture carry Loop's
+    automatically-issued key); `loop_cbg` is still seeded from the fixture's CGM rows
+    and `user_diagnosis_type` from the day table's users.
   - No RedirectingSpark: every NMA staging module AND analysis_8-1 fully parameterize
     their table names, so the test passes the test_nma_* names as arguments. The shim
     is unnecessary.
 
 DAG order (mirrors `nma_pipeline.yml`, current module names):
 
-    seeds: bddp, user_dates, user_gender, loop_recommendations, loop_cbg
+    seeds: bddp, user_dates, user_gender
+      FDA export_loop_dose_classification  -> loop_dose_classification
+        FDA export_loop_recommendations    -> loop_recommendations (the day universe)
+      seeds from the fixture: loop_cbg, user_diagnosis_type
       export_user_day_cbg                  -> nma_user_day_cbg, nma_user_day_coverage
         compute_user_day_glycemic_endpoints -> nma_user_day_glycemic_endpoints
-      export_user_day_bolus_classification -> nma_user_day_bolus_classification
+      export_user_day_bolus_classification -> nma_user_day_bolus_classification (from the dose table)
         export_user_day_bolus_counts        -> nma_user_day_bolus_counts
       export_user_day_carbs                -> nma_user_day_carbs
       export_user_day_tdd                  -> nma_user_day_tdd
       export_user_day_age                  -> nma_user_day_age
       export_user_day_classification       -> nma_user_day_classification
-      export_user_day_analysis_ready       -> nma_user_day_analysis_ready
+      export_user_day_analysis_ready       -> nma_user_day_analysis_ready (the cohort table)
 """
 
 import os
@@ -60,10 +65,12 @@ P = f"{SCHEMA}.test_nma_"
 # Single source of truth for every test table name. The end-to-end test pulls from
 # this dict so renaming a table happens in one place.
 TABLES = {
-    # Seeds (raw BDDP + the two FDA upstream tables NMA reads but does not rebuild).
+    # Seeds (raw BDDP and the FDA upstream tables NMA reads but does not rebuild in
+    # production; the dose table and the day table are built here by the FDA staging).
     "bddp": f"{P}bddp",
     "user_dates": f"{P}user_dates",
     "user_gender": f"{P}user_gender",
+    "loop_dose_classification": f"{P}loop_dose_classification",
     "loop_recommendations": f"{P}loop_recommendations",
     "loop_cbg": f"{P}loop_cbg",
     "user_diagnosis_type": f"{P}user_diagnosis_type",
@@ -115,6 +122,11 @@ def _ensure_staging_on_path():
     staging_dir = os.path.normpath(os.path.join(here, "..", "..", "data_staging"))
     if staging_dir not in sys.path:
         sys.path.insert(0, staging_dir)
+    # The FDA staging too: the dose classifier and its day projection run on the
+    # fixture (no NMA module shares a name with an FDA one).
+    fda_staging_dir = os.path.normpath(os.path.join(here, "..", "..", "..", "FDA_real_world_data", "data_staging"))
+    if fda_staging_dir not in sys.path:
+        sys.path.insert(0, fda_staging_dir)
 
 
 def pseudonymize_uid(raw):
@@ -200,13 +212,28 @@ def run(spark, force=False):
     import export_user_day_age  # type: ignore # noqa: E402
     import export_user_day_classification  # type: ignore # noqa: E402
     import export_user_day_analysis_ready  # type: ignore # noqa: E402
+    import export_loop_dose_classification  # type: ignore # noqa: E402  (FDA)
+    import export_loop_recommendations  # type: ignore # noqa: E402  (FDA)
 
-    # ── Step 1: seeds (synthetic BDDP + the FDA upstream tables NMA reads) ────
+    # ── Step 1: seeds (synthetic BDDP), then the FDA dose classifier and day
+    # projection on it, then the two FDA tables still seeded from the fixture ──
     print("[nma.run_pipeline] building synthetic fixtures...")
     build_synthetic_nma_bddp.build_synthetic_nma_bddp(spark, TABLES["bddp"])
     build_synthetic_nma_bddp.build_user_dates(spark, TABLES["user_dates"])
     build_synthetic_nma_bddp.build_user_gender(spark, TABLES["user_gender"])
-    build_synthetic_nma_bddp.build_loop_recommendations(spark, TABLES["loop_recommendations"])
+    print("[nma.run_pipeline] FDA export_loop_dose_classification...")
+    export_loop_dose_classification.run(
+        spark,
+        output_table=TABLES["loop_dose_classification"],
+        input_table=TABLES["bddp"],
+    )
+    print("[nma.run_pipeline] FDA export_loop_recommendations...")
+    export_loop_recommendations.run(
+        spark,
+        output_table=TABLES["loop_recommendations"],
+        dose_table=TABLES["loop_dose_classification"],
+        input_table=TABLES["bddp"],
+    )
     build_synthetic_nma_bddp.build_loop_cbg(spark, TABLES["loop_cbg"])
     build_synthetic_nma_bddp.build_user_diagnosis_type(
         spark, TABLES["user_diagnosis_type"], TABLES["loop_recommendations"])
@@ -226,11 +253,11 @@ def run(spark, force=False):
         output_table=TABLES["glycemic_endpoints"],
     )
 
-    # ── Step 3: bolus classifier -> BE counts ─────────────────────────────────
+    # ── Step 3: bolus counts by the FDA verdict -> BE counts ──────────────────
     print("[nma.run_pipeline] export_user_day_bolus_classification...")
     export_user_day_bolus_classification.run(
         spark,
-        input_table=TABLES["bddp"],
+        dose_table=TABLES["loop_dose_classification"],
         anchor_table=TABLES["loop_recommendations"],
         output_table=TABLES["bolus_classification"],
     )

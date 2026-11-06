@@ -57,6 +57,7 @@ import matplotlib.patches as mpatches
 from scipy import stats
 from typing import Dict, Optional, Tuple
 import os
+import shutil
 
 # =============================================================================
 # Configuration
@@ -78,7 +79,7 @@ GLYCEMIC_OUTCOMES = [
 ]
 
 from utils.constants import FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT
-from utils.data_loading import load_transition_endpoints
+from utils.data_loading import CARB_ENTRY_MAX_GRAMS, CARB_ENTRY_MIN_GRAMS, load_transition_endpoints
 from utils.statistics import test_normality, compute_paired_statistics, format_p
 COLOR_CONSISTENT   = "#76D3A6"  # green — stable diet
 COLOR_INCONSISTENT = "#FF8B7C"  # orange-red — changed diet
@@ -103,11 +104,13 @@ def load_data(spark, suffix: str = "") -> pd.DataFrame:
 
     # --- Carbohydrate data ---
     carbs = spark.table(f"dev.fda_510k_rwd.valid_transition_carbs{suffix}").toPandas()
+    # Plausible entries only, the bounds the cohort table applies when it
+    # decides whether a period has carbohydrate data (cohort_constants).
     carbs["carb_grams"] = pd.to_numeric(carbs["carb_grams"], errors="coerce")
     carbs = carbs.loc[
         carbs["carb_grams"].notna()
-        & (carbs["carb_grams"] >= 1)
-        & (carbs["carb_grams"] <= 150)
+        & (carbs["carb_grams"] >= CARB_ENTRY_MIN_GRAMS)
+        & (carbs["carb_grams"] <= CARB_ENTRY_MAX_GRAMS)
     ]
 
     # Summarize carb data per (user, segment_key, half).
@@ -753,6 +756,8 @@ def run_analysis(spark, output_dir=None, suffix: str = ""):
     # parallel output dir so the production outputs aren't clobbered.
     if output_dir is None:
         output_dir = OUTPUT_DIR + suffix
+    # The analysis owns its output folder (STYLE.md §5).
+    shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)

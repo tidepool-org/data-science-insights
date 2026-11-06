@@ -28,19 +28,33 @@ SEAGULL_USERID_COL below (or the seagull_dx CTE).
 """
 
 import argparse
+import os
+import sys
+
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Databricks notebook-view of a .py file doesn't define __file__.
+    _HERE = os.path.join(
+        os.environ.get(
+            "FDA_RWD_ROOT",
+            "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data",
+        ),
+        "data_staging",
+    )
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from cohort_constants import TYPE1_DX, diagnosis_group_sql, is_lada_sql  # noqa: E402
 
 
 CATALOG = "dev.fda_510k_rwd"
 
 # Tidepool canonical diabetes-type token assigned to JAEB-cohort users.
-JAEB_DIAGNOSIS = "type1"
+JAEB_DIAGNOSIS = TYPE1_DX
 
 # User-id column on prod.default.seagull_profile (flat-schema assumption).
 SEAGULL_USERID_COL = "userid"
-
-# Raw-label pattern identifying LADA diagnoses (matches the exploratory /
-# contingency-plan queries).
-LADA_PATTERN = "%lada%"
 
 
 def run(
@@ -97,6 +111,7 @@ def run(
         ON j.uploadID = b.uploadID
     )
 
+    , resolved AS (
     SELECT
       u._userId,
       p.diagnosis_patients,
@@ -104,12 +119,9 @@ def run(
       CASE WHEN jb._userId IS NOT NULL THEN TRUE ELSE FALSE END AS is_jaeb,
       -- LADA per the raw labels, same precedence as diagnosis_type but
       -- evaluated before the JAEB override (so JAEB-routed LADA users are
-      -- flagged too). No consumer in the primary pipeline reads this.
-      COALESCE(
-        LOWER(COALESCE(p.diagnosis_patients, s.diagnosis_seagull))
-          LIKE '{LADA_PATTERN}',
-        FALSE
-      ) AS is_lada,
+      -- flagged too). The expression is cohort_constants.is_lada_sql, the one
+      -- the cohort tables apply to a lookup staged without this column.
+      {is_lada_sql("p.diagnosis_patients", "s.diagnosis_seagull")} AS is_lada,
       -- Resolved diagnosis: JAEB members are type1 by definition; otherwise
       -- prefer the patients value, then fall back to seagull.
       CASE
@@ -120,6 +132,14 @@ def run(
     LEFT JOIN patients_dx p  ON u._userId = p._userId
     LEFT JOIN seagull_dx  s  ON u._userId = s._userId
     LEFT JOIN jaeb_users  jb ON u._userId = jb._userId
+    )
+
+    -- The diagnosis group every population reports by (MC, 2026-10-29):
+    -- cohort_constants.diagnosis_group_sql, the one rule in one place.
+    SELECT
+      *,
+      {diagnosis_group_sql("diagnosis_type", "is_lada")} AS diagnosis_group
+    FROM resolved
     ;
     """)
 

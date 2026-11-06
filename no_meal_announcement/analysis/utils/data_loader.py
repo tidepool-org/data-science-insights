@@ -5,6 +5,14 @@ analysis-ready snapshot loader, the §7.6 age-cohort filter, the §8.1 CE>0 comp
 restriction, the endpoint / classification constants, and the by-path loaders for the FDA +
 local statistics modules.
 
+Since 2026-11-05 (decision D23; the PLN-1001 standard, STYLE.md §5) the analysis-ready
+table is the cohort table: every inclusion criterion is a column, the diagnosis group is
+a column, and the loader applies no gate of its own. `prepare_day_level` re-derives the
+table's predicate columns from its criterion columns, refuses a table that disagrees,
+and keeps the rows of `in_analysis_cohort`; `filter_cohort` then selects the diagnosis
+groups asked for (the type-1 primary by default, every group for an appendix) and the
+adult or pediatric split. The thresholds live in the FDA staging's cohort_constants.py.
+
 `statsmodels` / `scipy` are NOT imported here; the statistics modules are loaded lazily by
 file path (under unique module names — our analysis/ has its own `utils` package, so a bare
 `import statistics` would collide) so this module imports cleanly anywhere.
@@ -12,10 +20,45 @@ file path (under unique module names — our analysis/ has its own `utils` packa
 
 import importlib.util
 import os
+import sys
 from typing import Literal
 
 import numpy as np
 import pandas as pd
+
+# Databricks-notebook fallback for the analysis/ dir (where __file__ is undefined).
+_DATABRICKS_ANALYSIS_DIR = (
+    "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
+    "no_meal_announcement/analysis"
+)
+
+
+def analysis_dir():
+    """The no_meal_announcement/analysis/ directory. This file lives in analysis/utils/, so
+    the analysis dir is two levels up; falls back to the Databricks path where __file__ is
+    undefined (mirrors the path handling in the data_staging scripts)."""
+    try:
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    except NameError:
+        return _DATABRICKS_ANALYSIS_DIR
+
+
+# The thresholds and the diagnosis groups, defined once in the FDA staging
+# (FDA_real_world_data/data_staging/cohort_constants.py), imported by path.
+_FDA_ROOT = os.path.normpath(os.path.join(analysis_dir(), "..", "..", "FDA_real_world_data"))
+_FDA_STAGING_DIR = os.path.join(_FDA_ROOT, "data_staging")
+if _FDA_STAGING_DIR not in sys.path:
+    sys.path.insert(0, _FDA_STAGING_DIR)
+from cohort_constants import (  # noqa: E402,F401  (re-exported for the analyses)
+    DIAGNOSIS_GROUPS,
+    LADA_DIAGNOSIS_GROUPS,
+    MIN_AGE_YEARS,
+    PRIMARY_DIAGNOSIS_GROUPS,
+)
+
+# The cohort table's criterion columns, and the predicates the loader re-derives from them.
+CRITERION_COLUMNS = ("passes_loop_version_gate", "day_eligible", "user_eligible", "passes_age_gate")
+PREDICATE_COLUMNS = ("in_analysis_cohort", "in_strategy_contrast")
 
 # (column, display label) — PLN-1008 §6 endpoints in the endpoints table.
 ENDPOINTS = [
@@ -58,21 +101,6 @@ SUPPLEMENT_ARMS = FIGURE_ARMS + [(HIGH_MA_FLAG, HIGH_MA_LABEL)]
 STRATEGIES = [("temp_basal_only", "TB"), ("autobolus_on", "AB")]
 STRATEGY_COL = "delivery_strategy"
 
-# §6 / PLN-1001 minimum age (years), applied in analysis via filter_cohort. Users KNOWN to
-# be younger are dropped; unknown/nulled-age users are retained (PLN-1001
-# `is_age_eligible OR dob IS NULL`). Implausible-high ages are already nulled at extraction
-# (export_user_day_age.MAX_PLAUSIBLE_AGE), so this floor + that bound together gate age.
-MIN_AGE = 6
-
-# §7 type-1-diabetes cohort gate (added 2026-06-24), mirroring the FDA PLN-1001 gate
-# (load_type1_user_ids / TYPE1_SEGMENT_WHERE over user_diagnosis_type). filter_cohort drops every
-# row whose `diagnosis_type` — carried into the snapshot pre-hash by export_user_day_analysis_ready
-# from dev.fda_510k_rwd.user_diagnosis_type — is not exactly 'type1'. FDA-matching STRICT semantics:
-# JAEB members resolve to canonical 'type1'; type2/other, unresolved NULL, and users absent from the
-# lookup all drop. Default-on — every §8 NMA analysis cohort is type-1 only.
-REQUIRE_TYPE1 = True
-TYPE1_DIAGNOSIS_VALUE = "type1"
-
 # Rolling temporal-match window for the §8.1 windowed-comparator sensitivity: a CE=0 (NMA) day is
 # paired only against CE>0 comparator days within ± WINDOW_HALF calendar days of it (same user), to
 # control within-user temporal drift (Loop-version era, seasonality). See windowed_matched_means.
@@ -84,23 +112,6 @@ WINDOW_HALF = 45
 NUMERIC_COLS = [col for col, _ in ENDPOINTS] + [
     "carb_entry_count", "bolus_entry_count", "carb_grams_total", "tdd_units", "age_years",
 ]
-
-# Databricks-notebook fallback for the analysis/ dir (where __file__ is undefined).
-_DATABRICKS_ANALYSIS_DIR = (
-    "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-    "no_meal_announcement/analysis"
-)
-
-
-def analysis_dir():
-    """The no_meal_announcement/analysis/ directory. This file lives in analysis/utils/, so
-    the analysis dir is two levels up; falls back to the Databricks path where __file__ is
-    undefined (mirrors the path handling in the data_staging scripts)."""
-    try:
-        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    except NameError:
-        return _DATABRICKS_ANALYSIS_DIR
-
 
 def default_analysis_ready_csv(analysis_ready_table):
     """Where data_staging/export_user_day_analysis_ready.py writes its CSV snapshot —
@@ -130,35 +141,87 @@ def load_nma_statistics():
     return mod
 
 
+def load_fda_cohort_flow():
+    """Load FDA analysis/utils/cohort_flow.py as `fda_utils.cohort_flow`.
+
+    The FDA utils package is registered under the alias `fda_utils` (its own name,
+    `utils`, is this project's analysis package), so the module's relative import of
+    its sibling data_loading resolves. Returns the cohort_flow module."""
+    package_dir = os.path.join(_FDA_ROOT, "analysis", "utils")
+    if "fda_utils" not in sys.modules:
+        spec = importlib.util.spec_from_file_location(
+            "fda_utils", os.path.join(package_dir, "__init__.py"),
+            submodule_search_locations=[package_dir],
+        )
+        package = importlib.util.module_from_spec(spec)
+        sys.modules["fda_utils"] = package
+        spec.loader.exec_module(package)
+    return importlib.import_module("fda_utils.cohort_flow")
+
+
+def as_bool(series):
+    """A boolean Series from a staged flag column: True where the value is True (or 1),
+    False for False, 0, None, and NaN."""
+    return series.eq(True) | series.eq(1)
+
+
+def cohort_predicates(pdf):
+    """Re-derive the cohort table's predicates from its criterion columns."""
+    version, day, user, age = (as_bool(pdf[c]) for c in CRITERION_COLUMNS)
+    in_cohort = version & day & user & age
+    return pd.DataFrame({
+        "in_analysis_cohort": in_cohort,
+        "in_strategy_contrast": in_cohort & pdf[STRATEGY_COL].notna(),
+    })
+
+
+def assert_cohort_predicates(pdf, label="nma_user_day_analysis_ready"):
+    """Refuse a cohort table whose staged predicates disagree with its criteria (the
+    loader's half of execution plan Gate C), or that predates the migration."""
+    missing = [c for c in CRITERION_COLUMNS + PREDICATE_COLUMNS + ("diagnosis_group",) if c not in pdf.columns]
+    assert not missing, (
+        f"{label}: no column(s) {missing}; the table predates the 2026-11-05 cohort-table "
+        f"migration (D23). Re-run data_staging/export_user_day_analysis_ready.py."
+    )
+    expected = cohort_predicates(pdf)
+    for name in PREDICATE_COLUMNS:
+        mismatches = int((as_bool(pdf[name]) != expected[name]).sum())
+        assert mismatches == 0, (
+            f"{label}: the staged {name} disagrees with its criterion columns on {mismatches} "
+            f"row(s); re-stage the table before analysing"
+        )
+
+
 def prepare_day_level(pdf):
-    """Pure transform: coerce numeric columns and keep eligible days of eligible users
-    (§7.1). Split out from the Spark read so it is unit-testable on a plain DataFrame."""
+    """Pure transform: coerce numeric columns, assert the cohort table's predicates, and
+    keep the rows of the analysis cohort (`in_analysis_cohort`: the version gate, CGM
+    coverage, the user's eligible-day count, the age gate; §7.1 and §6). Split out from
+    the Spark read so it is unit-testable on a plain DataFrame."""
     pdf = pdf.copy()
     for c in NUMERIC_COLS:
         if c in pdf.columns:
             pdf[c] = pd.to_numeric(pdf[c], errors="coerce")
-    pdf = pdf[(pdf["day_eligible"] == True) & (pdf["user_eligible"] == True)].copy()  # noqa: E712
+    assert_cohort_predicates(pdf)
+    pdf = pdf[as_bool(pdf["in_analysis_cohort"])].copy()
+    print(f"  in_analysis_cohort admits {len(pdf)} user-day(s) for {pdf['_userId'].nunique()} user(s)")
     return pdf
 
 
 def load_day_level(spark, analysis_ready_table):
-    """Eligible-day rows of eligible users, with arm flags + endpoints."""
+    """The analysis cohort's rows, with arm flags + endpoints."""
     return prepare_day_level(spark.table(analysis_ready_table).toPandas())
 
 
-def filter_cohort(pdf, cohort: Literal["adult", "pediatric", "all"] = "all", min_age=MIN_AGE,
-                  require_type1=REQUIRE_TYPE1):
-    """§7.6 age cohort + §7 type-1 gate. NULL `is_pediatric` (DOB unknown or implausible) is
-    excluded from both adult and pediatric, retained in `all`. `min_age` (§6 floor, default
-    MIN_AGE=6) drops users KNOWN to be younger than the floor; unknown/nulled-age users are
-    retained (PLN-1001 `is_age_eligible OR dob IS NULL`). Pass `min_age=None` to disable the floor.
+def filter_cohort(pdf, cohort: Literal["adult", "pediatric", "all"] = "all",
+                  diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS):
+    """§7.6 age cohort and the diagnosis-group selection. NULL `is_pediatric` (DOB unknown or
+    implausible) is excluded from both adult and pediatric, retained in `all`. The §6 age
+    floor is a column of the cohort table (`passes_age_gate`) and already applied by
+    prepare_day_level.
 
-    `require_type1` (default REQUIRE_TYPE1=True) keeps only rows with `diagnosis_type == 'type1'`,
-    mirroring the FDA gate. Unlike the age floor's retain-unknown rule, this is a STRICT drop:
-    type2/other, unresolved NULL, and users absent from the lookup are all excluded (a deliberate
-    FDA-matching regulatory choice — see decisions.md / t1d_filter_plan.md). Needs the
-    `diagnosis_type` column from export_user_day_analysis_ready; pass require_type1=False to run
-    against a pre-merge snapshot."""
+    `diagnosis_groups` selects the groups kept (cohort_constants.DIAGNOSIS_GROUPS): the
+    primary cohort by default (type 1, the LADA-labelled JAEB members included), None for
+    every group (the by-group appendix). The group is a column, never a filter at staging."""
     out = pdf
     if cohort == "adult":
         out = out[out["is_pediatric"] == False]  # noqa: E712
@@ -166,16 +229,11 @@ def filter_cohort(pdf, cohort: Literal["adult", "pediatric", "all"] = "all", min
         out = out[out["is_pediatric"] == True]  # noqa: E712
     elif cohort != "all":
         raise ValueError(f"unknown cohort: {cohort!r}")
-    if min_age is not None:
-        out = out[out["age_years"].isna() | (out["age_years"] >= min_age)]
-    if require_type1:
-        if "diagnosis_type" not in out.columns:
-            raise KeyError(
-                "filter_cohort(require_type1=True) needs the 'diagnosis_type' column, absent from "
-                "this snapshot. Regenerate nma_user_day_analysis_ready (export_user_day_analysis_ready "
-                "now carries diagnosis_type), or pass require_type1=False for a pre-merge run."
-            )
-        out = out[out["diagnosis_type"] == TYPE1_DIAGNOSIS_VALUE]
+    if diagnosis_groups is not None:
+        unknown = sorted(set(diagnosis_groups) - set(DIAGNOSIS_GROUPS))
+        assert not unknown, f"unknown diagnosis group(s) {unknown}; known: {DIAGNOSIS_GROUPS}"
+        out = out[out["diagnosis_group"].isin(diagnosis_groups)]
+        print(f"  diagnosis groups {tuple(diagnosis_groups)} kept {out['_userId'].nunique()} user(s)")
     return out.copy()
 
 

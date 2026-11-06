@@ -46,10 +46,11 @@ the PLN §8.2 mapping does not shift.
 """
 
 import os
+import shutil
 
 import pandas as pd
 
-from utils.data_loading import CATALOG
+from utils.data_loading import load_ab_day_cohort, load_guardrail_flags
 from utils.preset_characterization import (
     derive_insulin_needs,
     dist_row,
@@ -100,18 +101,21 @@ def load_data(spark):
     """The IR-3 activation set (qualifying, all spanned days AB) with
     activation-level guardrail status, plus the cohort denominator and
     per-user eligible-AB-day counts (the rate normalizer)."""
-    flags = spark.table(f"{CATALOG}.override_guardrail_flags").toPandas()
+    # The qualifying activations of the primary diagnosis group through the
+    # loader (override_guardrail_flags, predicates asserted); the IR-3
+    # population is the staged in_characterization_cohort predicate.
+    flags = load_guardrail_flags(spark, predicate="is_qualifying")
     flags = derive_insulin_needs(prepare_activations(flags))
     # Spark BOOLEANs can arrive as pandas nullable/object dtype; boolean
     # indexing on pd.NA raises, so normalize every flag up front.
     for col in ("is_qualifying", "is_all_days_ab", "is_p_violation",
                 "is_m_violation", "is_m_indeterminate", "is_version_eligible",
-                "is_after_first_ab"):
+                "is_after_first_ab", "in_characterization_cohort"):
         if col in flags.columns:
-            flags[col] = flags[col].fillna(False).astype(bool)
+            flags[col] = flags[col].eq(True)
 
-    qualifying = flags[flags["is_qualifying"]].copy()
-    activations = qualifying[qualifying["is_all_days_ab"]].copy()
+    qualifying = flags.copy()
+    activations = qualifying[qualifying["in_characterization_cohort"]].copy()
 
     is_p = activations["is_p_violation"]
     is_m = activations["is_m_violation"]
@@ -120,25 +124,16 @@ def load_data(spark):
     activations.loc[~is_p & is_m, "guardrail_status"] = "m_only"
     activations.loc[is_p & is_m, "guardrail_status"] = "both"
 
-    day_counts = spark.sql(f"""
-        --begin-sql
-        SELECT
-          _userId,
-          SUM(CASE WHEN is_eligible_ab_day THEN 1 ELSE 0 END) AS n_eligible_ab_days
-        FROM {CATALOG}.ab_day_cohort
-        GROUP BY _userId
-        HAVING SUM(CASE WHEN is_eligible_ab_day THEN 1 ELSE 0 END) > 0
-        ;
-    """).toPandas()
-    day_counts["n_eligible_ab_days"] = pd.to_numeric(
-        day_counts["n_eligible_ab_days"], errors="coerce"
-    ).astype(float)
-    norm_days = day_counts.set_index("_userId")["n_eligible_ab_days"]
+    # The rate basis: each cohort user's eligible AB days, from the day
+    # cohort table through the loader (the primary diagnosis group).
+    eligible_days = load_ab_day_cohort(spark, predicate="is_eligible_ab_day")
+    norm_days = eligible_days.groupby("_userId").size().astype(float)
+    norm_days.name = "n_eligible_ab_days"
 
     print(f"  Qualifying activations: {len(qualifying)}")
     print(f"  … with every spanned day an eligible AB day: {len(activations)} "
           f"({activations['_userId'].nunique()} users)")
-    print(f"  Cohort users (≥1 eligible AB day): {len(day_counts)}")
+    print(f"  Cohort users (≥1 eligible AB day): {len(norm_days)}")
     print(f"  Status counts: {activations['guardrail_status'].value_counts().to_dict()}")
     return activations, qualifying, norm_days
 
@@ -272,6 +267,8 @@ def create_table_ir3f(activations, qualifying, norm_days) -> pd.DataFrame:
 def run_analysis(spark, output_dir=None):
     if output_dir is None:
         output_dir = OUTPUT_DIR
+    # The analysis owns its output folder (STYLE.md §5).
+    shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)
