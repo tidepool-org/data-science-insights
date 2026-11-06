@@ -42,10 +42,10 @@ is too busy — the all-5 figure is appendix fig 12.4b). The Appendix §12.4 cro
 alternative axes (tercile, CE=0-reference, within-user) on the headline CE=0/BE<=1 vs CE>0 pair.
 
 Reuses utils/strata (the hoisted §8.3 rank machinery), utils/statistics
-(lmm_day_strategy_interaction, lmm_arm_contrast, paired_within_user) and utils/plotting
+(lmm_day_strategy_interaction, lmm_arm_contrast, paired_within_user) and utils/nma_plotting
 (day_type_colors band ramp + STRATEGY_ALPHA). Mirrors §8.1–§8.3 per-cohort run()/main() + output-clearing.
 
-Outputs (analysis/outputs/analysis_8_4/<cohort>/) — main §8.4:
+Outputs (analysis/outputs/nma/analysis_8_4/<cohort>/) — main §8.4:
     table_8_4a_strategy_cross_binary.csv     per (day type / strategy) × endpoint × stratum: across-user
                                              mean±SD + n_users + n_days (overall-ref rank BINARY,
                                              composite same-user-set gated) — the Method-A cross-tab,
@@ -71,7 +71,7 @@ Outputs (analysis/outputs/analysis_8_4/<cohort>/) — main §8.4:
                                              Table 8.4a; too busy for the main section)
     figure_12_4c_ce0_grid{1,2}_*.png         CE=0-reference companion (headline pair)
 
-Usage: python analysis_8-4_nma_by_delivery_strategy_stratified.py [--cohort {adult,pediatric,all}]
+Usage: python analysis_nma_8-4_by_delivery_strategy_stratified.py [--cohort {adult,pediatric,all}]
 Fast figure iteration: add --figures-only, or --figs <tag> (e.g. `--figs 8_4a`). Tags: 8_4a/b,
 12_4a/b/c. Do a full run first so the table CSVs exist.
 """
@@ -100,12 +100,12 @@ try:
 except NameError:
     _ANALYSIS_DIR = (
         "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-        "no_meal_announcement/analysis"
+        "FDA_real_world_data/analysis"
     )
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils.data_loader import (  # noqa: E402
+from utils.nma_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
@@ -126,7 +126,7 @@ from utils.strata import (  # noqa: E402
     _tercile_trend_stats,
     table_8_3a_per_user_by_stratum,
 )
-from utils.plotting import (  # noqa: E402
+from utils.nma_plotting import (  # noqa: E402
     DAY_TYPE_ORDER,
     GRIDS,
     LEGEND_FS,
@@ -448,7 +448,7 @@ def run(
     figures_only=False,
     figs_filter=None,
 ):
-    """Run §8.4 for one age cohort → outputs/analysis_8_4/<cohort>/.
+    """Run §8.4 for one age cohort → outputs/nma/analysis_8_4/<cohort>/.
 
     figures_only=True skips the SLOW table writes (LMM fits + cluster-bootstrap CIs) and re-renders
     only the figures, in place. figs_filter (a substring, e.g. "8_4a") renders only matching figure
@@ -458,7 +458,7 @@ def run(
     nma_stats = load_nma_statistics()
     here = analysis_dir()
     if output_dir is None:
-        output_dir = os.path.join(here, "outputs", "analysis_8_4", cohort)
+        output_dir = os.path.join(here, "outputs", "nma", "analysis_8_4", cohort)
     if os.path.isdir(output_dir) and not figures_only:
         shutil.rmtree(output_dir)  # full run starts clean; figures_only overwrites PNGs in place
     os.makedirs(output_dir, exist_ok=True)
@@ -470,7 +470,7 @@ def run(
         if not os.path.exists(csv_path):
             raise FileNotFoundError(
                 f"analysis-ready CSV not found at {csv_path}. Run "
-                "data_staging/export_user_day_analysis_ready.py first, or pass --csv_path.")
+                "data_staging/export_nma_user_day_analysis_ready.py first, or pass --csv_path.")
         pdf = prepare_day_level(pd.read_csv(csv_path))
     else:
         pdf = load_day_level(spark, analysis_ready_table)

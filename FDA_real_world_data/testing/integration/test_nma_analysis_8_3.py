@@ -1,11 +1,10 @@
 """§8.3 integration check — run as a file on Databricks (run-button / notebook cell, or
-`run_test_analysis_8_3.main(spark)`).
+`test_nma_analysis_8_3.main(spark)`).
 
-Named `run_test_*` (starts with `run`, not `test`) so Databricks runs it as a plain file
-rather than a pytest test. Mirrors run_test_analysis_8_1.py: `main()` gets a Spark session,
+Named like the FDA integration tests, which the FDA runner runs as files. Mirrors test_nma_analysis_8_1.py: `main()` gets a Spark session,
 ensures statsmodels (so the day-level LMM populates), runs the staging pipeline
 (run_pipeline.run — idempotent), then runs the §8.3 within-user TDD-stratum checks against the
-analysis-ready table. Throwaway §8.3 outputs land in a tempdir — the real outputs/analysis_8_3/
+analysis-ready table. Throwaway §8.3 outputs land in a tempdir — the real outputs/nma/analysis_8_3/
 are never touched. Prints `§8.3 INTEGRATION TEST PASSED` or raises on failure.
 
 Design recovery hinges on the `nma_user_known_low_high_tdd` archetype: 30 CE=0/BE=0 days — 15
@@ -29,22 +28,18 @@ try:
     _here = os.path.dirname(os.path.abspath(__file__))
 except NameError:
     _here = ("/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-             "no_meal_announcement/testing/integration")
-_repo_root = os.path.normpath(os.path.join(_here, "..", "..", ".."))
+             "FDA_real_world_data/testing/integration")
 _analysis_dir = os.path.normpath(os.path.join(_here, "..", "..", "analysis"))
-for _p in (_here, _repo_root, _analysis_dir):
+for _p in (_here, _analysis_dir):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from utils.data_loader import prepare_day_level  # noqa: E402
+from utils.nma_loading import prepare_day_level  # noqa: E402
 from utils.strata import MIN_REF_DAYS, R_CUT  # noqa: E402
 
-try:
-    from no_meal_announcement.testing.integration import run_pipeline as _run_pipeline  # noqa: E402
-except ImportError:
-    import run_pipeline as _run_pipeline  # type: ignore  # noqa: E402
+import run_nma_pipeline as _run_pipeline  # noqa: E402
 
-A83_FILE = "analysis_8-3_nma_tdd_stratified.py"
+A83_FILE = "analysis_nma_8-3_tdd_stratified.py"
 # Pseudonymized (salted SHA-256, D16) to match the hashed `_userId` in the analysis-ready table.
 TDD_USER = _run_pipeline.pseudonymize_uid("nma_user_known_low_high_tdd")
 
@@ -53,15 +48,15 @@ def _ensure_statsmodels():
     """§8.3's day-level LMM (Table 8.3c) needs statsmodels — ensure it (mirrors run_test_8_1)."""
     if importlib.util.find_spec("statsmodels") is not None:
         return
-    print("[run_test_analysis_8_3] statsmodels not found — pip installing on the driver...")
+    print("[test_nma_analysis_8_3] statsmodels not found — pip installing on the driver...")
     import subprocess
     try:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "statsmodels"])
         importlib.invalidate_caches()
     except Exception as e:  # noqa: BLE001
-        print(f"[run_test_analysis_8_3] pip install failed: {e}")
+        print(f"[test_nma_analysis_8_3] pip install failed: {e}")
     if importlib.util.find_spec("statsmodels") is None:
-        print("[run_test_analysis_8_3] WARNING: statsmodels still unavailable — Table 8.3c LMM "
+        print("[test_nma_analysis_8_3] WARNING: statsmodels still unavailable — Table 8.3c LMM "
               "will be NaN. Install statsmodels as a CLUSTER LIBRARY and re-run.")
 
 
@@ -142,11 +137,11 @@ def main(spark=None):
     _ensure_statsmodels()
     if spark is None:
         spark = _run_pipeline.get_spark()
-    print("[run_test_analysis_8_3] building / reusing the staging pipeline...")
+    print("[test_nma_analysis_8_3] building / reusing the staging pipeline...")
     tables = _run_pipeline.run(spark)
     raw_pdf = spark.table(tables["analysis_ready"]).toPandas()
     tmp_dir = tempfile.mkdtemp(prefix="nma_a83_")
-    print(f"[run_test_analysis_8_3] running §8.3 checks (outputs → {tmp_dir})...")
+    print(f"[test_nma_analysis_8_3] running §8.3 checks (outputs → {tmp_dir})...")
     _assert_recovers_low_high_design(spark, tables, raw_pdf, tmp_dir)
     print("\n§8.3 INTEGRATION TEST PASSED — within-user TDD-stratum design recovered + artifacts written")
 

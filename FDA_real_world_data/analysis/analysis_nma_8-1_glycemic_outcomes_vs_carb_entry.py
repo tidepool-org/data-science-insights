@@ -28,7 +28,7 @@ Inputs:
                                         behavioral counts, TDD, age; PLN-1001 cohort filter already
                                         applied — version<3.4.0 when known, else local_day<2024-07-13)
 
-Outputs (analysis/outputs/analysis_8_1/<cohort>/):
+Outputs (analysis/outputs/nma/analysis_8_1/<cohort>/):
   §8.1 (main — matches the plan; arms = 3 nested NMA + CE>0 + the CE>=3/BE>=3 high-engagement column):
     sample_information.csv              (Table 1: per-cohort age + sex demographics, user/day counts)
     sex_missingness_sensitivity.csv     (recorded-vs-missing-sex baseline comparison; FDA §8.5 analog)
@@ -49,7 +49,7 @@ Outputs (analysis/outputs/analysis_8_1/<cohort>/):
 
 main() also writes the combined Sample Information across cohorts (run via the no-`--cohort`
 entry point):
-    analysis/outputs/analysis_8_1/table_8_1_sample_information.csv  (adult/pediatric/all columns)
+    analysis/outputs/nma/analysis_8_1/table_8_1_sample_information.csv  (adult/pediatric/all columns)
 """
 
 # %pip install statsmodels
@@ -76,12 +76,12 @@ try:
 except NameError:
     _ANALYSIS_DIR = (
         "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-        "no_meal_announcement/analysis"
+        "FDA_real_world_data/analysis"
     )
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils.data_loader import (  # noqa: E402
+from utils.nma_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
@@ -102,7 +102,7 @@ from utils.data_loader import (  # noqa: E402
     restrict_comparator,
     windowed_matched_means,
 )
-from utils.plotting import (  # noqa: E402
+from utils.nma_plotting import (  # noqa: E402
     DAY_TYPE_ORDER,
     GRAY,
     GRIDS,
@@ -124,7 +124,7 @@ BOOTSTRAP_SEED = 20260520
 # Per-user violin grids show the 5 arms (3 nested NMA + CE>0 + CE>=3/BE>=3). Each arm's colour is the
 # panel endpoint's glycemic-range band colour (3 nested CE=0 arms dark→light ramp, CE>0 grey, HMA bronze)
 # via day_type_colors(<endpoint_col>) — so the arm hue tracks the metric shown and matches the
-# range-coloured bars / Δ-histograms / panel titles. Shared across §8.1–§8.3 via utils.plotting.
+# range-coloured bars / Δ-histograms / panel titles. Shared across §8.1–§8.3 via utils.nma_plotting.
 VIOLIN_ALPHA = 0.72   # uniform fill alpha (the distinct day-type colours, not alpha, separate arms)
 
 # Behavioral metrics for Table 8.1c (CE>0 days). PLN-1008 §7.5 lists meal boluses,
@@ -347,7 +347,7 @@ def create_sample_information(pdf):
     into table_8_1_sample_information.csv.
 
     Sex degrades gracefully: until `gender` is in the analysis-ready snapshot (see
-    data_staging/export_user_day_analysis_ready.py), the sex rows read 'N/A (gender pending)'
+    data_staging/export_nma_user_day_analysis_ready.py), the sex rows read 'N/A (gender pending)'
     so the run completes before the Databricks regeneration step."""
     n_days = int(len(pdf))
     # §7.3 delivery-strategy share over ALL eligible user-days (cohort-wide denominator). This is the
@@ -394,12 +394,12 @@ def create_sample_information(pdf):
 
 def _combine_sample_information(here=None):
     """Concatenate the three per-cohort sample_information.csv files into one Table-1 with
-    adult/pediatric/all columns at outputs/analysis_8_1/table_8_1_sample_information.csv.
+    adult/pediatric/all columns at outputs/nma/analysis_8_1/table_8_1_sample_information.csv.
     Reads three tiny CSVs (not the snapshot); all three share the same metric rows in the
     same order, so concat on the metric index preserves layout."""
     if here is None:
         here = analysis_dir()
-    root = os.path.join(here, "outputs", "analysis_8_1")
+    root = os.path.join(here, "outputs", "nma", "analysis_8_1")
     cols = []
     for cohort in ("adult", "pediatric", "all"):
         path = os.path.join(root, cohort, "sample_information.csv")
@@ -551,7 +551,7 @@ def make_stacked_bar(pdf):
 
 def arm_violin_groups(pdf, endpoint, *, include_high_ma=False):
     """Per-user-mean violin groups for the arms of one column, in the shape
-    utils.plotting.violin_box_panel expects: (label, values, colour, alpha). Each arm's colour is
+    utils.nma_plotting.violin_box_panel expects: (label, values, colour, alpha). Each arm's colour is
     this endpoint's glycemic-range band colour (3 nested CE=0 arms dark→light ramp, CE>0 grey, HMA
     bronze) via day_type_colors, at a uniform VIOLIN_ALPHA. With `include_high_ma=True`, appends the
     CE>=3/BE>=3 high meal-announcement category as a 5th group (used by §8.1 Figure 8.1b; off by
@@ -622,7 +622,7 @@ def create_windowed_match_feasibility(pdf, classifications=CLASSIFICATIONS):
     user's days fall in the ±WINDOW_HALF window → a coverage gap), and **sustained non-announcing** (the
     rest — a deep CE=0 stretch). Also reports the nearest-CE>0 calendar distance (median [IQR]) over the
     unmatched days that have any CE>0 day. Reconstructed to reproduce the retired diagnostic exactly
-    (decisions.md D15; validated against outputs/review_feasibility/unmatched_ce0_day_reasons.csv)."""
+    (decisions.md D15; validated against outputs/nma/review_feasibility/unmatched_ce0_day_reasons.csv)."""
     carb = pd.to_numeric(pdf["carb_entry_count"], errors="coerce").fillna(0).values
     be = pd.to_numeric(pdf["bolus_entry_count"], errors="coerce").fillna(0).values
     ordd = (pd.to_datetime(pdf["local_day"]) - pd.Timestamp("2000-01-01")).dt.days.values
@@ -679,7 +679,7 @@ def create_windowed_match_feasibility(pdf, classifications=CLASSIFICATIONS):
 def create_windowed_contrast_table(pdf, fda_stats, classifications=CLASSIFICATIONS):
     """Table 12.1 (windowed-comparator sensitivity): the §8.1 NMA-vs-CE>0 contrast recomputed with a
     per-NMA-day ±(WINDOW_DAYS/2)-day temporal match — each NMA day is compared only to the mean of
-    that user's CE>0 days within ±(WINDOW_DAYS/2) calendar days (utils.data_loader.windowed_matched_means),
+    that user's CE>0 days within ±(WINDOW_DAYS/2) calendar days (utils.nma_loading.windowed_matched_means),
     per nested classification × endpoint. Per-user windowed Δ (NMA − local CE>0 mean) summarized
     across users with equal weight (Method A: paired-t + Wilcoxon + t-CI). The pooled-within-user
     full-record contrast (table_8_1a_expanded / Table 8.1a) stays primary; the full-record Δ on the
@@ -843,13 +843,13 @@ def run(
     figs_filter=None,
 ):
     """Run Analysis 8.1 for one age cohort. Outputs land in
-    outputs/analysis_8_1/<cohort>/ unless an explicit output_dir is given.
+    outputs/nma/analysis_8_1/<cohort>/ unless an explicit output_dir is given.
 
     
 
     Source priority: an explicit `csv_path`, else `spark.table(analysis_ready_table)` when
     a Spark session is given, else (running locally, no Spark) the CSV snapshot that
-    data_staging/export_user_day_analysis_ready.py writes — outputs/<table-name>.csv.
+    data_staging/export_nma_user_day_analysis_ready.py writes — outputs/nma/<table-name>.csv.
 
     figures_only=True skips the SLOW table writes (LMM + cluster-bootstrap contrasts) and re-renders
     only the figures, in place (existing table CSVs untouched) — for fast figure-tweak iteration; do a
@@ -860,7 +860,7 @@ def run(
     nma_stats = load_nma_statistics()
     here = analysis_dir()
     if output_dir is None:
-        output_dir = os.path.join(here, "outputs", "analysis_8_1", cohort)
+        output_dir = os.path.join(here, "outputs", "nma", "analysis_8_1", cohort)
     # Clear this cohort's dir first so it reflects only the current run (no stale files from
     # renamed/removed outputs). Only the per-cohort dir is wiped — the sibling `supplement/`
     # dir (exploratory weighting-sensitivity artifacts) and the parent-level combined table
@@ -876,8 +876,8 @@ def run(
         if not os.path.exists(csv_path):
             raise FileNotFoundError(
                 f"analysis-ready CSV not found at {csv_path}. Run "
-                "data_staging/export_user_day_analysis_ready.py to create it (it writes "
-                "outputs/<table-name>.csv), or pass csv_path/--csv_path."
+                "data_staging/export_nma_user_day_analysis_ready.py to create it (it writes "
+                "outputs/nma/<table-name>.csv), or pass csv_path/--csv_path."
             )
         pdf = prepare_day_level(pd.read_csv(csv_path))
     else:
@@ -962,7 +962,7 @@ def main(
     figs_filter=None,
 ):
     """Orchestrate the §7.6 cohort split: adult and pediatric reported separately, plus a
-    pooled `all` sanity run. Each lands in its own outputs/analysis_8_1/<cohort>/ dir. Pass `csv_path` to run locally
+    pooled `all` sanity run. Each lands in its own outputs/nma/analysis_8_1/<cohort>/ dir. Pass `csv_path` to run locally
     off the analysis-ready CSV snapshot (no Spark). figures_only / figs_filter forward the
     fast figure-only path to each cohort run."""
     for cohort in ("adult", "pediatric", "all"):
@@ -978,7 +978,7 @@ if __name__ == "__main__":
     _parser.add_argument("--analysis_ready_table", default="dev.fda_510k_rwd.nma_user_day_analysis_ready")
     _parser.add_argument("--csv_path", default=None,
                          help="analysis-ready CSV snapshot (run without Spark); defaults to "
-                              "outputs/<table-name>.csv when no Spark session is present")
+                              "outputs/nma/<table-name>.csv when no Spark session is present")
     _parser.add_argument("--output_dir", default=None)
     _parser.add_argument("--cohort", default=None, choices=["adult", "pediatric", "all"])
     _parser.add_argument("--figures-only", dest="figures_only", action="store_true",

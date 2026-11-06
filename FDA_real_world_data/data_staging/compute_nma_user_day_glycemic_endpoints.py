@@ -31,21 +31,18 @@ import sys
 
 
 def _ensure_fda_staging_on_path():
-    """Put FDA_real_world_data/data_staging/ on sys.path so compute_glycemic_endpoints
-    can be imported unmodified. Mirrors run_pipeline.py's path-mangling; the fallback
-    covers the Databricks notebook context where __file__ is undefined."""
+    """Put this script's directory on sys.path so compute_glycemic_endpoints, a sibling
+    since the move of 2026-11-06, imports under the notebook too (where __file__ is
+    undefined and the script directory is not on the path)."""
     try:
         here = os.path.dirname(os.path.abspath(__file__))
     except NameError:
         here = (
             "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-            "no_meal_announcement/data_staging"
+            "FDA_real_world_data/data_staging"
         )
-    fda_staging = os.path.normpath(
-        os.path.join(here, "..", "..", "FDA_real_world_data", "data_staging")
-    )
-    if fda_staging not in sys.path:
-        sys.path.insert(0, fda_staging)
+    if here not in sys.path:
+        sys.path.insert(0, here)
 
 
 def run(

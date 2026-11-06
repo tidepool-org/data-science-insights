@@ -38,9 +38,9 @@
 --
 -- Dedup expressions MIRROR the staging exactly so every recount reconciles:
 --   bolus  : (_userId, CAST(ROUND(unix_timestamp(ts)/60.0) AS BIGINT), units), MAX signal
---            -> export_user_day_bolus_classification.py
+--            -> export_nma_user_day_bolus_classification.py
 --   carb   : (_userId, EXACT time_string ts, carb_grams), latest created_timestamp
---            -> export_user_day_carbs.py
+--            -> export_nma_user_day_carbs.py
 --   anchor : dev.fda_510k_rwd.loop_recommendations (cohort + day universe; `day` = UTC date)
 --
 -- Ad-hoc; run cell-by-cell in a Databricks SQL editor. Not runnable locally (no Spark).
@@ -745,7 +745,7 @@ raw_carbs AS (
     AND TRY_CAST(f.time_string AS TIMESTAMP) IS NOT NULL
     AND TRY_CAST(get_json_object(f.nutrition,'$.carbohydrate.net') AS DOUBLE) IS NOT NULL
 ),
-deduped AS (   -- mirror export_user_day_carbs: latest created_ts per (user, EXACT ts, grams)
+deduped AS (   -- mirror export_nma_user_day_carbs: latest created_ts per (user, EXACT ts, grams)
   SELECT _userId, local_day, grams FROM (
     SELECT rc.*, ROW_NUMBER() OVER (PARTITION BY _userId, ts, grams ORDER BY created_timestamp DESC) AS rn
     FROM raw_carbs rc

@@ -1,7 +1,7 @@
 """
 Statistical helpers for PLN-1008.
 
-Extends `FDA_real_world_data.analysis.utils.statistics` with:
+Extends the FDA statistics module (analysis/utils/statistics.py, a sibling) with:
     - Cluster-bootstrap CI for paired differences (1,000 user-resamples)
     - `paired_within_user`: wraps the FDA paired-t / Wilcoxon /
       Shapiro-Wilk bundle and adds the bootstrap CI.
@@ -16,27 +16,13 @@ Extends `FDA_real_world_data.analysis.utils.statistics` with:
 imports cleanly when only the bootstrap / paired functions are needed.
 """
 
-import importlib.util
-import os
 from typing import Callable
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 
-# Load FDA's statistics module by file path to avoid the `statistics` name
-# collision (our own module is also named `statistics`).
-try:
-    _here = os.path.dirname(os.path.abspath(__file__))
-except NameError:
-    _here = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/no_meal_announcement/analysis/utils"
-_fda_stats_path = os.path.normpath(
-    os.path.join(_here, "..", "..", "..", "FDA_real_world_data", "analysis", "utils", "statistics.py")
-)
-_spec = importlib.util.spec_from_file_location("fda_statistics", _fda_stats_path)
-_fda_statistics = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_fda_statistics)
-compute_paired_statistics = _fda_statistics.compute_paired_statistics
+from .statistics import compute_paired_statistics
 
 
 def cluster_bootstrap_ci(

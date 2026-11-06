@@ -7,14 +7,14 @@ re-checked on every snapshot regen. Spec: [../../project_docs/negative_controls_
 
 | file | what | committed? |
 |---|---|---|
-| `select_panel_candidates.py` | Query the snapshot's derived columns to surface candidate user-days per decision (TR-1..TR-11); also the **single source** of `add_day_index` + `derived_fields`. Run it to print the de-identified candidate worksheet. | code |
-| `build_panel_fixture.py` | Freeze `panel_fixture.csv` from the current snapshot (run in-env). | code |
-| `panel_fixture.csv` | The de-identified frozen panel — pseudonym key + relative `day_index` + derived/bucketed expected values. **The only shareable artifact.** | ✅ yes |
-| `test_traceability_panel.py` | Regen-time drift guard: re-derive each panel row from the current snapshot and assert it matches the frozen values. | code |
+| `select_nma_panel_candidates.py` | Query the snapshot's derived columns to surface candidate user-days per decision (TR-1..TR-11); also the **single source** of `add_day_index` + `derived_fields`. Run it to print the de-identified candidate worksheet. | code |
+| `build_nma_panel_fixture.py` | Freeze `nma_panel_fixture.csv` from the current snapshot (run in-env). | code |
+| `nma_panel_fixture.csv` | The de-identified frozen panel — pseudonym key + relative `day_index` + derived/bucketed expected values. **The only shareable artifact.** | ✅ yes |
+| `test_nma_traceability_panel.py` | Regen-time drift guard: re-derive each panel row from the current snapshot and assert it matches the frozen values. | code |
 
 ## De-identification basis (spec §3)
 
-`panel_fixture.csv` carries **only**: the D16 pseudonym (`_userId`, an opaque salted-SHA-256 hash),
+`nma_panel_fixture.csv` carries **only**: the D16 pseudonym (`_userId`, an opaque salted-SHA-256 hash),
 a **relative** `day_index` (0-based rank of the user's days — never the calendar date), discrete
 derived fields (counts / arm flags / `delivery_strategy` / endpoints) and **bucketed**
 quasi-identifiers (`age_band`, `tdd_bucket`, `cgm_coverage_pct`). No raw records, no `local_day`,
@@ -39,6 +39,6 @@ are absent.
 ## Rebuild
 
 ```
-python testing/traceability/select_panel_candidates.py   # inspect candidates (de-identified)
-python testing/traceability/build_panel_fixture.py        # re-freeze panel_fixture.csv
+python testing/traceability/select_nma_panel_candidates.py   # inspect candidates (de-identified)
+python testing/traceability/build_nma_panel_fixture.py        # re-freeze nma_panel_fixture.csv
 ```

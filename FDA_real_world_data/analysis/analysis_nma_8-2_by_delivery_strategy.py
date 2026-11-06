@@ -18,7 +18,7 @@ alongside.
 
 Mirrors §8.1's per-cohort run()/main() + output-clearing; shares the analysis-ready loader,
 §7.6 cohort filter, CE>0 comparator restriction, and endpoint/classification constants via
-utils/data_loader, and the interaction LMM via utils/statistics.lmm_day_strategy_interaction.
+utils/nma_loading, and the interaction LMM via utils/nma_statistics.lmm_day_strategy_interaction.
 
 Note: autobolus_on days are sparse (~2% of user-days), so within the stringent classifications
 some NMA × autobolus_on cells are too small to fit; those (classification, endpoint) cells are
@@ -29,7 +29,7 @@ the descriptive figures (8.2a/8.2c/8.2d) show HMA as a 3rd, overlapping day type
 bronze) beside NMA and CE>0 (4 → 6 cells per strategy pair); and a parallel Appendix §12.2
 interaction contrast (day_type ∈ {CE>=3/BE>=3, CE>0} × strategy) is emitted alongside.
 
-Outputs (analysis/outputs/analysis_8_2/<cohort>/):
+Outputs (analysis/outputs/nma/analysis_8_2/<cohort>/):
     table_8_2a_marginal_cells.csv   (per classification × endpoint × day_type × strategy:
                                      observed per-user-mean summary + model-estimated mean; the 3
                                      nested NMA classifications (NMA + CE>0 cells) plus a 5th
@@ -70,12 +70,12 @@ try:
 except NameError:
     _ANALYSIS_DIR = (
         "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-        "no_meal_announcement/analysis"
+        "FDA_real_world_data/analysis"
     )
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils.data_loader import (  # noqa: E402
+from utils.nma_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
@@ -92,7 +92,7 @@ from utils.data_loader import (  # noqa: E402
     prepare_day_level,
     restrict_comparator,
 )
-from utils.plotting import (  # noqa: E402
+from utils.nma_plotting import (  # noqa: E402
     DAY_TYPE_ORDER,
     GRIDS,
     LEGEND_FS,
@@ -109,7 +109,7 @@ from utils.plotting import (  # noqa: E402
     violin_box_panel,
 )
 
-# §7.3 delivery strategies (STRATEGIES / STRATEGY_COL) now live in utils.data_loader (shared with
+# §7.3 delivery strategies (STRATEGIES / STRATEGY_COL) now live in utils.nma_loading (shared with
 # §8.3); imported above. Any other / null strategy is "ambiguous" and excluded.
 DAY_TYPE_COL = "day_type"
 NMA_LABEL = "NMA"
@@ -121,7 +121,7 @@ BOOTSTRAP_SEED = 20260520
 # glycemic-range band (day_type_colors(col)) — the 3 nested NMA/CE=0 arms a dark→light ramp of that
 # band, CE>0 grey, CE>=3/BE>=3 bronze — so the hue reinforces which metric a panel shows (the arm hue
 # now varies per endpoint). The stacked bars (8.2d) keep RANGE_COLORS (by glycemic range). All shared
-# via utils.plotting.
+# via utils.nma_plotting.
 VIOLIN_ALPHA = 0.72   # day-type fill alpha (the distinct day-type colours separate the day types)
 # In 8.2a the AB/TB pair of a day type sits adjacent (same day-type colour), so the strategy is cued
 # by alpha — autobolus_on darker, temp_basal_only lighter.
@@ -355,7 +355,7 @@ HEADLINE_CLS = CLASSIFICATIONS[1][1]   # "CE=0/BE<=1" — the headline NMA arm
 
 def _cell_violin_groups(frame, endpoint):
     """Violin groups for the 10 (day_type × strategy) cells of one endpoint, in the shape
-    utils.plotting.violin_box_panel expects: (label, values, colour, alpha). Grouped by day type with
+    utils.nma_plotting.violin_box_panel expects: (label, values, colour, alpha). Grouped by day type with
     the TB/AB pair adjacent (so the strategy effect reads within each day type): d1-TB, d1-AB |
     d2-TB, d2-AB | … Colour = the day type's colour for THIS endpoint's band (day_type_colors(endpoint):
     3 nested NMA/CE=0 ramp, CE>0 grey, HMA bronze); within a pair AB is darker, TB lighter
@@ -529,12 +529,12 @@ def run(
     figures_only=False,
     figs_filter=None,
 ):
-    """Run Analysis 8.2 for one age cohort. Outputs land in outputs/analysis_8_2/<cohort>/
+    """Run Analysis 8.2 for one age cohort. Outputs land in outputs/nma/analysis_8_2/<cohort>/
     unless an explicit output_dir is given.
 
     Source priority: an explicit `csv_path`, else `spark.table(analysis_ready_table)` when a
     Spark session is given, else (local, no Spark) the CSV snapshot that
-    data_staging/export_user_day_analysis_ready.py writes — outputs/<table-name>.csv.
+    data_staging/export_nma_user_day_analysis_ready.py writes — outputs/nma/<table-name>.csv.
 
     figures_only=True skips the table writes and re-renders only the figures, in place (existing
     table CSVs untouched). figs_filter (a substring, e.g. "8_2a") renders only matching figure
@@ -545,7 +545,7 @@ def run(
     nma_stats = load_nma_statistics()
     here = analysis_dir()
     if output_dir is None:
-        output_dir = os.path.join(here, "outputs", "analysis_8_2", cohort)
+        output_dir = os.path.join(here, "outputs", "nma", "analysis_8_2", cohort)
     # Clear this cohort's dir first so it reflects only the current run (full run only; figures_only
     # overwrites PNGs in place, leaving the table CSVs intact).
     if os.path.isdir(output_dir) and not figures_only:
@@ -559,8 +559,8 @@ def run(
         if not os.path.exists(csv_path):
             raise FileNotFoundError(
                 f"analysis-ready CSV not found at {csv_path}. Run "
-                "data_staging/export_user_day_analysis_ready.py to create it (it writes "
-                "outputs/<table-name>.csv), or pass csv_path/--csv_path."
+                "data_staging/export_nma_user_day_analysis_ready.py to create it (it writes "
+                "outputs/nma/<table-name>.csv), or pass csv_path/--csv_path."
             )
         pdf = prepare_day_level(pd.read_csv(csv_path))
     else:
@@ -639,7 +639,7 @@ def main(
     figs_filter=None,
 ):
     """Orchestrate the §7.6 cohort split: adult and pediatric reported separately, plus a
-    pooled `all` sanity run. Each lands in its own outputs/analysis_8_2/<cohort>/ dir.
+    pooled `all` sanity run. Each lands in its own outputs/nma/analysis_8_2/<cohort>/ dir.
     figures_only / figs_filter forward the fast figure-only path to each cohort run."""
     for cohort in ("adult", "pediatric", "all"):
         run(spark, analysis_ready_table, output_dir=None, cohort=cohort,
@@ -651,7 +651,7 @@ if __name__ == "__main__":
     _parser.add_argument("--analysis_ready_table", default="dev.fda_510k_rwd.nma_user_day_analysis_ready")
     _parser.add_argument("--csv_path", default=None,
                          help="analysis-ready CSV snapshot (run without Spark); defaults to "
-                              "outputs/<table-name>.csv when no Spark session is present")
+                              "outputs/nma/<table-name>.csv when no Spark session is present")
     _parser.add_argument("--output_dir", default=None)
     _parser.add_argument("--cohort", default=None, choices=["adult", "pediatric", "all"])
     _parser.add_argument("--figures-only", dest="figures_only", action="store_true",

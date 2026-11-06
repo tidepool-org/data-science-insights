@@ -14,21 +14,21 @@ Mirrors `FDA_real_world_data/testing/integration/run_pipeline.py`, with two diff
     their table names, so the test passes the test_nma_* names as arguments. The shim
     is unnecessary.
 
-DAG order (mirrors `nma_pipeline.yml`, current module names):
+DAG order (mirrors `fda_analysis_pipeline.yml (Phase 6)`, current module names):
 
     seeds: bddp, user_dates, user_gender
       FDA export_loop_dose_classification  -> loop_dose_classification
         FDA export_loop_recommendations    -> loop_recommendations (the day universe)
       seeds from the fixture: loop_cbg, user_diagnosis_type
-      export_user_day_cbg                  -> nma_user_day_cbg, nma_user_day_coverage
-        compute_user_day_glycemic_endpoints -> nma_user_day_glycemic_endpoints
-      export_user_day_bolus_classification -> nma_user_day_bolus_classification (from the dose table)
-        export_user_day_bolus_counts        -> nma_user_day_bolus_counts
-      export_user_day_carbs                -> nma_user_day_carbs
-      export_user_day_tdd                  -> nma_user_day_tdd
-      export_user_day_age                  -> nma_user_day_age
-      export_user_day_classification       -> nma_user_day_classification
-      export_user_day_analysis_ready       -> nma_user_day_analysis_ready (the cohort table)
+      export_nma_user_day_cbg                  -> nma_user_day_cbg, nma_user_day_coverage
+        compute_nma_user_day_glycemic_endpoints -> nma_user_day_glycemic_endpoints
+      export_nma_user_day_bolus_classification -> nma_user_day_bolus_classification (from the dose table)
+        export_nma_user_day_bolus_counts        -> nma_user_day_bolus_counts
+      export_nma_user_day_carbs                -> nma_user_day_carbs
+      export_nma_user_day_tdd                  -> nma_user_day_tdd
+      export_nma_user_day_age                  -> nma_user_day_age
+      export_nma_user_day_classification       -> nma_user_day_classification
+      export_nma_user_day_analysis_ready       -> nma_user_day_analysis_ready (the cohort table)
 """
 
 import os
@@ -37,11 +37,12 @@ import sys
 import types
 from contextlib import contextmanager
 
-# Import the fixture builder both when this file is imported as a package member (pytest /
-# conftest: `from no_meal_announcement.testing.integration import run_pipeline`) AND when it's
-# run directly via the Databricks run-button / a notebook cell (no parent package → the
-# relative import raises ImportError). In the direct-run case, put this file's own directory
-# on sys.path and import it as a top-level module (handling __file__ being undefined).
+# Import the fixture builder both when this file is imported as a package member
+# (`from testing.integration import run_nma_pipeline`) AND when it's run directly via the
+# Databricks run-button / a notebook cell, or imported by a runner with this directory on
+# sys.path (no parent package → the relative import raises ImportError). In that case, put
+# this file's own directory on sys.path and import it as a top-level module (handling
+# __file__ being undefined).
 try:
     from . import build_synthetic_nma_bddp
 except ImportError:
@@ -49,7 +50,7 @@ except ImportError:
         _pkg_dir = os.path.dirname(os.path.abspath(__file__))
     except NameError:
         _pkg_dir = ("/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-                    "no_meal_announcement/testing/integration")
+                    "FDA_real_world_data/testing/integration")
     if _pkg_dir not in sys.path:
         sys.path.insert(0, _pkg_dir)
     import build_synthetic_nma_bddp  # type: ignore  # noqa: E402
@@ -109,28 +110,24 @@ def get_spark():
 
 
 def _ensure_staging_on_path():
-    """Add `no_meal_announcement/data_staging/` to sys.path so the staging modules
+    """Add `FDA_real_world_data/data_staging/` to sys.path so the staging modules
     can be imported by bare name (they're standalone Databricks task files, not a
-    package). Mirrors FDA run_pipeline's path-mangling."""
+    package); the FDA dose classifier and day projection are siblings there since the
+    move of 2026-11-06. Mirrors FDA run_pipeline's path-mangling."""
     try:
         here = os.path.dirname(os.path.abspath(__file__))
     except NameError:
         here = (
             "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-            "no_meal_announcement/testing/integration"
+            "FDA_real_world_data/testing/integration"
         )
     staging_dir = os.path.normpath(os.path.join(here, "..", "..", "data_staging"))
     if staging_dir not in sys.path:
         sys.path.insert(0, staging_dir)
-    # The FDA staging too: the dose classifier and its day projection run on the
-    # fixture (no NMA module shares a name with an FDA one).
-    fda_staging_dir = os.path.normpath(os.path.join(here, "..", "..", "..", "FDA_real_world_data", "data_staging"))
-    if fda_staging_dir not in sys.path:
-        sys.path.insert(0, fda_staging_dir)
 
 
 def pseudonymize_uid(raw):
-    """Mirror export_user_day_analysis_ready's salted-SHA256 `_userId` pseudonymization (D16) so an
+    """Mirror export_nma_user_day_analysis_ready's salted-SHA256 `_userId` pseudonymization (D16) so an
     integration test can find an archetype by its raw name in the (hashed) analysis-ready table.
 
     The staging SQL emits `concat('u', substr(sha2(concat(_userId, USERID_SALT), 256), 1, 16))`;
@@ -138,7 +135,7 @@ def pseudonymize_uid(raw):
     so the helper tracks the real salt if it ever changes."""
     import hashlib
     _ensure_staging_on_path()
-    from export_user_day_analysis_ready import USERID_SALT  # noqa: E402
+    from export_nma_user_day_analysis_ready import USERID_SALT  # noqa: E402
     return "u" + hashlib.sha256((raw + USERID_SALT).encode("utf-8")).hexdigest()[:16]
 
 
@@ -203,15 +200,15 @@ def run(spark, force=False):
 
     _ensure_staging_on_path()
     # Imported here (not at module top) so the path mangling above runs first.
-    import export_user_day_cbg  # type: ignore # noqa: E402
-    import compute_user_day_glycemic_endpoints  # type: ignore # noqa: E402
-    import export_user_day_bolus_classification  # type: ignore # noqa: E402
-    import export_user_day_bolus_counts  # type: ignore # noqa: E402
-    import export_user_day_carbs  # type: ignore # noqa: E402
-    import export_user_day_tdd  # type: ignore # noqa: E402
-    import export_user_day_age  # type: ignore # noqa: E402
-    import export_user_day_classification  # type: ignore # noqa: E402
-    import export_user_day_analysis_ready  # type: ignore # noqa: E402
+    import export_nma_user_day_cbg  # type: ignore # noqa: E402
+    import compute_nma_user_day_glycemic_endpoints  # type: ignore # noqa: E402
+    import export_nma_user_day_bolus_classification  # type: ignore # noqa: E402
+    import export_nma_user_day_bolus_counts  # type: ignore # noqa: E402
+    import export_nma_user_day_carbs  # type: ignore # noqa: E402
+    import export_nma_user_day_tdd  # type: ignore # noqa: E402
+    import export_nma_user_day_age  # type: ignore # noqa: E402
+    import export_nma_user_day_classification  # type: ignore # noqa: E402
+    import export_nma_user_day_analysis_ready  # type: ignore # noqa: E402
     import export_loop_dose_classification  # type: ignore # noqa: E402  (FDA)
     import export_loop_recommendations  # type: ignore # noqa: E402  (FDA)
 
@@ -239,51 +236,51 @@ def run(spark, force=False):
         spark, TABLES["user_diagnosis_type"], TABLES["loop_recommendations"])
 
     # ── Step 2: CBG slice + glycemic endpoints ────────────────────────────────
-    print("[nma.run_pipeline] export_user_day_cbg...")
-    export_user_day_cbg.run(
+    print("[nma.run_pipeline] export_nma_user_day_cbg...")
+    export_nma_user_day_cbg.run(
         spark,
         input_table=TABLES["loop_cbg"],
         output_cbg_table=TABLES["cbg"],
         output_coverage_table=TABLES["coverage"],
     )
-    print("[nma.run_pipeline] compute_user_day_glycemic_endpoints...")
-    compute_user_day_glycemic_endpoints.run(
+    print("[nma.run_pipeline] compute_nma_user_day_glycemic_endpoints...")
+    compute_nma_user_day_glycemic_endpoints.run(
         spark,
         input_table=TABLES["cbg"],
         output_table=TABLES["glycemic_endpoints"],
     )
 
     # ── Step 3: bolus counts by the FDA verdict -> BE counts ──────────────────
-    print("[nma.run_pipeline] export_user_day_bolus_classification...")
-    export_user_day_bolus_classification.run(
+    print("[nma.run_pipeline] export_nma_user_day_bolus_classification...")
+    export_nma_user_day_bolus_classification.run(
         spark,
         dose_table=TABLES["loop_dose_classification"],
         anchor_table=TABLES["loop_recommendations"],
         output_table=TABLES["bolus_classification"],
     )
-    print("[nma.run_pipeline] export_user_day_bolus_counts...")
-    export_user_day_bolus_counts.run(
+    print("[nma.run_pipeline] export_nma_user_day_bolus_counts...")
+    export_nma_user_day_bolus_counts.run(
         spark,
         bolus_classification_table=TABLES["bolus_classification"],
         output_table=TABLES["bolus_counts"],
     )
 
     # ── Step 4: carbs, TDD, age (independent of each other) ────────────────────
-    print("[nma.run_pipeline] export_user_day_carbs...")
-    export_user_day_carbs.run(
+    print("[nma.run_pipeline] export_nma_user_day_carbs...")
+    export_nma_user_day_carbs.run(
         spark,
         input_table=TABLES["bddp"],
         loop_recommendations_table=TABLES["loop_recommendations"],
         output_table=TABLES["carbs"],
     )
-    print("[nma.run_pipeline] export_user_day_tdd...")
-    export_user_day_tdd.run(
+    print("[nma.run_pipeline] export_nma_user_day_tdd...")
+    export_nma_user_day_tdd.run(
         spark,
         input_table=TABLES["bddp"],
         output_table=TABLES["tdd"],
     )
-    print("[nma.run_pipeline] export_user_day_age...")
-    export_user_day_age.run(
+    print("[nma.run_pipeline] export_nma_user_day_age...")
+    export_nma_user_day_age.run(
         spark,
         loop_recommendations_table=TABLES["loop_recommendations"],
         user_dates_table=TABLES["user_dates"],
@@ -291,8 +288,8 @@ def run(spark, force=False):
     )
 
     # ── Step 5: classification (day universe + eligibility + arm flags) ────────
-    print("[nma.run_pipeline] export_user_day_classification...")
-    export_user_day_classification.run(
+    print("[nma.run_pipeline] export_nma_user_day_classification...")
+    export_nma_user_day_classification.run(
         spark,
         loop_recommendations_table=TABLES["loop_recommendations"],
         coverage_table=TABLES["coverage"],
@@ -302,8 +299,8 @@ def run(spark, force=False):
     )
 
     # ── Step 6: denormalized analysis-ready table (terminal) ───────────────────
-    print("[nma.run_pipeline] export_user_day_analysis_ready...")
-    export_user_day_analysis_ready.run(
+    print("[nma.run_pipeline] export_nma_user_day_analysis_ready...")
+    export_nma_user_day_analysis_ready.run(
         spark,
         loop_recommendations_table=TABLES["loop_recommendations"],
         classification_table=TABLES["classification"],
@@ -314,7 +311,7 @@ def run(spark, force=False):
         user_gender_table=TABLES["user_gender"],
         diagnosis_table=TABLES["user_diagnosis_type"],
         output_table=TABLES["analysis_ready"],
-        output_csv=False,  # don't write a CSV into no_meal_announcement/outputs/
+        output_csv=False,  # don't write a CSV into FDA_real_world_data/outputs/nma/
     )
 
     print("[nma.run_pipeline] pipeline complete")
@@ -329,7 +326,7 @@ def analysis_ready_csv_path():
         here = os.path.dirname(os.path.abspath(__file__))
     except NameError:
         here = ("/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-                "no_meal_announcement/testing/integration")
+                "FDA_real_world_data/testing/integration")
     return os.path.join(here, "fixtures", "nma_user_day_analysis_ready_test.csv")
 
 

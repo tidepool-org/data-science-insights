@@ -33,7 +33,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 _analysis_dir = os.path.normpath(os.path.join(_here, "..", "..", "analysis"))
 if _analysis_dir not in sys.path:
     sys.path.insert(0, _analysis_dir)
-from utils.data_loader import (  # type: ignore # noqa: E402
+from utils.nma_loading import (  # type: ignore # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
@@ -43,14 +43,14 @@ from utils.data_loader import (  # type: ignore # noqa: E402
     prepare_day_level,
     restrict_comparator,
 )
-from utils.plotting import (  # type: ignore # noqa: E402
+from utils.nma_plotting import (  # type: ignore # noqa: E402
     GRAY,
     endpoint_color,
     overlay_hist_panel,
     violin_box_panel,
 )
 
-# Columns export_user_day_tdd needs on the RAW BDDP table; checked by report_raw_columns.
+# Columns export_nma_user_day_tdd needs on the RAW BDDP table; checked by report_raw_columns.
 _RAW_TDD_COLUMNS = ["rate", "value", "normal", "payload", "origin", "duration"]
 
 

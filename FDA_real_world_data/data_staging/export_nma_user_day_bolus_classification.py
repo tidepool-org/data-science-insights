@@ -27,7 +27,7 @@ Outputs:
          user-day of the universe, counts 0 on days with no bolus.
 
 Downstream:
-    BE (export_user_day_bolus_counts)        = manual_normal_bolus_count
+    BE (export_nma_user_day_bolus_counts)        = manual_normal_bolus_count
     delivery strategy (analysis-ready)       = the day table's own flags, not a
                                                threshold on these counts
 

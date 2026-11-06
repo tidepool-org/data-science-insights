@@ -2,7 +2,7 @@
 
 Fully off STAGED EVENT-LEVEL tables — no raw BDDP. Generate both event tables once first:
   data_staging/export_bolus_classification.run(spark)  ->  nma_bolus_classification
-  data_staging/export_carb_events.run(spark)           ->  nma_carb_events
+  data_staging/export_nma_carb_events.run(spark)           ->  nma_carb_events
 Manual boluses come from `nma_bolus_classification` (one row per logical bolus, bolus_ts +
 classification — so the HK+dd split is NOT recomputed); carb times from `nma_carb_events` (one row
 per logical carb entry, carb_ts). (The day-grain nma_user_day_* tables can't be used — they carry

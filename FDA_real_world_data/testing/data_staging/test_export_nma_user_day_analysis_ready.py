@@ -1,5 +1,5 @@
 """
-Spark test for `data_staging/export_user_day_analysis_ready.py` — the cohort table (D23).
+Spark test for `data_staging/export_nma_user_day_analysis_ready.py` — the cohort table (D23).
 
 Focused on the STAGING-specific logic this step owns (the full join is covered end-to-end by
 the integration harness): every row of the universe is kept with the criteria as columns
@@ -9,7 +9,7 @@ table's flags with NULL for a neither day, the diagnosis group as a column (type
 absent user kept), the `_userId` salted-SHA-256 pseudonymization, and the §7.5 per-user TDD
 reference over the version-passing eligible days.
 
-Runs on Databricks (or local pyspark); SKIPS cleanly elsewhere. Silent on success.
+Run on Databricks. Silent on success.
 """
 
 import hashlib
@@ -21,25 +21,20 @@ try:
     _here = os.path.dirname(os.path.abspath(__file__))
 except NameError:
     _here = ("/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-             "no_meal_announcement/testing/data_staging")
+             "FDA_real_world_data/testing/data_staging")
 sys.path.insert(0, os.path.join(_here, "..", "..", "data_staging"))
 sys.path.insert(0, os.path.join(_here, ".."))
-sys.path.insert(0, os.path.join(_here, "..", "..", "..", "FDA_real_world_data", "data_staging"))
 
-try:
-    from pyspark.sql import SparkSession  # type: ignore
-    spark = SparkSession.builder.getOrCreate()
-except (ImportError, RuntimeError) as _spark_err:
-    import pytest
-    pytest.skip(f"Spark unavailable locally ({_spark_err}); run on Databricks.",
-                allow_module_level=True)
+from pyspark.sql import SparkSession  # type: ignore
+
+spark = SparkSession.builder.getOrCreate()
 
 import pandas as pd  # noqa: E402
 
 from export_loop_recommendations import BASAL_TAGS, BOLUS_TAGS  # type: ignore # noqa: E402
-from export_user_day_analysis_ready import USERID_SALT, run  # type: ignore # noqa: E402
+from export_nma_user_day_analysis_ready import USERID_SALT, run  # type: ignore # noqa: E402
 from nma_test_helpers import make_loop_recs, read_test_output, setup_test_table  # type: ignore # noqa: E402
-from FDA_real_world_data.testing.staging_test_helpers import (  # type: ignore # noqa: E402
+from staging_test_helpers import (  # type: ignore # noqa: E402
     TEST_SCHEMA,
     teardown_test_tables,
 )

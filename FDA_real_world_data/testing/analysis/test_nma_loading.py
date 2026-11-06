@@ -1,5 +1,5 @@
 """
-Unit tests for `analysis/utils/data_loader.py` — the shared cohort / comparator /
+Unit tests for `analysis/utils/nma_loading.py` — the shared cohort / comparator /
 day-level helpers. Pure pandas (no Spark, no statsmodels), so they run in the
 local non-Spark layer.
 
@@ -12,12 +12,14 @@ import sys
 import numpy as np
 import pandas as pd
 
-# data_loader has no relative imports, but strata (and the analysis modules) import it as
-# `utils.data_loader`, so add analysis/ to the path and import the same way for consistency.
+# The loader is a module of the analysis `utils` package (it imports its siblings), so add
+# analysis/ to the path and import it the way the analyses do.
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "analysis")))
+sys.path.insert(0, os.path.normpath(os.path.join(_here, "..")))
+from offline_test_helpers import run_tests  # noqa: E402
 
-from utils.data_loader import (  # type: ignore # noqa: E402
+from utils.nma_loading import (  # type: ignore # noqa: E402
     DIAGNOSIS_GROUPS,
     assert_cohort_predicates,
     cohort_predicates,
@@ -213,3 +215,22 @@ def test_windowed_matched_means_empty_arm_keeps_columns():
     assert "tir__nma" in per_user.columns
     assert "tir__cmp" in per_user.columns
     assert cov["n_users_matched"] == 0
+
+
+if __name__ == "__main__":
+    run_tests([
+        test_restrict_comparator_zeros_non_ce0_users,
+        test_restrict_comparator_no_hma_column_is_ok,
+        test_filter_cohort_adult_excludes_unknown_dob,
+        test_filter_cohort_pediatric,
+        test_filter_cohort_all_retains_unknown_dob,
+        test_filter_cohort_primary_groups_by_default,
+        test_filter_cohort_every_group_on_request,
+        test_filter_cohort_refuses_an_unknown_group,
+        test_cohort_predicates_from_the_criteria,
+        test_prepare_day_level_keeps_the_cohort_and_coerces_numeric,
+        test_prepare_day_level_refuses_a_disagreeing_predicate,
+        test_prepare_day_level_refuses_a_pre_migration_snapshot,
+        test_windowed_matched_means_uses_only_in_window_comparator_days,
+        test_windowed_matched_means_empty_arm_keeps_columns,
+    ], "test_nma_loading")

@@ -15,12 +15,14 @@ Supplement/appendix (§12.x) tables are out of scope.
 """
 
 import os
+import sys
 
 import pandas as pd
-import pytest
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-SNAPSHOT = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma_user_day_analysis_ready.csv"))
+sys.path.insert(0, os.path.normpath(os.path.join(_DIR, "..")))
+from offline_test_helpers import require_statsmodels, run_tests, skip  # noqa: E402
+SNAPSHOT = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma", "nma_user_day_analysis_ready.csv"))
 OUT = os.path.normpath(os.path.join(_DIR, "..", "..", "analysis", "outputs"))
 
 
@@ -29,11 +31,11 @@ def _skip_unless_snapshot_has(*cols):
     column — e.g. the D23 `in_analysis_cohort` merge. A not-ready input is a prerequisite, not a failure
     (a bare checkout / stale snapshot shouldn't drown the suite)."""
     if not os.path.exists(SNAPSHOT):
-        pytest.skip(f"snapshot not on disk: {SNAPSHOT}")
+        skip(f"snapshot not on disk: {SNAPSHOT}")
     have = set(pd.read_csv(SNAPSHOT, nrows=0).columns)
     missing = [c for c in cols if c not in have]
     if missing:
-        pytest.skip(f"snapshot missing {missing} — regenerate it (predates the 2026-11-05 cohort-table migration, D23)")
+        skip(f"snapshot missing {missing} — regenerate it (predates the 2026-11-05 cohort-table migration, D23)")
 
 
 def test_table_8_1a_ce0_be0_tir():
@@ -41,7 +43,7 @@ def test_table_8_1a_ce0_be0_tir():
     out_csv = os.path.join(OUT, "analysis_8_1/all/table_8_1a_per_user_means.csv")
     _skip_unless_snapshot_has("in_analysis_cohort", "diagnosis_group")
     if not os.path.exists(out_csv):
-        pytest.fail(f"output table missing: {out_csv} — regenerate the analysis outputs from the snapshot")
+        raise AssertionError(f"output table missing: {out_csv} — regenerate the analysis outputs from the snapshot")
 
     df = pd.read_csv(SNAPSHOT, usecols=["_userId", "in_analysis_cohort", "diagnosis_group", "in_ce0_be0", "tir"])
 
@@ -65,14 +67,14 @@ def test_table_8_1a_ce0_be0_tir():
 
 def test_table_8_1b_ce0_be0_tir_lmm():
     """Table 8.1b, Method B LMM (NMA − CE>0), refit independently."""
-    statsmodels = pytest.importorskip("statsmodels")
+    require_statsmodels()
     from statsmodels.regression.mixed_linear_model import MixedLM
     import warnings
 
     out_csv = os.path.join(OUT, "analysis_8_1/all/table_8_1b_lmm_contrasts.csv")
     _skip_unless_snapshot_has("in_analysis_cohort", "diagnosis_group")
     if not os.path.exists(out_csv):
-        pytest.fail(f"output table missing: {out_csv} — regenerate the analysis outputs from the snapshot")
+        raise AssertionError(f"output table missing: {out_csv} — regenerate the analysis outputs from the snapshot")
 
     df = pd.read_csv(
         SNAPSHOT,
@@ -101,7 +103,7 @@ def test_table_8_1b_ce0_be0_tir_lmm():
     t = pd.read_csv(out_csv)
     published = float(t[(t["classification"] == "CE=0/BE=0") & (t["endpoint"] == "tir")]["coef"].iloc[0])
     if pd.isna(published):
-        pytest.fail("published LMM coef is NaN — regenerate analysis outputs with statsmodels available")
+        raise AssertionError("published LMM coef is NaN — regenerate analysis outputs with statsmodels available")
 
     assert abs(recompute - published) < 0.05, (
         f"Table 8.1b LMM CE=0/BE=0 TIR coef: recompute={recompute:.4f}, published={published:.4f}"
@@ -113,7 +115,7 @@ def test_table_1_sample_information_counts():
     out_csv = os.path.join(OUT, "analysis_8_1/all/sample_information.csv")
     _skip_unless_snapshot_has("in_analysis_cohort", "diagnosis_group")
     if not os.path.exists(out_csv):
-        pytest.fail(f"output table missing: {out_csv} — regenerate the analysis outputs from the snapshot")
+        raise AssertionError(f"output table missing: {out_csv} — regenerate the analysis outputs from the snapshot")
 
     df = pd.read_csv(SNAPSHOT, usecols=["_userId", "in_analysis_cohort", "diagnosis_group"])
 
@@ -134,3 +136,11 @@ def test_table_1_sample_information_counts():
         f"Sample counts: recompute users={users}, days={days}; "
         f"published users={published_users}, days={published_days}"
     )
+
+
+if __name__ == "__main__":
+    run_tests([
+        test_table_8_1a_ce0_be0_tir,
+        test_table_8_1b_ce0_be0_tir_lmm,
+        test_table_1_sample_information_counts,
+    ], "test_crosscheck_nma_8_1")

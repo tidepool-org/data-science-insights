@@ -11,7 +11,7 @@ snapshot** that the analyses read. Catalog: `dev.fda_510k_rwd`. Prune entries th
 | `dev.fda_510k_rwd.loop_dose_classification` (FDA) | **One row per logical bolus or basal** with the FDA verdict `is_automated` (the union of every rule) and `has_normal_subtype`. Since 2026-11-05 (D23) the source of every manual-versus-automatic count. |
 | `dev.fda_510k_rwd.loop_recommendations` (FDA) | **The valid-day universe** — one row per classified user-day (a dose a rule recognised) with `is_autobolus_day` / `is_temp_basal_day`, the automated counts, the per-rule bolus counts, and the Loop version (NULL when none parses). Anchor for carbs, classification, analysis-ready; the delivery strategy is its flags. |
 | `dev.fda_510k_rwd.user_diagnosis_type` (FDA) | Per-user resolved diagnosis and `diagnosis_group`; joined on the raw id before the alias. |
-| `dev.fda_510k_rwd.loop_cbg` (FDA) | Cleaned 5-min CGM, already cohort-gated. Sliced to day grain by `export_user_day_cbg`. |
+| `dev.fda_510k_rwd.loop_cbg` (FDA) | Cleaned 5-min CGM, already cohort-gated. Sliced to day grain by `export_nma_user_day_cbg`. |
 | `dev.default.bddp_sample_all_2` | Raw BDDP — `food` / `wizard` (carbs), `bolus` / `basal` (incl. HealthKit metadata), DOB. |
 | `dev.default.bddp_user_dates` | DOB → age. |
 | `dev.default.user_gender` | Per-user sex (`gender`, key `userid`). |
@@ -80,7 +80,7 @@ release). `passes_age_gate`: age ≥ 6 or DOB unknown. `in_analysis_cohort` = th
 `user_eligible`, and the age gate; the loader asserts it from the columns and keeps those rows, then selects
 the diagnosis groups (the type-1 primary by default). The thresholds are
 `FDA_real_world_data/data_staging/cohort_constants.py`. The §7.1 flow by stage and diagnosis group is
-`analysis/analysis_7-1_cohort_flow.py`.
+`analysis/analysis_nma_7-1_cohort_flow.py`.
 
 **Demographics.** `age_years` reported at the user's **first eligible day**; sex per-user-constant,
 binned by `_bin_sex` / `SEX_CATEGORIES` (mirrors FDA `_bin_gender`). "Missing" sex = null/blank raw gender.

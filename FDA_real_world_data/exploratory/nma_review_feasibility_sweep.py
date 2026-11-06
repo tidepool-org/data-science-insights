@@ -1,6 +1,6 @@
 """Feasibility sweep for the 2026-06-04 team-review asks (PLN-1008 NMA).
 
-Runs LOCALLY off the analysis-ready CSV snapshot, reusing analysis/utils/data_loader.py
+Runs LOCALLY off the analysis-ready CSV snapshot, reusing analysis/utils/nma_loading.py
 for the real eligibility + cohort filters so the numbers match the actual analysis
 population. Pure profiling — writes NO user-level data (aggregate counts only), so the
 "alias user ids in any CSV" rule is satisfied trivially (no _userId column is emitted).
@@ -15,7 +15,7 @@ Covers:
 
 Usage:
   /Users/mconn/miniconda3/envs/tidepool-data-science-simulator-dev/bin/python \
-      no_meal_announcement/exploratory/review_feasibility_sweep.py
+      FDA_real_world_data/exploratory/nma_review_feasibility_sweep.py
 """
 import os
 import sys
@@ -25,11 +25,11 @@ import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ANALYSIS_DIR = os.path.normpath(os.path.join(HERE, "..", "analysis"))
-OUT_DIR = os.path.normpath(os.path.join(HERE, "..", "outputs", "review_feasibility"))
-CSV = os.path.normpath(os.path.join(HERE, "..", "outputs", "nma_user_day_analysis_ready.csv"))
+OUT_DIR = os.path.normpath(os.path.join(HERE, "..", "outputs", "nma", "review_feasibility"))
+CSV = os.path.normpath(os.path.join(HERE, "..", "outputs", "nma", "nma_user_day_analysis_ready.csv"))
 sys.path.insert(0, ANALYSIS_DIR)
 
-from utils.data_loader import (  # noqa: E402
+from utils.nma_loading import (  # noqa: E402
     CLASSIFICATIONS, MIN_AGE, prepare_day_level, filter_cohort,
 )
 

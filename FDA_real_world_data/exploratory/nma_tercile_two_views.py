@@ -13,7 +13,7 @@ Aggregate output only (no _userId written) -> alias rule satisfied trivially.
 
 Run:
   /Users/mconn/miniconda3/envs/tidepool-data-science-simulator-dev/bin/python \
-      no_meal_announcement/exploratory/tercile_two_views.py
+      FDA_real_world_data/exploratory/nma_tercile_two_views.py
 """
 import os
 import sys
@@ -23,11 +23,11 @@ import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ANALYSIS_DIR = os.path.normpath(os.path.join(HERE, "..", "analysis"))
-OUT_DIR = os.path.normpath(os.path.join(HERE, "..", "outputs", "review_feasibility"))
-CSV = os.path.normpath(os.path.join(HERE, "..", "outputs", "nma_user_day_analysis_ready.csv"))
+OUT_DIR = os.path.normpath(os.path.join(HERE, "..", "outputs", "nma", "review_feasibility"))
+CSV = os.path.normpath(os.path.join(HERE, "..", "outputs", "nma", "nma_user_day_analysis_ready.csv"))
 sys.path.insert(0, ANALYSIS_DIR)
 
-from utils.data_loader import CLASSIFICATIONS, MIN_AGE, prepare_day_level, filter_cohort  # noqa: E402
+from utils.nma_loading import CLASSIFICATIONS, MIN_AGE, prepare_day_level, filter_cohort  # noqa: E402
 
 MIN_REF_DAYS = 30
 STRATA = ["Low", "Mid", "High"]

@@ -5,7 +5,7 @@ Re-exports the relevant helpers from FDA staging tests and adds NMA-specific
 fixture builders used by the Layer 3 staging-Spark tests and the
 Layer 7 end-to-end integration test.
 
-    From `FDA_real_world_data.testing.staging_test_helpers`:
+    From `staging_test_helpers.py` (the FDA helpers, siblings):
         - setup_test_table
         - read_test_output
         - assert_row_count
@@ -24,15 +24,13 @@ import sys
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-# Re-export FDA helpers (Unit 5.1). The package is not pip-installed, so add
-# the repo root to sys.path and import by module path.
-_REPO_ROOT = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-)
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+# Re-export the FDA helpers, siblings in this testing/ directory (the insert
+# covers a caller that has not put the directory on sys.path).
+_TESTING_DIR = os.path.dirname(os.path.abspath(__file__))
+if _TESTING_DIR not in sys.path:
+    sys.path.insert(0, _TESTING_DIR)
 
-from FDA_real_world_data.testing.staging_test_helpers import (  # noqa: E402
+from staging_test_helpers import (  # noqa: E402
     assert_column_values,
     assert_row_count,
     make_loop_recs,
@@ -69,7 +67,7 @@ MMOL_PER_MGDL = 1.0 / 18.018
 # Day-type archetypes for make_user_day_rows. Each emits the same per-day
 # shape for `days` consecutive days. Per-day bolus counts are minimal but
 # sufficient to make each NMA classification flag flip the expected way
-# downstream of export_user_day_bolus_counts + export_user_day_classification.
+# downstream of export_nma_user_day_bolus_counts + export_nma_user_day_classification.
 # `ce0_beinf` uses 5 non-meal boluses to match PLN-1008 archetype "BE=5".
 _ARCHETYPES = {
     "ce0_be0":   {"n_meal": 0, "n_non_meal": 0, "n_autobolus": 5, "carbs_per_meal": 0.0},
@@ -85,7 +83,7 @@ def _iso(dt: datetime) -> str:
 
 def _origin(version: str = DEFAULT_VERSION, source_name: Optional[str] = None) -> str:
     """BDDP `origin` JSON. With `source_name` set, embeds the HealthKit
-    `payload.sourceRevision.source.name` that export_user_day_tdd's HK predicate
+    `payload.sourceRevision.source.name` that export_nma_user_day_tdd's HK predicate
     (`$.payload.sourceRevision.source.name = 'Loop'`) keys on. Mirrors FDA
     build_synthetic_bddp._origin so synthetic boluses/basals land in the
     HealthKit-delivered TDD stream."""
@@ -96,7 +94,7 @@ def _origin(version: str = DEFAULT_VERSION, source_name: Optional[str] = None) -
 
 
 # HealthKit metadata flag Loop stamps on automatically-issued boluses. The bolus
-# classifier (export_user_day_bolus_classification) reads it via
+# classifier (export_nma_user_day_bolus_classification) reads it via
 # get_json_object(payload, '$["com.loopkit.InsulinKit.MetadataKeyAutomaticallyIssued"]'),
 # so an autobolus carrying this payload is counted as automatic (and excluded from
 # manual_normal_bolus_count = BE) even though its subType is 'normal' — matching how
@@ -104,7 +102,7 @@ def _origin(version: str = DEFAULT_VERSION, source_name: Optional[str] = None) -
 _AUTO_PAYLOAD = json.dumps({"com.loopkit.InsulinKit.MetadataKeyAutomaticallyIssued": 1})
 
 # BDDP origin for HealthKit-delivered (source=Loop) insulin records. Used for boluses
-# and basals so their delivered amounts land in export_user_day_tdd's HealthKit stream.
+# and basals so their delivered amounts land in export_nma_user_day_tdd's HealthKit stream.
 HK_LOOP_ORIGIN = _origin(DEFAULT_VERSION, source_name="Loop")
 
 
@@ -158,7 +156,7 @@ def make_bolus_events(
                       automatic (NOT in manual_normal_bolus_count = BE).
 
     All boluses carry the HealthKit (source=Loop) origin so their `normal` amount
-    is picked up by export_user_day_tdd's delivered-bolus stream.
+    is picked up by export_nma_user_day_tdd's delivered-bolus stream.
 
     Total rows returned = 2 * n_meal + n_non_meal + n_autobolus.
 
@@ -285,7 +283,7 @@ def make_basal_row(
     """Single HealthKit (source=Loop) `type='basal'` record covering
     `duration_hours` from `hour:00`, carrying Loop's automatically-issued key.
 
-    export_user_day_tdd's HealthKit-delivered basal path reads the `rate` column
+    export_nma_user_day_tdd's HealthKit-delivered basal path reads the `rate` column
     (delivered U/hr) and `duration` (MILLISECONDS), then credits
     rate × LEAST(gap_to_next, duration) per segment. So `rate_u_per_hr` lands in
     `rate`, `duration_hours * 3600 * 1000` lands in `duration`, and the origin
@@ -321,7 +319,7 @@ def make_loop_direct_basal_row(
 ) -> dict:
     """Single Loop-direct (`origin.name='com.loopkit.Loop'`) `type='basal'` record.
 
-    Counterpart to make_basal_row (HealthKit stream). export_user_day_tdd credits Loop-direct basal
+    Counterpart to make_basal_row (HealthKit stream). export_nma_user_day_tdd credits Loop-direct basal
     as SUM(payload.deliveredUnits) — the actual delivered amount — and NEVER rate × duration: the
     Loop-direct `rate` is the COMMANDED temp rate, which integrates to ~1.7× the delivered units. So
     `delivered_units` lands in `payload.deliveredUnits`, and `commanded_rate` (default 1.7× the

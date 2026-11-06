@@ -8,7 +8,7 @@ user's boluses alone, which is the pre-2026-09-04 behaviour; run_residuals.py pr
 
 Net basal per tick: for each user-day, one stream is used (HealthKit when it has rows that day, else Loop-direct).
 Delivered units per segment are rate × effective duration for HealthKit (effective = min(duration, gap to the next
-segment), as in no_meal_announcement's TDD calculation) and payload.deliveredUnits for Loop-direct. Scheduled units
+segment), as in the NMA's TDD calculation, FDA_real_world_data/data_staging/export_nma_user_day_tdd.py) and payload.deliveredUnits for Loop-direct. Scheduled units
 are the suppressed scheduled rate × the same duration; 'scheduled' segments are net zero by definition. A temp segment
 without a scheduled rate takes the user's nearest-in-time scheduled rate (the schedule changes slowly): those segments
 are mostly zero-rate suspends whose `suppressed` field the upload dropped, and counting them as net zero instead of as

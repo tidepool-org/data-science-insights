@@ -1,7 +1,7 @@
 """
 Unit tests for `analysis/utils/strata.py` — the D12 within-user TDD-stratification
 toolkit shared by §8.3 and §8.4. Pure pandas for the strata builders (local layer);
-the LMM-table guard tests use `pytest.importorskip("statsmodels")`.
+the LMM-table guard tests call `require_statsmodels()` (a skip).
 
 The load-bearing piece is the same-user-set gate (D12 fix): across-user stratum
 means must share a single user set, so n_users is equal across strata.
@@ -12,12 +12,12 @@ import sys
 
 import numpy as np
 import pandas as pd
-import pytest
-
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "analysis")))
+sys.path.insert(0, os.path.normpath(os.path.join(_here, "..")))
+from offline_test_helpers import require_statsmodels, run_tests  # noqa: E402
 
-from utils.data_loader import ENDPOINTS, load_nma_statistics  # type: ignore # noqa: E402
+from utils.nma_loading import ENDPOINTS, load_nma_statistics  # type: ignore # noqa: E402
 from utils.strata import (  # type: ignore # noqa: E402
     _ce0_strata,
     _rank_strata,
@@ -129,7 +129,7 @@ def test_table_8_3c_lmm_degenerate_emits_not_converged_row():
 
 def test_table_8_3c_lmm_converges_with_two_users_per_stratum():
     """Happy path: ≥2 users in each stratum → converged=True, coef = Low − High > 0."""
-    pytest.importorskip("statsmodels")
+    require_statsmodels()
     nma_stats = load_nma_statistics()
     rows = []
     for u in ["u1", "u2", "u3"]:
@@ -140,3 +140,16 @@ def test_table_8_3c_lmm_converges_with_two_users_per_stratum():
     tir = out[(out["classification"] == "CE=0/BE=0") & (out["endpoint"] == "tir")].iloc[0]
     assert bool(tir["converged"]) is True
     assert tir["coef_low_minus_high"] > 0
+
+
+if __name__ == "__main__":
+    run_tests([
+        test_ce0_strata_labels_low_high_by_ratio,
+        test_ce0_strata_drops_below_min_ref_days,
+        test_rank_strata_overall_binary_splits_at_median_rank,
+        test_rank_strata_overall_tercile,
+        test_rank_strata_overall_vs_ce0_reference_differ,
+        test_same_user_set_gate_keeps_only_users_in_every_stratum,
+        test_table_8_3c_lmm_degenerate_emits_not_converged_row,
+        test_table_8_3c_lmm_converges_with_two_users_per_stratum,
+    ], "test_strata")

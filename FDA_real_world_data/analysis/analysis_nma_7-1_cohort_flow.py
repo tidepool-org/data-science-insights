@@ -16,7 +16,7 @@ Stages, cumulative, in user-days and users:
   Analysis cohort                          in_analysis_cohort (equals the stage above)
   In a delivery-strategy contrast          in_strategy_contrast (§8.2 and §8.4 only)
 
-Written to outputs/analysis_7_1/:
+Written to outputs/nma/analysis_7_1/:
   table_7_1_cohort_flow.csv                 users by stage and diagnosis group (all, primary, each group)
   table_7_1_cohort_flow_user_days.csv       the same in user-days
   table_7_1_cohort_flow_primary.csv         the primary cohort's users, corrected vintage beside the
@@ -32,8 +32,8 @@ age_years, the diagnosis group from diagnosis_type without the LADA label. The n
 printed and written into the long table's `vintage` column as 'issued (derived)'.
 
 Run locally off the snapshot (the normal path):
-  python analysis/analysis_7-1_cohort_flow.py
-  python analysis/analysis_7-1_cohort_flow.py --issued_csv <the vintage snapshot>
+  python analysis/analysis_nma_7-1_cohort_flow.py
+  python analysis/analysis_nma_7-1_cohort_flow.py --issued_csv <the vintage snapshot>
 """
 
 import argparse
@@ -47,7 +47,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from utils.data_loader import (  # noqa: E402
+from utils.nma_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
@@ -65,7 +65,7 @@ from utils.data_loader import (  # noqa: E402
 )
 
 ANALYSIS_READY_TABLE = "dev.fda_510k_rwd.nma_user_day_analysis_ready"
-OUTPUT_DIR = os.path.join(analysis_dir(), "outputs", "analysis_7_1")
+OUTPUT_DIR = os.path.join(analysis_dir(), "outputs", "nma", "analysis_7_1")
 ARMS = CLASSIFICATIONS + [(COMPARATOR_FLAG, COMPARATOR_LABEL), (HIGH_MA_FLAG, HIGH_MA_LABEL)]
 
 
@@ -185,7 +185,7 @@ def run(csv_path=None, issued_csv=None, output_dir=OUTPUT_DIR):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--csv_path", default=None, help="the analysis-ready snapshot (default outputs/<table>.csv)")
+    parser.add_argument("--csv_path", default=None, help="the analysis-ready snapshot (default outputs/nma/<table>.csv)")
     parser.add_argument("--issued_csv", default=None, help="the issued vintage's snapshot, for the side-by-side column")
     parser.add_argument("--output_dir", default=OUTPUT_DIR)
     args = parser.parse_args()

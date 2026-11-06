@@ -5,7 +5,7 @@ Here we anchor on each CARB entry → nearest MANUAL bolus, so the population is
 boluses. Same event tables, same eligibility scope, same sign convention — directly comparable.
 
 Fully off STAGED EVENT-LEVEL tables — no raw BDDP. Generate both event tables once first:
-  data_staging/export_carb_events.run(spark)           ->  nma_carb_events
+  data_staging/export_nma_carb_events.run(spark)           ->  nma_carb_events
   data_staging/export_bolus_classification.run(spark)  ->  nma_bolus_classification
 Carb times come from `nma_carb_events` (one row per logical carb entry, carb_ts); manual boluses
 from `nma_bolus_classification` (one row per logical bolus, bolus_ts + classification — so the HK+dd

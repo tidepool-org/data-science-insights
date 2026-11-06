@@ -2,7 +2,7 @@
 
 Event-level companion to `export_bolus_classification.py`. It emits ONE ROW PER LOGICAL CARB
 ENTRY (deduped, with its timestamp + grams). It is intended to sit ABOVE
-`export_user_day_carbs.py`: that day-grain table (carb_entry_count, carb_grams_total) becomes a
+`export_nma_user_day_carbs.py`: that day-grain table (carb_entry_count, carb_grams_total) becomes a
 thin GROUP BY of this one, instead of re-deriving the dedup inline. It is also the carb analogue
 of the event-level bolus table, so per-event analyses (e.g. bolus<->carb timing) can read carb
 timestamps from a staged table instead of raw BDDP.
@@ -16,7 +16,7 @@ day-grain table drops it). Unlike boluses there is NO classification to do here:
 food-only (D10) — `food.origin` is null, so there is no automatic-carb flag (no analogue of the
 autobolus problem). Every deduped food row IS a carb entry.
 
-DEDUP (matches export_user_day_carbs.py exactly — the documented carb exception)
+DEDUP (matches export_nma_user_day_carbs.py exactly — the documented carb exception)
 BDDP re-ingests the same food record many times. Carbs are deduped on the EXACT
 `(_userId, time_string timestamp, carb_grams)` keeping the latest `created_timestamp` — NOT the
 nearest-minute key used for boluses/basal/TDD. This exact-timestamp key is validated as immaterial

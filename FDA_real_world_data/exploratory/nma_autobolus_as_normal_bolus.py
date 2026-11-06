@@ -5,7 +5,7 @@ automatic-ness lives only in the HealthKit metadata key
 `com.loopkit.InsulinKit.MetadataKeyAutomaticallyIssued`, not in `subType`). If so, the
 SAME boluses are simultaneously:
 
-  1. COUNTED as bolus entries by export_user_day_bolus_counts.py — its BE is
+  1. COUNTED as bolus entries by export_nma_user_day_bolus_counts.py — its BE is
      `type='bolus' AND subType='normal'` with NO automatic exclusion (despite its
      docstring claiming "autobolus carry a non-'normal' subType and are excluded"), and
   2. MISSED by dd_autobolus_count in export_loop_recommendations.py — which only counts
@@ -76,7 +76,7 @@ END"""
 def _deduped_boluses_cte(bddp_table):
     """Typed + deduped bolus rows: one row per (_userId, nearest-minute, units), carrying
     subType, the HealthKit is_automatic flag, source name, and loop version. Dedup key +
-    rule match export_user_day_bolus_counts.py so BE here reconciles with the staged table
+    rule match export_nma_user_day_bolus_counts.py so BE here reconciles with the staged table
     (BDDP re-ingests + Loop's ~2.5s/~15s dual-sync writes are collapsed)."""
     return f"""
 WITH typed_boluses AS (

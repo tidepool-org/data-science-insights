@@ -12,18 +12,14 @@ import os
 import sys
 from datetime import date, timedelta
 
-import pytest
-
 _here = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "..")))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..")))
+sys.path.insert(0, _here)
 
-from FDA_real_world_data.testing.integration.build_synthetic_bddp import (  # type: ignore # noqa: E402
-    BDDP_COLUMNS,
-)
-
-from integration import build_synthetic_nma_bddp as nb  # type: ignore # noqa: E402
+from build_synthetic_bddp import BDDP_COLUMNS  # type: ignore # noqa: E402
+import build_synthetic_nma_bddp as nb  # type: ignore # noqa: E402
 import nma_test_helpers as _nh  # type: ignore # noqa: E402  — for _AUTO_PAYLOAD (autobolus marker)
+from offline_test_helpers import run_tests  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -337,15 +333,46 @@ def test_to_bddp_row_defaults_timezone_offset():
     assert expanded["timezoneOffset"] == nb.TZ_OFFSET_MIN
 
 
-@pytest.mark.parametrize("uid", sorted(nb.ARCHETYPES))
-def test_every_archetype_has_demographics(uid):
-    assert uid in nb.DEMOGRAPHICS
-    assert isinstance(nb.DEMOGRAPHICS[uid]["dob"], date)
+def test_every_archetype_has_demographics():
+    for uid in sorted(nb.ARCHETYPES):
+        assert uid in nb.DEMOGRAPHICS
+        assert isinstance(nb.DEMOGRAPHICS[uid]["dob"], date)
 
 
-@pytest.mark.parametrize("uid", sorted(nb.ARCHETYPES))
-def test_every_archetype_uses_consistent_userid(uid):
-    builder = nb.ARCHETYPES[uid]
-    rows = builder()
-    ids = {r["_userId"] for r in rows if r["_userId"]}
-    assert ids == {uid}
+def test_every_archetype_uses_consistent_userid():
+    for uid in sorted(nb.ARCHETYPES):
+        builder = nb.ARCHETYPES[uid]
+        rows = builder()
+        ids = {r["_userId"] for r in rows if r["_userId"]}
+        assert ids == {uid}
+
+
+if __name__ == "__main__":
+    run_tests([
+        test_pure_be0_shape,
+        test_mixed_shape,
+        test_low_coverage_has_half_the_cbg,
+        test_below_min_days_spans_only_8_days,
+        test_pediatric_dob_is_2010,
+        test_pediatric_has_mixed_day_types,
+        test_ambiguous_strategy_is_a_neither_day,
+        test_tdd_drift_spans_60_days,
+        test_tdd_drift_basal_rate_rises_monotonically,
+        test_known_paired_diff_spans_20_days_with_correct_carb_pattern,
+        test_known_paired_diff_tir_designed_by_segment,
+        test_known_interaction_spans_20_days_in_four_cells,
+        test_known_low_high_tdd_spans_30_days_all_ce0_be0,
+        test_known_low_high_tdd_low_segment_has_lower_basal_rate,
+        test_known_hma_shape,
+        test_known_hma_is_registered_as_a_pair,
+        test_known_strategy_stratum_shape,
+        test_known_strategy_stratum_low_cells_have_lower_basal,
+        test_convergence_pairs_registered,
+        test_archetypes_dict_user_count,
+        test_build_rows_sums_archetype_counts,
+        test_build_rows_distinct_user_count,
+        test_to_bddp_row_has_all_bddp_columns,
+        test_to_bddp_row_defaults_timezone_offset,
+        test_every_archetype_has_demographics,
+        test_every_archetype_uses_consistent_userid,
+    ], "test_build_synthetic_nma_bddp")

@@ -5,13 +5,13 @@
 -- were miscounted; here we ask whether carb entries hide under other types /
 -- JSON paths, or whether spurious "food" rows inflate CE.)
 --
--- WHAT WE DO NOW (export_user_day_carbs.py):
+-- WHAT WE DO NOW (export_nma_user_day_carbs.py):
 --   CE = `food` rows with non-null nutrition.carbohydrate.net,
 --        deduped on (_userId, EXACT time_string timestamp, carb_grams),
 --        keeping the latest created_timestamp; counted per UTC day.
 --   carb_entry_count = COUNT(deduped food rows);  carb_grams_total = SUM(net carbs).
 --
--- WHY THE COUNT IS LOAD-BEARING (export_user_day_classification.py):
+-- WHY THE COUNT IS LOAD-BEARING (export_nma_user_day_classification.py):
 --   CE=0  <=>  carb_entry_count = 0   (NOT grams).  Even a 0-gram food row makes
 --   the day CE>0 (a "meal announcement").  So the NMA arm is exactly the set of
 --   days with ZERO detected food rows.  Two failure modes move arm membership:
@@ -21,7 +21,7 @@
 --                           = NMA arm shrinks, comparator gains non-meal days.
 --
 -- Source: dev.default.bddp_sample_all_2 (same BDDP table the staging reads).
--- Confirmed columns (from export_user_day_carbs.py + bolus exploration):
+-- Confirmed columns (from export_nma_user_day_carbs.py + bolus exploration):
 --   _userId, time_string, type, subType, reason, normal, nutrition, origin (JSON),
 --   created_timestamp.  Columns flagged "(confirm in §0)" below may need renaming
 --   to whatever §0 reveals (e.g. carbInput / payload for wizard & dosingDecision).

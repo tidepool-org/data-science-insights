@@ -29,7 +29,7 @@
 -- Q1. Full column inventory of the raw layer.
 -- Decides: does a second clock exist as a top-level column (deviceTime,
 -- createdTime, userCreatedDate, est_localTime, insulinOnBoard, ...)?
--- (Same query as no_meal_announcement/exploratory/carb_detection_coverage.sql
+-- (Same query as FDA_real_world_data/exploratory/nma_carb_detection_coverage.sql
 -- Q0, which was never run.)
 -- --------------------------------------------------------------------------
 DESCRIBE dev.default.bddp_sample_all_2;

@@ -29,11 +29,11 @@ bolus landing in BOTH the manual and automatic counts, carb near-duplicates, foo
 co-occurrence — lives in the companion Databricks script:
   exploratory/carb_bolus_dup_overlap.sql
 
-Writes aggregate-only CSVs (no _userId) to outputs/count_plausibility/. Pure profiling.
+Writes aggregate-only CSVs (no _userId) to outputs/nma/count_plausibility/. Pure profiling.
 
 Usage:
   /Users/mconn/miniconda3/envs/tidepool-data-science-simulator-dev/bin/python \
-      no_meal_announcement/exploratory/carb_bolus_count_plausibility.py
+      FDA_real_world_data/exploratory/nma_carb_bolus_count_plausibility.py
 """
 import os
 import sys
@@ -43,11 +43,11 @@ import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ANALYSIS_DIR = os.path.normpath(os.path.join(HERE, "..", "analysis"))
-OUT_DIR = os.path.normpath(os.path.join(HERE, "..", "outputs", "count_plausibility"))
-CSV = os.path.normpath(os.path.join(HERE, "..", "outputs", "nma_user_day_analysis_ready.csv"))
+OUT_DIR = os.path.normpath(os.path.join(HERE, "..", "outputs", "nma", "count_plausibility"))
+CSV = os.path.normpath(os.path.join(HERE, "..", "outputs", "nma", "nma_user_day_analysis_ready.csv"))
 sys.path.insert(0, ANALYSIS_DIR)
 
-from utils.data_loader import (  # noqa: E402
+from utils.nma_loading import (  # noqa: E402
     MIN_AGE, prepare_day_level, filter_cohort, restrict_comparator,
 )
 

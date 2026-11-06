@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-SNAPSHOT = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma_user_day_analysis_ready.csv"))
+SNAPSHOT = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma", "nma_user_day_analysis_ready.csv"))
 
 CGM_FULL_DAY = 288                  # 5-min samples in a day (coverage % denominator, §7.1)
 

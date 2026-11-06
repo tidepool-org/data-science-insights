@@ -11,7 +11,7 @@
 --           percent (temp); suppressed (the basal a temp replaced — do NOT double-count).
 --
 -- Inspect the full insulin sequence for one busy analysis day. Things to confirm from
--- the output before writing export_user_day_tdd.py:
+-- the output before writing export_nma_user_day_tdd.py:
 --   1. `duration` units — temp basals are usually 30 min, so ~1800000 => ms, ~1800 => s.
 --   2. `normal` format — plain numeric string ("1.5") vs JSON ({"value":1.5}).
 --   3. how autoboluses are flagged — subType value and/or automatedDelivery.
@@ -58,7 +58,7 @@ ORDER BY
 -- Diagnostic: how many basal/bolus records have a non-ISO time_string and are therefore
 -- silently dropped by the TRY_CAST(... AS TIMESTAMP) IS NOT NULL guard used across the
 -- pipeline? If json_numberlong counts are large for 'basal', TDD basal would be undercounted
--- and export_user_day_tdd.py must parse the epoch-ms form too.
+-- and export_nma_user_day_tdd.py must parse the epoch-ms form too.
 SELECT
   type,
   CASE
@@ -474,7 +474,7 @@ ORDER BY
 -- Query 13: basal origin coverage SCOPED TO THE LOOP COHORT (loop_recommendations user-days),
 -- the only population the analysis uses. For each analysis user-day, which basal streams are
 -- present: com.loopkit.Loop (has deliveredUnits), HealthKit source=Loop (rate=delivered), or
--- null-origin (uncharacterized)? Decides the basal source + fallback for export_user_day_tdd.py.
+-- null-origin (uncharacterized)? Decides the basal source + fallback for export_nma_user_day_tdd.py.
 WITH lr AS (
   SELECT DISTINCT
     _userId,
@@ -516,8 +516,8 @@ ORDER BY
 
 
 --begin-sql
--- Query 14: do duplicate (re-ingested) rows inflate TDD? export_user_day_tdd.py SUMs bolus
--- `normal` with NO dedup (unlike export_user_day_bolus_counts, which dedups on
+-- Query 14: do duplicate (re-ingested) rows inflate TDD? export_nma_user_day_tdd.py SUMs bolus
+-- `normal` with NO dedup (unlike export_nma_user_day_bolus_counts, which dedups on
 -- (user, ts, units) keeping the latest created_timestamp). Compare raw vs deduped bolus units
 -- on the highest-TDD user-days — inflation_x >> 1 confirms re-ingested duplicates are over-tallied.
 WITH top_days AS (

@@ -1,7 +1,7 @@
 # Report-editor note — §8.1–§8.4 & Appendix §12 (PLN-1008 NMA)
 
 _As of 2026-06-06. For whoever assembles the report from the analysis outputs. Outputs live in
-`analysis/outputs/analysis_8_{1,2,3,4}/{adult,pediatric,all}/` — every table/figure is produced per
+`analysis/outputs/nma/analysis_8_{1,2,3,4}/{adult,pediatric,all}/` — every table/figure is produced per
 cohort. Sections 1–6 below are §8.1-specific; section 7 covers the §8.2/§8.3 high-engagement additions;
 section 8 covers the new §8.4 delivery-strategy analysis._
 
@@ -229,7 +229,7 @@ and §8.3 so they parallel §8.1. The same caveat as §8.1 applies: **CE≥3/BE�
 an **overlapping reference** ("heavy vs typical meal day"), deliberate — not a disjoint partition.
 HMA renders in **bronze** (#9c6b30) everywhere, matching §8.1's 5th arm.
 
-- **§8.2** (`analysis/outputs/analysis_8_2/{cohort}/`):
+- **§8.2** (`analysis/outputs/nma/analysis_8_2/{cohort}/`):
   - **Colour + 5-day-type update (2026-06-06):** the descriptive day-type figures now use the shared
     fixed `DAY_TYPE_COLORS` palette (3 nested NMA/CE=0 greens, CE>0 grey, HMA bronze) and show **all 5
     day types** (matching §8.1's 8.1b): `figure_8_2a_violin_grid{1,2}_*` — 10 cells (5 day
@@ -267,7 +267,7 @@ HMA renders in **bronze** (#9c6b30) everywhere, matching §8.1's 5th arm.
     other 7 endpoints exist in `table_8_2b_interaction.csv` (all 8 endpoints) but appear nowhere in the
     report. Decision needed: expand Table 8.2b to all 8 endpoints (**report-side, no pipeline change**), or
     leave 8.2b TIR-only by design. See todo.md → "Report (RPT-1008 .docx)".
-- **§8.3** (`analysis/outputs/analysis_8_3/{cohort}/`):
+- **§8.3** (`analysis/outputs/nma/analysis_8_3/{cohort}/`):
   - HMA days are stratified Low/High by within-user TDD like CE=0 days and shown as a 3rd group
     (bronze): `figure_8_3a_grid{1,2}_*` (6 violins: CE=0 / CE>0 / CE≥3-BE≥3, each Low&High),
     `figure_8_3b_grid{1,2}_*` (3rd Low−High overlay), `figure_8_3c_stacked_ranges` (now **10 stacked
@@ -309,7 +309,7 @@ supplementary** Appendix §12 content, parallel to §8.1's §12.1. Provenance: `
 
 _⚠️ **SECONDARY / EXPLORATORY** — not a primary citable claim, and it **inherits §8.3's D12 status**
 (citable; D12 resolved). Two delivery-strategy objectives in one module
-(`analysis_8-4_…stratified.py` → `outputs/analysis_8_4/<cohort>/`). The plan defines no §8.4 content;
+(`analysis_8-4_…stratified.py` → `outputs/nma/analysis_8_4/<cohort>/`). The plan defines no §8.4 content;
 this is all new. **§8.2 is unaffected.** AB = `autobolus_on`, TB = `temp_basal_only`. ⚠️ SECONDARY/EXPLORATORY; inherits §8.3's D12-resolved rank-tercile status._
 
 - **Part 1 — glycemic outcomes × within-user TDD stratum × strategy.** Does the AB-vs-TB difference

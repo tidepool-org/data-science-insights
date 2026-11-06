@@ -8,14 +8,14 @@ catching leakage between arms, weighting artifacts, mis-calibrated alpha / pseud
 
 Unlike `cross_checks` (deliberately self-contained so a bug can't be shared), the negative
 controls *reuse the real machinery unchanged* (`analysis/utils/statistics.py` +
-`data_loader.py`) and swap only the day-type label or the outcome — that reuse is the point.
+`nma_loading.py`) and swap only the day-type label or the outcome — that reuse is the point.
 
 Spec: project_docs/negative_controls_and_traceability.md §1. Outputs are user-aggregated
 statistics only → inherently de-identified (no user id leaves this module).
 
 Run as a script to produce the full-B validation memo:
-    python testing/negative_controls/negative_controls.py            # B = 1000
-The pytest layer (`test_negative_controls.py`) reruns a fast reduced-B subset and asserts the
+    python testing/negative_controls/nma_negative_controls.py            # B = 1000
+The pytest layer (`test_nma_negative_controls.py`) reruns a fast reduced-B subset and asserts the
 null-recovery thresholds.
 
 Performance note: the B-resample loops use only the cheap Method-A path (vectorised per-user
@@ -25,32 +25,24 @@ distribution). Method B (`MixedLM`) is fit ONCE in NC-2; fitting it B times on ~
 infeasible. The real reference effect IS computed with the genuine `paired_within_user`.
 """
 
-import importlib.util
 import os
+import sys
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 
-# ── Locate the snapshot + the analysis/ package (load its helpers by file path, mirroring how
-#    statistics.py loads the FDA module — analysis/ has its own `utils` package, so a bare import
-#    would collide). ─────────────────────────────────────────────────────────────────────────
+# ── Locate the snapshot and the analysis/ package (its `utils` modules import as siblings). ──
 _DIR = os.path.dirname(os.path.abspath(__file__))
-SNAPSHOT = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma_user_day_analysis_ready.csv"))
-MEMO_DIR = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "negative_controls"))
+SNAPSHOT = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma", "nma_user_day_analysis_ready.csv"))
+MEMO_DIR = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma", "negative_controls"))
 MEMO_CSV = os.path.join(MEMO_DIR, "nc_summary.csv")
 _ANALYSIS = os.path.normpath(os.path.join(_DIR, "..", "..", "analysis"))
 
 
-def _load_module(name, relpath):
-    path = os.path.join(_ANALYSIS, relpath)
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-data_loader = _load_module("nma_data_loader", os.path.join("utils", "data_loader.py"))
+if _ANALYSIS not in sys.path:
+    sys.path.insert(0, _ANALYSIS)
+from utils import nma_loading as data_loader  # noqa: E402
 nma_stats = data_loader.load_nma_statistics()
 
 # Reuse the project's single source of truth for arms + endpoints.

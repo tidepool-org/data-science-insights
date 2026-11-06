@@ -36,6 +36,11 @@ TESTS = [
     "test_analysis_ir_2.py",
     "test_analysis_ir_3.py",
     "test_analysis_ir_6b.py",
+    # the PLN-1008 checks (2026-11-06), on the NMA harness (run_nma_pipeline)
+    "test_nma_analysis_8_1.py",
+    "test_nma_analysis_8_2.py",
+    "test_nma_analysis_8_3.py",
+    "test_nma_analysis_8_4.py",
 ]
 
 

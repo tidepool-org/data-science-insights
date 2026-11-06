@@ -13,48 +13,41 @@ and keeps the rows of `in_analysis_cohort`; `filter_cohort` then selects the dia
 groups asked for (the type-1 primary by default, every group for an appendix) and the
 adult or pediatric split. The thresholds live in the FDA staging's cohort_constants.py.
 
-`statsmodels` / `scipy` are NOT imported here; the statistics modules are loaded lazily by
-file path (under unique module names — our analysis/ has its own `utils` package, so a bare
-`import statistics` would collide) so this module imports cleanly anywhere.
+`statsmodels` is not imported here; the two statistics modules are siblings in this package
+(since the move of 2026-11-06) and `load_fda_statistics` / `load_nma_statistics` import them on
+request.
 """
 
-import importlib.util
 import os
-import sys
 from typing import Literal
 
 import numpy as np
 import pandas as pd
 
-# Databricks-notebook fallback for the analysis/ dir (where __file__ is undefined).
-_DATABRICKS_ANALYSIS_DIR = (
-    "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-    "no_meal_announcement/analysis"
-)
-
-
-def analysis_dir():
-    """The no_meal_announcement/analysis/ directory. This file lives in analysis/utils/, so
-    the analysis dir is two levels up; falls back to the Databricks path where __file__ is
-    undefined (mirrors the path handling in the data_staging scripts)."""
-    try:
-        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    except NameError:
-        return _DATABRICKS_ANALYSIS_DIR
-
-
 # The thresholds and the diagnosis groups, defined once in the FDA staging
-# (FDA_real_world_data/data_staging/cohort_constants.py), imported by path.
-_FDA_ROOT = os.path.normpath(os.path.join(analysis_dir(), "..", "..", "FDA_real_world_data"))
-_FDA_STAGING_DIR = os.path.join(_FDA_ROOT, "data_staging")
-if _FDA_STAGING_DIR not in sys.path:
-    sys.path.insert(0, _FDA_STAGING_DIR)
-from cohort_constants import (  # noqa: E402,F401  (re-exported for the analyses)
+# (data_staging/cohort_constants.py) and re-exported by the FDA loader.
+from .data_loading import (  # noqa: F401  (re-exported for the analyses)
     DIAGNOSIS_GROUPS,
     LADA_DIAGNOSIS_GROUPS,
     MIN_AGE_YEARS,
     PRIMARY_DIAGNOSIS_GROUPS,
 )
+
+# Databricks-notebook fallback for the analysis/ dir (where __file__ is undefined).
+_DATABRICKS_ANALYSIS_DIR = (
+    "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
+    "FDA_real_world_data/analysis"
+)
+
+
+def analysis_dir():
+    """The FDA_real_world_data/analysis/ directory. This file lives in analysis/utils/, so
+    the analysis dir is one level up; falls back to the Databricks path where __file__ is
+    undefined (mirrors the path handling in the data_staging scripts)."""
+    try:
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    except NameError:
+        return _DATABRICKS_ANALYSIS_DIR
 
 # The cohort table's criterion columns, and the predicates the loader re-derives from them.
 CRITERION_COLUMNS = ("passes_loop_version_gate", "day_eligible", "user_eligible", "passes_age_gate")
@@ -87,7 +80,7 @@ FIGURE_ARMS = CLASSIFICATIONS + [(COMPARATOR_FLAG, COMPARATOR_LABEL)]
 # High meal-announcement ("high engagement") arm: >=3 carb entries AND >=3 manual bolus entries —
 # the heavy-announcement end of the spectrum, shown as a 5th category beside the 3 NMA arms + CE>0
 # (Table 8.1a column + figures 8.1a/8.1b) and in parallel supplement contrast tables. Staged as
-# `in_ce_ge3_be_ge3` in export_user_day_classification.py (carried through analysis-ready).
+# `in_ce_ge3_be_ge3` in export_nma_user_day_classification.py (carried through analysis-ready).
 HIGH_MA_FLAG = "in_ce_ge3_be_ge3"
 HIGH_MA_LABEL = "CE>=3/BE>=3"
 # The 5-category arm set for the supplement / violins (3 NMA + CE>0 + high meal-announcement).
@@ -114,49 +107,30 @@ NUMERIC_COLS = [col for col, _ in ENDPOINTS] + [
 ]
 
 def default_analysis_ready_csv(analysis_ready_table):
-    """Where data_staging/export_user_day_analysis_ready.py writes its CSV snapshot —
-    no_meal_announcement/outputs/<table-name>.csv."""
+    """Where data_staging/export_nma_user_day_analysis_ready.py writes its CSV snapshot —
+    FDA_real_world_data/outputs/nma/<table-name>.csv."""
     fname = analysis_ready_table.split(".")[-1] + ".csv"
-    return os.path.normpath(os.path.join(analysis_dir(), "..", "outputs", fname))
+    return os.path.normpath(os.path.join(analysis_dir(), "..", "outputs", "nma", fname))
 
 
 def load_fda_statistics():
-    """Load FDA analysis/utils/statistics.py by path as `fda_statistics` (avoids the
-    `utils` package-name collision with our own analysis/utils)."""
-    path = os.path.normpath(os.path.join(
-        analysis_dir(), "..", "..", "FDA_real_world_data", "analysis", "utils", "statistics.py"))
-    spec = importlib.util.spec_from_file_location("fda_statistics", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """The FDA statistics module (analysis/utils/statistics.py), a sibling since the move of
+    2026-11-06."""
+    from . import statistics as fda_statistics
+    return fda_statistics
 
 
 def load_nma_statistics():
-    """Load the local analysis/utils/statistics.py (LMM helpers + cluster_bootstrap_ci) by
-    path as `nma_statistics`, so it works both as a script (Databricks) and on import."""
-    path = os.path.join(analysis_dir(), "utils", "statistics.py")
-    spec = importlib.util.spec_from_file_location("nma_statistics", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """The NMA statistics module (analysis/utils/nma_statistics.py: the cluster bootstrap and
+    the mixed-model helpers)."""
+    from . import nma_statistics
+    return nma_statistics
 
 
 def load_fda_cohort_flow():
-    """Load FDA analysis/utils/cohort_flow.py as `fda_utils.cohort_flow`.
-
-    The FDA utils package is registered under the alias `fda_utils` (its own name,
-    `utils`, is this project's analysis package), so the module's relative import of
-    its sibling data_loading resolves. Returns the cohort_flow module."""
-    package_dir = os.path.join(_FDA_ROOT, "analysis", "utils")
-    if "fda_utils" not in sys.modules:
-        spec = importlib.util.spec_from_file_location(
-            "fda_utils", os.path.join(package_dir, "__init__.py"),
-            submodule_search_locations=[package_dir],
-        )
-        package = importlib.util.module_from_spec(spec)
-        sys.modules["fda_utils"] = package
-        spec.loader.exec_module(package)
-    return importlib.import_module("fda_utils.cohort_flow")
+    """The FDA flow machinery (analysis/utils/cohort_flow.py)."""
+    from . import cohort_flow
+    return cohort_flow
 
 
 def as_bool(series):
@@ -181,7 +155,7 @@ def assert_cohort_predicates(pdf, label="nma_user_day_analysis_ready"):
     missing = [c for c in CRITERION_COLUMNS + PREDICATE_COLUMNS + ("diagnosis_group",) if c not in pdf.columns]
     assert not missing, (
         f"{label}: no column(s) {missing}; the table predates the 2026-11-05 cohort-table "
-        f"migration (D23). Re-run data_staging/export_user_day_analysis_ready.py."
+        f"migration (D23). Re-run data_staging/export_nma_user_day_analysis_ready.py."
     )
     expected = cohort_predicates(pdf)
     for name in PREDICATE_COLUMNS:

@@ -8,8 +8,8 @@ inclusion criterion as a column instead of applying it:
   passes_loop_version_gate   a known Loop version below 3.4.0, or no version and
                              a day before 2024-07-13 (cohort_constants.loop_version_gate_sql;
                              until 2026-11-05 a WHERE clause here)
-  day_eligible               CGM coverage >= 70% on the day (export_user_day_classification)
-  user_eligible              the user has >= 10 eligible days (export_user_day_classification)
+  day_eligible               CGM coverage >= 70% on the day (export_nma_user_day_classification)
+  user_eligible              the user has >= 10 eligible days (export_nma_user_day_classification)
   passes_age_gate            age >= 6 on the day, or unknown (cohort_constants.age_gate_sql;
                              until 2026-11-05 applied in the analysis loader)
 
@@ -61,7 +61,7 @@ Outputs:
     <outputs>/nma_user_day_analysis_ready.csv
         A single-file CSV snapshot of the same table (pandas dump from the driver). The
         estimated CSV size is always printed first; the file is then written to
-        outputs/<table-name>.csv by default (override with --output_csv, or pass --no_csv).
+        outputs/nma/<table-name>.csv by default (override with --output_csv, or pass --no_csv).
 
 Maps to PLN-1008:
     §7.1 Cohort and day inclusion (as columns).
@@ -78,13 +78,13 @@ try:
     _HERE = os.path.dirname(os.path.abspath(__file__))
 except NameError:
     _HERE = ("/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-             "no_meal_announcement/data_staging")
-# The thresholds and the diagnosis-group rule live once, in the FDA staging
-# (FDA_real_world_data/data_staging/cohort_constants.py); the day table's rule
-# list comes from its own script.
-_FDA_STAGING_DIR = os.path.normpath(os.path.join(_HERE, "..", "..", "FDA_real_world_data", "data_staging"))
-if _FDA_STAGING_DIR not in sys.path:
-    sys.path.insert(0, _FDA_STAGING_DIR)
+             "FDA_real_world_data/data_staging")
+# The thresholds and the diagnosis-group rule live once, in cohort_constants.py
+# beside this script; the day table's rule list comes from its own script. The
+# script directory is on sys.path when the file runs; the insert covers the
+# notebook case.
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
 from cohort_constants import (  # noqa: E402
     PRIMARY_DIAGNOSIS_GROUPS,
@@ -95,7 +95,7 @@ from cohort_constants import (  # noqa: E402
 )
 from export_loop_recommendations import BOLUS_TAGS  # noqa: E402
 
-# The §7.3 strategy labels, as the analyses read them (analysis/utils/data_loader.STRATEGIES).
+# The §7.3 strategy labels, as the analyses read them (analysis/utils/nma_loading.STRATEGIES).
 STRATEGY_AUTOBOLUS = "autobolus_on"
 STRATEGY_TEMP_BASAL = "temp_basal_only"
 
@@ -111,9 +111,9 @@ USERID_SALT = "pln1008-nma-v1"
 
 
 def _default_outputs_dir():
-    """`no_meal_announcement/outputs/`, with the Databricks notebook fallback where
+    """`FDA_real_world_data/outputs/nma/`, with the Databricks notebook fallback where
     __file__ is undefined (mirrors the other scripts' path handling)."""
-    return os.path.normpath(os.path.join(_HERE, "..", "outputs"))
+    return os.path.normpath(os.path.join(_HERE, "..", "outputs", "nma"))
 
 
 def _human_bytes(n):
@@ -300,7 +300,7 @@ LEFT JOIN user_tdd_ref ref
 
     # CSV snapshot. Always report how large the single-file CSV would be first (a driver-
     # side pandas dump can be large), then write it: output_csv=None -> default
-    # outputs/<table-name>.csv; a string -> that path; output_csv=False -> report size only,
+    # outputs/nma/<table-name>.csv; a string -> that path; output_csv=False -> report size only,
     # don't write.
     _report_csv_size(spark, output_table)
     if output_csv is False:
@@ -326,7 +326,7 @@ if __name__ == "__main__":
     _parser.add_argument("--user_gender_table", default="dev.default.user_gender")
     _parser.add_argument("--diagnosis_table", default="dev.fda_510k_rwd.user_diagnosis_type")
     _parser.add_argument("--output_table", default="dev.fda_510k_rwd.nma_user_day_analysis_ready")
-    _parser.add_argument("--output_csv", default=None, help="CSV path (default: outputs/<table>.csv)")
+    _parser.add_argument("--output_csv", default=None, help="CSV path (default: outputs/nma/<table>.csv)")
     _parser.add_argument("--no_csv", action="store_true", help="print the CSV size only; skip the write")
     _args, _ = _parser.parse_known_args()
 

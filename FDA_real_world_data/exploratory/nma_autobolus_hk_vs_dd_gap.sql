@@ -2,7 +2,7 @@
 -- HealthKit-only autobolus gap: how many days/users does the NMA delivery_strategy
 -- miss by keying on dd_autobolus_count ALONE and ignoring hk_autobolus_count?
 --
--- Context: export_user_day_analysis_ready.py sets
+-- Context: export_nma_user_day_analysis_ready.py sets
 --     delivery_strategy = CASE WHEN lr.dd_autobolus_count >= 3 THEN 'autobolus_on'
 --                              ELSE 'temp_basal_only' END
 -- pulling only lr.dd_autobolus_count from loop_recommendations. But

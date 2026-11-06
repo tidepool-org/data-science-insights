@@ -1,4 +1,6 @@
-# PLN-1008 No Meal Announcement — Architecture
+# PLN-1008 No Meal Announcement — Architecture (frozen 2026-11-06)
+
+> Frozen on 2026-11-06 when the NMA subproject moved into `FDA_real_world_data/`. The live record is the PLN-1008 section of `FDA_real_world_data/architecture.md` (current state and directory map) and the Phase 6 DAG in `fda_analysis_pipeline.yml`; new history goes in `FDA_real_world_data/project_history.md`. The paths below are the pre-move ones (`no_meal_announcement/…`); the file-by-file map to the new names is `docs/nma_merge_plan_2026-11-06.md` section 3.
 
 ## Current state (as of 2026-11-05)
 

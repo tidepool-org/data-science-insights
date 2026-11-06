@@ -4,7 +4,7 @@ BE is now a thin projection of the central bolus classifier: it surfaces
 `manual_normal_bolus_count` (manual — i.e. NOT automatic — boluses with `subType='normal'`)
 from `nma_user_day_bolus_classification` as `bolus_entry_count` for the §7.2 day
 classification. The manual/automatic split — and the autobolus exclusion it implies — lives
-in ONE place, [`export_user_day_bolus_classification.py`](export_user_day_bolus_classification.py)
+in ONE place, [`export_nma_user_day_bolus_classification.py`](export_nma_user_day_bolus_classification.py)
 (HealthKit `MetadataKeyAutomaticallyIssued` flag, with a dosingDecision fallback for HK-silent
 boluses); see [`../docs/manual_bolus_identification.md`](../docs/manual_bolus_identification.md).
 

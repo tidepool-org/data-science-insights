@@ -1,8 +1,7 @@
 """§8.1 integration check — run as a file on Databricks (run-button / notebook cell, or
-`run_test_analysis_8_1.main(spark)`).
+`test_nma_analysis_8_1.main(spark)`).
 
-Named `run_test_*` (starts with `run`, not `test`) so Databricks runs it as a plain file
-rather than a pytest test.
+Named `test_nma_analysis_8_*` like the FDA integration tests, which the FDA runner runs as files.
 `main()` gets a Spark session, ensures statsmodels (so §8.1 Table 8.1b populates), runs the
 staging pipeline (run_pipeline.run — idempotent), then runs the §8.1 checks against the
 analysis-ready table. Prints `§8.1 INTEGRATION TEST PASSED` or raises on failure.
@@ -23,30 +22,26 @@ import tempfile
 import pandas as pd
 
 # sys.path bootstrap: __file__ undefined under the run-button → Workspace fallback. Adds this
-# dir (for `import run_pipeline`), repo root (package path), and analysis/ (utils.data_loader).
+# dir (for `import run_nma_pipeline`) and analysis/ (utils.nma_loading).
 try:
     _here = os.path.dirname(os.path.abspath(__file__))
 except NameError:
     _here = ("/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-             "no_meal_announcement/testing/integration")
-_repo_root = os.path.normpath(os.path.join(_here, "..", "..", ".."))
+             "FDA_real_world_data/testing/integration")
 _analysis_dir = os.path.normpath(os.path.join(_here, "..", "..", "analysis"))
-for _p in (_here, _repo_root, _analysis_dir):
+for _p in (_here, _analysis_dir):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from utils.data_loader import (  # noqa: E402
+from utils.nma_loading import (  # noqa: E402
     filter_cohort,
     prepare_day_level,
     restrict_comparator,
 )
 
-try:
-    from no_meal_announcement.testing.integration import run_pipeline as _run_pipeline  # noqa: E402
-except ImportError:
-    import run_pipeline as _run_pipeline  # type: ignore  # noqa: E402
+import run_nma_pipeline as _run_pipeline  # noqa: E402
 
-A81_FILE = "analysis_8-1_glycemic_outcomes_nma_vs_carb_entry.py"
+A81_FILE = "analysis_nma_8-1_glycemic_outcomes_vs_carb_entry.py"
 # Archetype `_userId`s are pseudonymized (salted SHA-256, D16) in the analysis-ready table, so match
 # the hashed id the table actually carries — raw name → hash via run_pipeline.pseudonymize_uid.
 PAIRED_USER = _run_pipeline.pseudonymize_uid("nma_user_known_paired_diff")
@@ -64,15 +59,15 @@ def _ensure_statsmodels():
     install. If it still can't be imported, §8.1 degrades gracefully (LMM columns NaN)."""
     if importlib.util.find_spec("statsmodels") is not None:
         return
-    print("[run_test_analysis_8_1] statsmodels not found — pip installing on the driver...")
+    print("[test_nma_analysis_8_1] statsmodels not found — pip installing on the driver...")
     import subprocess
     try:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "statsmodels"])
         importlib.invalidate_caches()
     except Exception as e:  # noqa: BLE001
-        print(f"[run_test_analysis_8_1] pip install failed: {e}")
+        print(f"[test_nma_analysis_8_1] pip install failed: {e}")
     if importlib.util.find_spec("statsmodels") is None:
-        print("[run_test_analysis_8_1] WARNING: statsmodels still unavailable — Table 8.1b LMM will "
+        print("[test_nma_analysis_8_1] WARNING: statsmodels still unavailable — Table 8.1b LMM will "
               "be NaN. Install statsmodels as a CLUSTER LIBRARY and re-run for Method B.")
 
 
@@ -177,7 +172,7 @@ def main(spark=None):
     _ensure_statsmodels()
     if spark is None:
         spark = _run_pipeline.get_spark()
-    print("[run_test_analysis_8_1] building / reusing the staging pipeline...")
+    print("[test_nma_analysis_8_1] building / reusing the staging pipeline...")
     tables = _run_pipeline.run(spark)  # idempotent — builds → analysis-ready if not present
     raw_pdf = spark.table(tables["analysis_ready"]).toPandas()
     # §7 type-1 carry guard: the diagnosis merge must resolve on the RAW _userId in the base CTE
@@ -190,7 +185,7 @@ def main(spark=None):
         f"(value counts: {raw_pdf['diagnosis_type'].value_counts(dropna=False).to_dict()})"
     )
     tmp_dir = tempfile.mkdtemp(prefix="nma_a81_")
-    print(f"[run_test_analysis_8_1] running §8.1 checks (outputs → {tmp_dir})...")
+    print(f"[test_nma_analysis_8_1] running §8.1 checks (outputs → {tmp_dir})...")
     _assert_recovers_paired_diff_design(spark, tables, raw_pdf, tmp_dir)
     print("\n§8.1 INTEGRATION TEST PASSED — design recovered + all artifacts written")
 

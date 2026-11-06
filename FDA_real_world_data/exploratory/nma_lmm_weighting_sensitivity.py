@@ -3,8 +3,8 @@ NMA arms? The two estimators apply the SAME per-user paired differences (NMA mea
 mean) under different WEIGHTS — this script makes that explicit, exactly and with all the
 data (no subsampling).
 
-Reads §8.1's all-cohort outputs (table_8_1b) from analysis/outputs/analysis_8_1/all/ and
-writes its own supplement artifacts to analysis/outputs/analysis_8_1/supplement/ (a sibling
+Reads §8.1's all-cohort outputs (table_8_1b) from analysis/outputs/nma/analysis_8_1/all/ and
+writes its own supplement artifacts to analysis/outputs/nma/analysis_8_1/supplement/ (a sibling
 dir that analysis_8-1's per-cohort dir-clearing does not touch). Produces, for cohort="all":
   1. Per-user day-count distribution by arm + heavy-contributor concentration.
   2. Weighting decomposition of the per-user paired diff, NMA − CE>0:
@@ -22,7 +22,7 @@ That is just subsampling — lossy and seed-dependent. The weighting decompositi
 the exact, all-data equivalent (cap K=1 ≈ equal weight; full ≈ harmonic), so capping was
 dropped.
 
-Run locally:  python no_meal_announcement/exploratory/lmm_weighting_sensitivity.py
+Run locally:  python FDA_real_world_data/exploratory/nma_lmm_weighting_sensitivity.py
 """
 
 import importlib.util
@@ -39,13 +39,13 @@ ANALYSIS_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "analysis")
 )
 CSV = os.path.normpath(
-    os.path.join(ANALYSIS_DIR, "..", "outputs", "nma_user_day_analysis_ready.csv")
+    os.path.join(ANALYSIS_DIR, "..", "outputs", "nma", "nma_user_day_analysis_ready.csv")
 )
 # Read §8.1's all-cohort outputs (e.g. table_8_1b) from the cohort dir, but write the
 # supplement artifacts to a sibling `supplement/` dir — analysis_8-1's run() wipes each
 # cohort dir on every run, so supplementary outputs must live outside it to survive.
-COHORT_DIR = os.path.join(ANALYSIS_DIR, "outputs", "analysis_8_1", "all")
-OUT_DIR = os.path.join(ANALYSIS_DIR, "outputs", "analysis_8_1", "supplement")
+COHORT_DIR = os.path.join(ANALYSIS_DIR, "outputs", "nma", "analysis_8_1", "all")
+OUT_DIR = os.path.join(ANALYSIS_DIR, "outputs", "nma", "analysis_8_1", "supplement")
 SEED = 20260520
 N_BOOT = 1000
 
@@ -57,7 +57,7 @@ def _load(name, path):
     return mod
 
 
-a81 = _load("a81", os.path.join(ANALYSIS_DIR, "analysis_8-1_glycemic_outcomes_nma_vs_carb_entry.py"))
+a81 = _load("a81", os.path.join(ANALYSIS_DIR, "analysis_nma_8-1_glycemic_outcomes_vs_carb_entry.py"))
 CLS = a81.CLASSIFICATIONS
 ENDPOINTS = a81.ENDPOINTS
 CMP = a81.COMPARATOR_FLAG

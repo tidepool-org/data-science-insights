@@ -1,7 +1,7 @@
 """
 Tests for `testing/nma_test_helpers.py` — Unit 5.
 
-Pure-Python tests; no SparkSession required. Verifies the helper functions
+Pure-Python tests; no SparkSession required; run as a file (the FDA runner's form). Verifies the helper functions
 behave as Unit 6 (`build_synthetic_nma_bddp`) and the Layer 3 Spark staging
 tests rely on.
 """
@@ -11,12 +11,13 @@ import sys
 from datetime import date
 
 import pandas as pd
-import pytest
+import math
 
 _here = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.normpath(os.path.join(_here, "..")))
+sys.path.insert(0, _here)
 
-from testing import nma_test_helpers as nma  # type: ignore # noqa: E402
+import nma_test_helpers as nma  # type: ignore # noqa: E402
+from offline_test_helpers import raises, run_tests  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -25,7 +26,7 @@ from testing import nma_test_helpers as nma  # type: ignore # noqa: E402
 
 def test_reexports_fda_helpers_are_identical():
     """Each re-exported name resolves to the same object as the FDA module."""
-    from FDA_real_world_data.testing import staging_test_helpers as fda
+    import staging_test_helpers as fda
 
     assert nma.setup_test_table is fda.setup_test_table
     assert nma.read_test_output is fda.read_test_output
@@ -112,7 +113,7 @@ def test_make_loop_direct_basal_row_shape():
     assert json.loads(r["origin"])["name"] == "com.loopkit.Loop"   # the LOOP_DIRECT_PREDICATE key
     assert json.loads(r["payload"])["deliveredUnits"] == 10.0      # the actual delivered amount
     # rate is the COMMANDED temp rate ≈ 1.7× the delivered hourly rate — a decoy the TDD SQL ignores.
-    assert r["rate"] == pytest.approx(1.7 * (10.0 / 24))
+    assert math.isclose(r["rate"], 1.7 * (10.0 / 24), rel_tol=1e-6, abs_tol=1e-9)
 
 
 def test_make_loop_direct_basal_row_explicit_commanded_rate():
@@ -128,17 +129,16 @@ def test_make_loop_direct_basal_row_in_all():
 # 5.3 make_user_day_rows
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("archetype", ["ce0_be0", "ce0_bele1", "ce0_beinf", "ce_pos"])
-def test_make_user_day_rows_row_count_per_archetype(archetype):
-    """Row count = days × records_per_day(archetype)."""
-    days = 3
-    rows = nma.make_user_day_rows(UID, days=days, archetype=archetype)
-    assert len(rows) == days * nma.records_per_day(archetype)
+def test_make_user_day_rows_row_count_per_archetype():
+    for archetype in ["ce0_be0", "ce0_bele1", "ce0_beinf", "ce_pos"]:
+        """Row count = days × records_per_day(archetype)."""
+        days = 3
+        rows = nma.make_user_day_rows(UID, days=days, archetype=archetype)
+        assert len(rows) == days * nma.records_per_day(archetype)
 
 
 def test_make_user_day_rows_unknown_archetype_raises():
-    with pytest.raises(ValueError, match="unknown archetype"):
-        nma.make_user_day_rows(UID, days=1, archetype="not_a_real_archetype")
+    raises(ValueError, "unknown archetype", lambda: nma.make_user_day_rows(UID, days=1, archetype="not_a_real_archetype"))
 
 
 def test_make_user_day_rows_cbg_can_be_disabled():
@@ -179,31 +179,52 @@ def test_assert_day_type_flags_passes_on_match():
 
 def test_assert_day_type_flags_raises_on_value_mismatch():
     df = _flag_df()
-    with pytest.raises(AssertionError, match="is_ce0_be0"):
-        nma.assert_day_type_flags(df, {
-            ("u1", date(2024, 1, 1)): {"is_ce0_be0": False},
-        })
+    raises(AssertionError, "is_ce0_be0", lambda: nma.assert_day_type_flags(df, {
+        ("u1", date(2024, 1, 1)): {"is_ce0_be0": False},
+    }))
 
 
 def test_assert_day_type_flags_raises_on_missing_user_day():
     df = _flag_df()
-    with pytest.raises(AssertionError, match="no row for"):
-        nma.assert_day_type_flags(df, {
-            ("ghost", date(2024, 1, 1)): {"is_ce0_be0": True},
-        })
+    raises(AssertionError, "no row for", lambda: nma.assert_day_type_flags(df, {
+        ("ghost", date(2024, 1, 1)): {"is_ce0_be0": True},
+    }))
 
 
 def test_assert_day_type_flags_raises_on_missing_column():
     df = _flag_df()
-    with pytest.raises(AssertionError, match="column 'is_ce0_beinf' missing"):
-        nma.assert_day_type_flags(df, {
-            ("u1", date(2024, 1, 1)): {"is_ce0_beinf": True},
-        })
+    raises(AssertionError, "column 'is_ce0_beinf' missing", lambda: nma.assert_day_type_flags(df, {
+        ("u1", date(2024, 1, 1)): {"is_ce0_beinf": True},
+    }))
 
 
 def test_assert_day_type_flags_raises_on_duplicate_user_day():
     df = pd.concat([_flag_df(), _flag_df().iloc[[0]]], ignore_index=True)
-    with pytest.raises(AssertionError, match="2 rows for"):
-        nma.assert_day_type_flags(df, {
-            ("u1", date(2024, 1, 1)): {"is_ce0_be0": True},
-        })
+    raises(AssertionError, "2 rows for", lambda: nma.assert_day_type_flags(df, {
+        ("u1", date(2024, 1, 1)): {"is_ce0_be0": True},
+    }))
+
+
+if __name__ == "__main__":
+    run_tests([
+        test_reexports_fda_helpers_are_identical,
+        test_reexports_all_listed_in__all__,
+        test_make_bolus_events_row_count,
+        test_make_bolus_events_subtype_breakdown,
+        test_make_bolus_events_meal_food_pair_timestamps_match,
+        test_make_bolus_events_userid_propagates_to_all_event_rows,
+        test_make_bolus_events_empty_request_returns_empty_list,
+        test_make_bolus_events_carbs_per_meal_lands_in_nutrition_json,
+        test_make_loop_direct_basal_row_shape,
+        test_make_loop_direct_basal_row_explicit_commanded_rate,
+        test_make_loop_direct_basal_row_in_all,
+        test_make_user_day_rows_row_count_per_archetype,
+        test_make_user_day_rows_unknown_archetype_raises,
+        test_make_user_day_rows_cbg_can_be_disabled,
+        test_make_user_day_rows_spans_consecutive_days,
+        test_assert_day_type_flags_passes_on_match,
+        test_assert_day_type_flags_raises_on_value_mismatch,
+        test_assert_day_type_flags_raises_on_missing_user_day,
+        test_assert_day_type_flags_raises_on_missing_column,
+        test_assert_day_type_flags_raises_on_duplicate_user_day,
+    ], "test_nma_test_helpers")

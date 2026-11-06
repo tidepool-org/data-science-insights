@@ -5,7 +5,7 @@ throughout Analyses 1, 2, and 3.
 
 ## Age computation
 
-Implemented in [`data_staging/export_user_day_age.py`](../data_staging/export_user_day_age.py).
+Implemented in [`data_staging/export_nma_user_day_age.py`](../data_staging/export_nma_user_day_age.py).
 For each (`_userId`, `local_day`) in the `loop_recommendations` valid-day universe:
 
 ```sql
@@ -32,7 +32,7 @@ when the cohorts are pooled.
 
 ## How the analysis-ready table surfaces it
 
-[`data_staging/export_user_day_analysis_ready.py`](../data_staging/export_user_day_analysis_ready.py) LEFT
+[`data_staging/export_nma_user_day_analysis_ready.py`](../data_staging/export_nma_user_day_analysis_ready.py) LEFT
 JOINs `nma_user_day_age` so the analysis-ready row carries `age_years` and `is_pediatric`
 alongside every other per-day signal. The analysis script splits on `is_pediatric` and
 emits its tables/figures per cohort.
@@ -40,10 +40,10 @@ emits its tables/figures per cohort.
 ## Reporting
 
 - §8.1 tables and figures are emitted once per cohort, into
-  `analysis/outputs/analysis_8_1/{adult,pediatric,all}/`.
+  `analysis/outputs/nma/analysis_8_1/{adult,pediatric,all}/`.
 - Each cohort dir also carries `sample_information.csv` (Table 1: per-user age + sex
   demographics, user/day counts); `main()` concatenates the three into a combined
-  `analysis/outputs/analysis_8_1/table_8_1_sample_information.csv` with adult/pediatric/all
+  `analysis/outputs/nma/analysis_8_1/table_8_1_sample_information.csv` with adult/pediatric/all
   columns.
 - Sample sizes reconcile: standalone `adult` (≥1 adult day) and `pediatric` (≥1 pediatric
   day) overlap on cross-over users, so adult + pediatric > all. The combined Table 1's
@@ -61,7 +61,7 @@ emits its tables/figures per cohort.
 Bad source DOBs produced implausible ages (1 eligible user at ~914 yr; 43 users < 6 yr).
 Gating is split:
 
-- **Upper bound — at extraction.** `export_user_day_age.py` nulls any age `> MAX_PLAUSIBLE_AGE
+- **Upper bound — at extraction.** `export_nma_user_day_age.py` nulls any age `> MAX_PLAUSIBLE_AGE
   (120)` or negative (corrupt DOB), treating it like unknown DOB. **Applied** (snapshot
   regenerated): the ~914-yr user's age is nulled → adult age max is now 95.9 (was 912), adult
   mean/SD 38.8 ± 13.2 (was 39.3 ± 24.7), and that user is retained in `all` as unknown age (2 total).

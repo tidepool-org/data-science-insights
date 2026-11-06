@@ -9,7 +9,7 @@ controller absorbed without a carb signal (stress test).** This is the pre-speci
 the supplement's "intake confound" story — it separates light-intake CE=0 days from
 unannounced-meal CE=0 days using TDD as the (dose-based, unvalidated) intake proxy.
 
-Mirrors §8.1/§8.2 per-cohort run()/main() + output-clearing; reuses utils/data_loader (cohort
+Mirrors §8.1/§8.2 per-cohort run()/main() + output-clearing; reuses utils/nma_loading (cohort
 filter, comparator restriction) and utils/statistics (paired_within_user, lmm_tdd_stratum).
 
 Eligibility: ≥30 eligible days for a reliable personal TDD reference (`n_eligible_days_for_tdd`)
@@ -41,7 +41,7 @@ two alternative TDD-reference definitions (median; rolling-30-day mean), each a 
 bottom−top). The median/rolling/HMA sensitivities still inherit the §8.3 D12 not-citable caveat; see
 decisions.md for which rank-tercile outputs the D12 update lifts that caveat for.
 
-Outputs (analysis/outputs/analysis_8_3/<cohort>/) — primary (mean TDD reference):
+Outputs (analysis/outputs/nma/analysis_8_3/<cohort>/) — primary (mean TDD reference):
     table_8_3a_per_user_by_stratum.csv     per section × endpoint × stratum: across-user mean±SD —
                                            sections = the 3 nested CE=0 classifications + CE>0 + CE>=3/BE>=3 (HMA)
     table_8_3b_within_user_contrast.csv    per classification × endpoint: within-user Low−High (Wilcoxon + boot CI + paired-t)
@@ -86,7 +86,7 @@ Residual high-TDD outliers (300+ U/day) were evaluated and not winsorized: they 
 / 5 users in the snapshot (none CE=0 days), the rank terciles are robust to them by construction, and
 the mean/median/rolling references inherit the staged values — so a cap was immaterial.
 
-Usage: python analysis_8-3_nma_tdd_stratified.py [--cohort {adult,pediatric,all}]
+Usage: python analysis_nma_8-3_tdd_stratified.py [--cohort {adult,pediatric,all}]
 Fast figure iteration (skips the slow LMM/bootstrap tables): add --figures-only, or --figs <tag>
 to render only matching figures (e.g. `--figs 8_3g --cohort all` ≈ 9 s vs a multi-minute full run).
 Tags: 8_3a/b/c/d/e/f/g/i/j, 12_3a/c/g/h/i. Do a full run first so the table CSVs exist.
@@ -115,12 +115,12 @@ try:
 except NameError:
     _ANALYSIS_DIR = (
         "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-        "no_meal_announcement/analysis"
+        "FDA_real_world_data/analysis"
     )
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils.data_loader import (  # noqa: E402
+from utils.nma_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
@@ -138,7 +138,7 @@ from utils.data_loader import (  # noqa: E402
     prepare_day_level,
     restrict_comparator,
 )
-from utils.plotting import (  # noqa: E402
+from utils.nma_plotting import (  # noqa: E402
     DAY_TYPE_ORDER,
     GRAY,
     GRIDS,
@@ -187,7 +187,7 @@ ABS_TDD_MARKS = (ABS_TDD_EDGES[:-1] + ABS_TDD_EDGES[1:]) / 2.0     # bin centres
 ABS_TDD_MIN_BIN_N = 100  # absolute-TDD line dot suppressed below this many days; trims the sparse
                          # absolute-TDD tails (percentile axis keeps every bin) — P2
 # Colours, the 2×2 metric grids, and the violin/histogram panel helpers are shared across
-# §8.1–§8.3 (utils.plotting): CE=0 data carries the endpoint's glycemic-range colour, the CE>0
+# §8.1–§8.3 (utils.nma_plotting): CE=0 data carries the endpoint's glycemic-range colour, the CE>0
 # comparator is grey, and within each the Low/High TDD stratum is light/dark (alpha).
 
 
@@ -297,7 +297,7 @@ def figure_8_3d_r_dist(ce0_strata):
     return fig
 
 
-# The per-day-type palette now lives in utils.plotting (day_type_colors / DAY_TYPE_ORDER, imported
+# The per-day-type palette now lives in utils.nma_plotting (day_type_colors / DAY_TYPE_ORDER, imported
 # above) so §8.1/§8.2/§8.3 share one definition: the 3 nested CE=0 arms are a dark→light ramp of each
 # endpoint's glycemic-range band colour, CE>0 grey, CE>=3/BE>=3 bronze.
 
@@ -687,7 +687,7 @@ def run(
     figures_only=False,
     figs_filter=None,
 ):
-    """Run §8.3 for one age cohort → outputs/analysis_8_3/<cohort>/.
+    """Run §8.3 for one age cohort → outputs/nma/analysis_8_3/<cohort>/.
 
     figures_only=True skips the SLOW table writes (day-level LMM fits + cluster-bootstrap CIs) and
     re-renders only the figures, in place (existing table CSVs are left untouched, not cleared) — for
@@ -701,7 +701,7 @@ def run(
     nma_stats = load_nma_statistics()
     here = analysis_dir()
     if output_dir is None:
-        output_dir = os.path.join(here, "outputs", "analysis_8_3", cohort)
+        output_dir = os.path.join(here, "outputs", "nma", "analysis_8_3", cohort)
     if os.path.isdir(output_dir) and not figures_only:
         shutil.rmtree(output_dir)  # full run starts clean; figures_only overwrites PNGs in place
     os.makedirs(output_dir, exist_ok=True)
@@ -713,7 +713,7 @@ def run(
         if not os.path.exists(csv_path):
             raise FileNotFoundError(
                 f"analysis-ready CSV not found at {csv_path}. Run "
-                "data_staging/export_user_day_analysis_ready.py first, or pass --csv_path.")
+                "data_staging/export_nma_user_day_analysis_ready.py first, or pass --csv_path.")
         pdf = prepare_day_level(pd.read_csv(csv_path))
     else:
         pdf = load_day_level(spark, analysis_ready_table)

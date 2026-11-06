@@ -16,7 +16,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from utils.data_loader import ENDPOINTS, SUPPLEMENT_ARMS
+from .nma_loading import ENDPOINTS, SUPPLEMENT_ARMS
 
 MIN_REF_DAYS = 30        # ≥30 eligible days for a reliable personal TDD reference (§8.3)
 R_CUT = 1.0              # Low (R<1.0) vs High (R≥1.0) for the prespecified mean-reference binary

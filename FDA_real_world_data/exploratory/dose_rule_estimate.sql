@@ -32,7 +32,7 @@
 --   D    one logical dose seen on both routes is counted once: boluses on
 --        (user, minute-rounded time, units), basals on (user, minute-rounded
 --        time, rate), the automation signal MAX-aggregated across the copies
---        (the NMA rule, no_meal_announcement/data_staging/
+--        (the NMA rule, then no_meal_announcement/data_staging/
 --        export_user_day_bolus_classification.py, extended to basals).
 -- Rule sets, one row per set in every result:
 --   production        the staged flags read from loop_recommendations;

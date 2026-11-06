@@ -18,13 +18,13 @@ Sections:
   S3  glycemic decomposition + safety — split the TIR gain into TAR↓ (benign) vs TBR↑/hypo↑.
   C1–C4 confounder checks — selection bias, CE=0-day clustering, CGM coverage, weighting note.
 
-Outputs (analysis/outputs/analysis_8_supp/<cohort>/):
+Outputs (analysis/outputs/nma/analysis_8_supp/<cohort>/):
   table_s1_intake_characterization.csv, figure_s1_intake_violin.png
   table_s2_carb_dose_response.csv,       figure_s2_carb_dose_response.png
   table_s3_decomposition.csv,            figure_s3_stacked_ranges.png, figure_s3_tbr_violin.png
   table_c_confounders.csv
 
-Usage: python analysis_8-supp_nma_finding_explanation.py [--cohort {adult,pediatric,all}]
+Usage: python analysis_nma_8-supp_finding_explanation.py [--cohort {adult,pediatric,all}]
 """
 
 from __future__ import annotations
@@ -47,12 +47,12 @@ try:
 except NameError:
     _ANALYSIS_DIR = (
         "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
-        "no_meal_announcement/analysis"
+        "FDA_real_world_data/analysis"
     )
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils.data_loader import (  # noqa: E402
+from utils.nma_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
@@ -65,7 +65,7 @@ from utils.data_loader import (  # noqa: E402
     prepare_day_level,
     restrict_comparator,
 )
-from utils.plotting import (  # noqa: E402
+from utils.nma_plotting import (  # noqa: E402
     SUPTITLE_FS,
     TICK_FS,
     TITLE_FS,
@@ -99,7 +99,7 @@ S2_ORDER = [CE0_ANCHOR] + CARB_BIN_LABELS
 def _load_a81():
     """Load §8.1 by file path to reuse its generic per-arm mean + figure helpers (the file
     name has hyphens, so it can't be imported normally — same by-path idiom as statistics)."""
-    path = os.path.join(analysis_dir(), "analysis_8-1_glycemic_outcomes_nma_vs_carb_entry.py")
+    path = os.path.join(analysis_dir(), "analysis_nma_8-1_glycemic_outcomes_vs_carb_entry.py")
     spec = importlib.util.spec_from_file_location("nma_analysis_8_1", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -136,7 +136,7 @@ def table_s1_intake(pdf, nma_stats, a81):
 
 def figure_s1_intake(pdf, a81):
     """Per-user mean TDD and bolus insulin by arm (CE=0 arms vs CE>0) — visual of the intake gap.
-    Shared violin convention (utils.plotting); TDD/bolus aren't glycemic ranges, so the NMA arms
+    Shared violin convention (utils.nma_plotting); TDD/bolus aren't glycemic ranges, so the NMA arms
     use the Tidepool brand colour (graded by breadth) with the CE>0 comparator grey."""
     fig, axes = plt.subplots(1, 2, figsize=(13, 6.4))
     for ax, (col, lab, unit) in zip(axes, [("tdd_units", "Per-user mean TDD by arm", "TDD (U/day)"),
@@ -341,12 +341,12 @@ def run(
     cohort="all",
     csv_path=None,
 ):
-    """Run the supplement for one age cohort → outputs/analysis_8_supp/<cohort>/."""
+    """Run the supplement for one age cohort → outputs/nma/analysis_8_supp/<cohort>/."""
     nma_stats = load_nma_statistics()
     a81 = _load_a81()
     here = analysis_dir()
     if output_dir is None:
-        output_dir = os.path.join(here, "outputs", "analysis_8_supp", cohort)
+        output_dir = os.path.join(here, "outputs", "nma", "analysis_8_supp", cohort)
     if os.path.isdir(output_dir):
         shutil.rmtree(output_dir)
     os.makedirs(output_dir, exist_ok=True)
@@ -358,7 +358,7 @@ def run(
         if not os.path.exists(csv_path):
             raise FileNotFoundError(
                 f"analysis-ready CSV not found at {csv_path}. Run "
-                "data_staging/export_user_day_analysis_ready.py first, or pass --csv_path.")
+                "data_staging/export_nma_user_day_analysis_ready.py first, or pass --csv_path.")
         pdf = prepare_day_level(pd.read_csv(csv_path))
     else:
         pdf = load_day_level(spark, analysis_ready_table)

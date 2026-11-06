@@ -389,7 +389,7 @@ flowchart LR
   csv --> n84
   csv --> nsupp
 
-  onma[/"no_meal_announcement/analysis/outputs/analysis_8_1..4, analysis_8_supp"/]:::output
+  onma[/"FDA_real_world_data/analysis/outputs/nma/analysis_8_1..4, analysis_8_supp"/]:::output
   n81 --> onma
   n82 --> onma
   n83 --> onma
@@ -543,7 +543,7 @@ Each item names where the same thing is computed more than once, or a table that
 **Duplicated logic**
 
 1. **The transition-cohort predicate** is applied in `analysis/utils/data_loading.py` (version gate, age gate, guardrails, CGM coverage, pairing, best window) and restated inline by analysis 8-2's Table 8.2a path (version gate without the age term, rank 1, a guardrail anti-join in PySpark), by IR-6B (an inline copy of the version gate), by the NMA analysis-ready export (its own version gate), and by eight exploratory SQL files held to the loader by drift tests. The rebuild's cohort tables carry the predicate once, as columns.
-2. **The dose classifier** exists in the FDA dose table and again in `no_meal_announcement/data_staging/export_user_day_bolus_classification.py` (its own rules off the raw extract) and `export_bolus_classification.py` (event grain, never wired). The migration design of 2026-10-30 retires both in favour of the FDA dose table.
+2. **The dose classifier** exists in the FDA dose table and again in the NMA's `export_user_day_bolus_classification.py` (its own rules off the raw extract; since the move of 2026-11-06 `data_staging/export_nma_user_day_bolus_classification.py`) and `export_bolus_classification.py` (event grain, never wired). The migration design of 2026-10-30 retires both in favour of the FDA dose table.
 3. **The autobolus-day threshold** lives in the day projection and again in the NMA analysis-ready export (`MIN_AUTOBOLUS_COUNT = 3`).
 4. **Starting glucose at preset activation** is staged on `overrides_by_segment` (`is_starting_glucose_in_range`, from `loop_cbg`) and recomputed by analysis 8-3 from `valid_transition_cbg` with the same 30-minute window and bounds. Two sources, one flag.
 5. **The JAEB identifier join** (`jaeb_upload_to_userid` to `bddp_sample_all_2` on upload id) is written inline in analyses 8-6 and 8-7, and again in `export_user_diagnosis_type`.

@@ -35,6 +35,13 @@
 #                             so a variant failure cannot affect a primary
 #                             artifact (or the other variant).
 #
+#   Phase 6  PLN-1008 (NMA)  The no-meal-announcement chain (merged into this
+#                             folder 2026-11-06): nine user-day staging tasks on
+#                             the Phase 1 base tables, ending in the analysis-ready
+#                             cohort table and its CSV snapshot. The NMA analyses
+#                             are not tasks: they run locally off that snapshot
+#                             (analysis/analysis_nma_*.py).
+#
 # NOT in this job (deliberately): user_diagnosis_type (built out-of-band; reads
 # prod.default.patients) and analysis 8-6 (JAEB partner-CSV handoff).
 # =============================================================================
@@ -396,6 +403,76 @@ resources:
               - _box090
               - --min-period-days
               - "13"
+          environment_key: Default
+        # PLN-1008 (NMA), Phase 6: the user-day chain on the base tables. Since
+        # 2026-11-05 (NMA decision D23) the NMA has no classifier of its own:
+        # every manual-versus-automatic verdict and every day class is the FDA
+        # dose table's and day table's.
+        - task_key: Export_NMA_User_Day_CBG
+          depends_on:
+            - task_key: Export_CBG_From_Loop
+            - task_key: Export_Loop_Recommendations
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_nma_user_day_cbg.py
+          environment_key: Default
+        - task_key: Compute_NMA_User_Day_Glycemic_Endpoints
+          depends_on:
+            - task_key: Export_NMA_User_Day_CBG
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/compute_nma_user_day_glycemic_endpoints.py
+          environment_key: Default
+        # Bolus counts by the FDA verdict: a projection of loop_dose_classification
+        # onto the day universe (manual, manual-normal, automatic, total).
+        - task_key: Export_NMA_User_Day_Bolus_Classification
+          depends_on:
+            - task_key: Export_Loop_Dose_Classification
+            - task_key: Export_Loop_Recommendations
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_nma_user_day_bolus_classification.py
+          environment_key: Default
+        - task_key: Export_NMA_User_Day_Bolus_Counts
+          depends_on:
+            - task_key: Export_NMA_User_Day_Bolus_Classification
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_nma_user_day_bolus_counts.py
+          environment_key: Default
+        - task_key: Export_NMA_User_Day_Carbs
+          depends_on:
+            - task_key: Export_Loop_Recommendations
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_nma_user_day_carbs.py
+          environment_key: Default
+        - task_key: Export_NMA_User_Day_TDD
+          depends_on:
+            - task_key: Export_Loop_Recommendations
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_nma_user_day_tdd.py
+          environment_key: Default
+        - task_key: Export_NMA_User_Day_Age
+          depends_on:
+            - task_key: Export_Loop_Recommendations
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_nma_user_day_age.py
+          environment_key: Default
+        - task_key: Export_NMA_User_Day_Classification
+          depends_on:
+            - task_key: Export_NMA_User_Day_CBG
+            - task_key: Export_NMA_User_Day_Bolus_Counts
+            - task_key: Export_NMA_User_Day_Carbs
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_nma_user_day_classification.py
+          environment_key: Default
+        # The NMA cohort table (one boolean per criterion, the diagnosis group as a
+        # column) and the CSV snapshot the local analyses read.
+        - task_key: Export_NMA_User_Day_Analysis_Ready
+          depends_on:
+            - task_key: Export_NMA_User_Day_Classification
+            - task_key: Export_NMA_User_Day_Bolus_Classification
+            - task_key: Compute_NMA_User_Day_Glycemic_Endpoints
+            - task_key: Export_NMA_User_Day_TDD
+            - task_key: Export_NMA_User_Day_Age
+          spark_python_task:
+            python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/export_nma_user_day_analysis_ready.py
           environment_key: Default
       queue:
         enabled: true

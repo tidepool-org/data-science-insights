@@ -30,7 +30,7 @@ so the underlying cohort is identical to fig 8.3e — these are sub-selections o
 
 Run (cohort=all by default; matches the n=580,136 reference):
   /Users/mconn/miniconda3/envs/tidepool-data-science-simulator-dev/bin/python \
-      no_meal_announcement/exploratory/tdd_percentile_ab_and_2type.py [--cohort all|adult|pediatric]
+      FDA_real_world_data/exploratory/nma_tdd_percentile_ab_and_2type.py [--cohort all|adult|pediatric]
 """
 import argparse
 import importlib.util
@@ -43,11 +43,11 @@ import pandas as pd  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ANALYSIS_DIR = os.path.normpath(os.path.join(HERE, "..", "analysis"))
-OUT_DIR = os.path.normpath(os.path.join(HERE, "..", "outputs", "tdd_pct_ab_2type"))
-CSV = os.path.normpath(os.path.join(HERE, "..", "outputs", "nma_user_day_analysis_ready.csv"))
+OUT_DIR = os.path.normpath(os.path.join(HERE, "..", "outputs", "nma", "tdd_pct_ab_2type"))
+CSV = os.path.normpath(os.path.join(HERE, "..", "outputs", "nma", "nma_user_day_analysis_ready.csv"))
 sys.path.insert(0, ANALYSIS_DIR)
 
-from utils.data_loader import (  # noqa: E402
+from utils.nma_loading import (  # noqa: E402
     CLASSIFICATIONS,
     HIGH_MA_LABEL,
     MIN_AGE,
@@ -63,7 +63,7 @@ TWO_TYPE = (CLASSIFICATIONS[0][1], HIGH_MA_LABEL)   # ("CE=0/BE=0", "CE>=3/BE>=3
 def _load_fig_builder():
     """Import figure_8_3e_tir_vs_tdd_pct from the hyphenated analysis_8-3 module (which can't be a
     normal `import`) by path, reusing the established spec_from_file_location pattern."""
-    path = os.path.join(ANALYSIS_DIR, "analysis_8-3_nma_tdd_stratified.py")
+    path = os.path.join(ANALYSIS_DIR, "analysis_nma_8-3_tdd_stratified.py")
     spec = importlib.util.spec_from_file_location("analysis_8_3", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -75,7 +75,7 @@ def main(cohort="all"):
     if not os.path.exists(CSV):
         raise FileNotFoundError(
             f"analysis-ready CSV not found at {CSV}. Run "
-            "data_staging/export_user_day_analysis_ready.py first.")
+            "data_staging/export_nma_user_day_analysis_ready.py first.")
     figure = _load_fig_builder()
 
     pdf = prepare_day_level(pd.read_csv(CSV))

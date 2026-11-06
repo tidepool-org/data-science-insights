@@ -3,7 +3,7 @@ Exploratory: bolus subType distribution + disguised-autobolus rate.
 
 Two motivations:
 
-1. **Validation of Unit 7's design.**  `export_user_day_bolus_counts.py`
+1. **Validation of Unit 7's design.**  `export_nma_user_day_bolus_counts.py`
    excludes `subType='normal'` boluses that have a `reason='loop'`
    dosingDecision in the prior 5 s with no `reason='normalBolus'` DD
    within ±15 s — the "disguised autobolus" case inherited from PLN-1001
@@ -17,7 +17,7 @@ Two motivations:
    PLN-1001 cohort look like?  subType counts by Loop version, per-user
    rate of each subType, share of total insulin from each subType.
    Useful for sanity-checking NMA staging assumptions before Unit 11
-   (export_user_day_strategy) and Unit 15 (master join).
+   (export_nma_user_day_strategy) and Unit 15 (master join).
 
 Cohort: PLN-1001-aligned (DIY Loop, Loop version < 3.4.0).  We do NOT
 apply the full cohort filter (PAF=0.4, age ≥6, ≥10 user-days, ≥70% CGM

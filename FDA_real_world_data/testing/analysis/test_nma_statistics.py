@@ -1,7 +1,7 @@
 """
-Tests for `analysis/utils/statistics.py` — Unit 4.
+Tests for `analysis/utils/nma_statistics.py` — Unit 4.
 
-Pure-Python tests. LMM tests use `pytest.importorskip("statsmodels")` so
+Pure-Python tests. LMM tests call `require_statsmodels()` (a skip) so
 they skip cleanly until statsmodels is installed in the env.
 """
 
@@ -10,12 +10,14 @@ import sys
 
 import numpy as np
 import pandas as pd
-import pytest
+import math
 
 _here = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "analysis", "utils")))
+sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "analysis")))
+sys.path.insert(0, os.path.normpath(os.path.join(_here, "..")))
+from offline_test_helpers import raises, require_statsmodels, run_tests  # noqa: E402
 
-from statistics import (  # type: ignore # noqa: E402
+from utils.nma_statistics import (  # type: ignore # noqa: E402
     cluster_bootstrap_ci,
     lmm_arm_contrast,
     lmm_day_strategy_interaction,
@@ -87,8 +89,8 @@ def test_paired_within_user_diff_is_a_minus_b():
     arm_a = pd.Series([10.0] * 5)
     arm_b = pd.Series([4.0] * 5)
     result = paired_within_user(arm_a, arm_b)
-    assert result["mean_diff"] == pytest.approx(6.0)
-    assert result["median_diff"] == pytest.approx(6.0)
+    assert math.isclose(result["mean_diff"], 6.0, rel_tol=1e-6, abs_tol=1e-9)
+    assert math.isclose(result["median_diff"], 6.0, rel_tol=1e-6, abs_tol=1e-9)
 
 
 def test_paired_within_user_n_pairs_excludes_na():
@@ -125,7 +127,7 @@ def _make_arm_dataset(n_users: int, n_days_per_user: int, true_arm_effect: float
 
 
 def test_lmm_arm_contrast_recovers_truth():
-    pytest.importorskip("statsmodels")
+    require_statsmodels()
     df = _make_arm_dataset(n_users=20, n_days_per_user=40, true_arm_effect=-5.0, seed=20260520)
     result = lmm_arm_contrast(df, outcome="y", arm_col="arm")
     assert abs(result["coef"] - (-5.0)) < 1.0
@@ -176,7 +178,7 @@ def _make_interaction_dataset(true_interaction: float, seed: int = 0):
 
 
 def test_lmm_day_strategy_interaction_recovers_truth():
-    pytest.importorskip("statsmodels")
+    require_statsmodels()
     df = _make_interaction_dataset(true_interaction=3.0, seed=20260520)
     result = lmm_day_strategy_interaction(df, outcome="y")
     assert abs(result["interaction_coef"] - 3.0) < 1.0
@@ -186,7 +188,7 @@ def test_lmm_day_strategy_interaction_recovers_truth():
 
 
 def test_lmm_day_strategy_interaction_marginal_cells_returned():
-    pytest.importorskip("statsmodels")
+    require_statsmodels()
     df = _make_interaction_dataset(true_interaction=3.0, seed=20260520)
     result = lmm_day_strategy_interaction(df, outcome="y")
     cells = result["marginal_cells"]
@@ -214,7 +216,7 @@ def _make_tdd_dataset(true_low_minus_high: float, seed: int = 0):
 
 
 def test_lmm_tdd_stratum_recovers_low_minus_high_contrast():
-    pytest.importorskip("statsmodels")
+    require_statsmodels()
     df = _make_tdd_dataset(true_low_minus_high=15.0, seed=20260520)
     result = lmm_tdd_stratum(df, outcome="y")
     assert abs(result["coef"] - 15.0) < 1.0
@@ -223,7 +225,7 @@ def test_lmm_tdd_stratum_recovers_low_minus_high_contrast():
 
 def test_lmm_tdd_stratum_reference_is_high():
     """Sign convention: coefficient is Low − High, so positive coef ⇒ Low > High."""
-    pytest.importorskip("statsmodels")
+    require_statsmodels()
     df = _make_tdd_dataset(true_low_minus_high=10.0, seed=20260520)
     result = lmm_tdd_stratum(df, outcome="y")
     assert result["coef"] > 0
@@ -238,42 +240,61 @@ def test_lmm_tdd_stratum_reference_is_high():
 # raises. The analysis layer relies on exactly this: it pre-checks ≥2 users per
 # cell and wraps the call in try/except to emit a `converged=False` NaN row
 # (see strata.table_8_3c_lmm — unit-tested in test_strata.py — and the §8.2/§8.4
-# fit wrappers, exercised end-to-end by run_test_analysis_8_{2,3,4}). These tests
+# fit wrappers, exercised end-to-end by test_nma_analysis_8_{2,3,4}). These tests
 # pin that raise-contract so the guard upstream stays justified.
 # ---------------------------------------------------------------------------
 
 def test_lmm_arm_contrast_raises_on_single_arm_level():
     """A frame with only one arm value has no arm contrast term → raises."""
-    pytest.importorskip("statsmodels")
+    require_statsmodels()
     df = pd.DataFrame({
         "_userId": ["u0", "u0", "u1", "u1", "u2", "u2"],
         "arm": ["A"] * 6,
         "y": [1.0, 2.0, 1.5, 2.5, 1.2, 2.2],
     })
-    with pytest.raises(Exception):
-        lmm_arm_contrast(df, outcome="y", arm_col="arm")
+    raises(Exception, "", lambda: lmm_arm_contrast(df, outcome="y", arm_col="arm"))
 
 
 def test_lmm_day_strategy_interaction_raises_on_collapsed_cell():
     """Only one (day_type, strategy) cell present → no interaction term → raises."""
-    pytest.importorskip("statsmodels")
+    require_statsmodels()
     df = pd.DataFrame({
         "_userId": ["u0", "u0", "u1", "u1", "u2", "u2"],
         "day_type": ["NMA"] * 6,
         "delivery_strategy": ["AB"] * 6,
         "y": [1.0, 2.0, 1.5, 2.5, 1.2, 2.2],
     })
-    with pytest.raises(Exception):
-        lmm_day_strategy_interaction(df, outcome="y")
+    raises(Exception, "", lambda: lmm_day_strategy_interaction(df, outcome="y"))
 
 
 def test_lmm_tdd_stratum_raises_on_single_stratum():
     """Only one stratum present → no Low−High contrast term → raises."""
-    pytest.importorskip("statsmodels")
+    require_statsmodels()
     df = pd.DataFrame({
         "_userId": ["u0", "u0", "u1", "u1", "u2", "u2"],
         "tdd_stratum": ["Low"] * 6,
         "y": [1.0, 2.0, 1.5, 2.5, 1.2, 2.2],
     })
-    with pytest.raises(Exception):
-        lmm_tdd_stratum(df, outcome="y")
+    raises(Exception, "", lambda: lmm_tdd_stratum(df, outcome="y"))
+
+
+if __name__ == "__main__":
+    run_tests([
+        test_cluster_bootstrap_ci_reproducible,
+        test_cluster_bootstrap_ci_different_seeds_differ,
+        test_cluster_bootstrap_ci_returns_lo_lt_hi,
+        test_cluster_bootstrap_ci_brackets_true_median,
+        test_cluster_bootstrap_ci_drops_na,
+        test_paired_within_user_returns_expected_keys,
+        test_paired_within_user_diff_is_a_minus_b,
+        test_paired_within_user_n_pairs_excludes_na,
+        test_paired_within_user_significant_when_consistent_diff,
+        test_lmm_arm_contrast_recovers_truth,
+        test_lmm_day_strategy_interaction_recovers_truth,
+        test_lmm_day_strategy_interaction_marginal_cells_returned,
+        test_lmm_tdd_stratum_recovers_low_minus_high_contrast,
+        test_lmm_tdd_stratum_reference_is_high,
+        test_lmm_arm_contrast_raises_on_single_arm_level,
+        test_lmm_day_strategy_interaction_raises_on_collapsed_cell,
+        test_lmm_tdd_stratum_raises_on_single_stratum,
+    ], "test_nma_statistics")

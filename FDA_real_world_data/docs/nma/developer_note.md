@@ -59,7 +59,7 @@ now on the T1D cohort — table verify 3295/3295 (36 tables), prose 71/71, figur
 1. **Figure titles & layout — DONE.** Baked-in "Figure X.Xy" prefixes removed from every figure (caption
    now owns the number), title→panel gap tightened, and the legible line/bar/Δ-histogram grids + the
    5-arm §8.1 violins (8.1b/12.1b) merged to single 4×2. New `render_4x2_grid` helper in
-   `utils/plotting.py`; 12 figures became single PNGs — the
+   `utils/nma_plotting.py`; 12 figures became single PNGs — the
    exact re-embed filename map is in **`report_editor_note.md` §0**. Integration figure-count asserts +
    docstrings updated; regenerated + visually verified. _Also this session:_ the **§8.3 single-CE=0-arm
    figures were swept** — 8.3a (+ 12.3a median-ref / 12.3c rolling-ref) now show **all 5 day types** (3
@@ -74,7 +74,7 @@ now on the T1D cohort — table verify 3295/3295 (36 tables), prose 71/71, figur
    877,350 (793,525) — exact match to the numbers below; CE=0 untouched. Reviewer-Note 4 closes.
 3. **`nma_user_day_age` parity — script provided.** Age is deterministic (`DATEDIFF(day,dob)/365.25` as of
    the measurement day), so a regen can only drift if `loop_recommendations`/`bddp_user_dates`/cutoffs
-   change. Run `data_staging/confirm_nma_user_day_age_parity.py` locally (reference) and on Databricks
+   change. Run `data_staging/compare_nma_to_vintage.py` locally (reference) and on Databricks
    (after regenerating the age table + re-export) and diff — raw + eligible by-`is_pediatric` aggregates.
 4. **§8.3 figure-letter order — DECIDED: leave as-is** (letters trace 1:1 to filenames = provenance;
    renaming would churn builders + integration globs + report cross-refs for a cosmetic gain).
@@ -149,7 +149,7 @@ model_mean, observed_display`), **no column change**. 96 → **112 rows/cohort**
 appended; the existing 96 NMA/CE>0 rows are byte-identical — verified by diff). Emitted by
 generalizing `build_table_8_2a` to loop the §12.2 HMA frame/fit alongside the 3 NMA fits (the
 per-user HMA means already existed in-run). Regenerated **adult/pediatric/all**. New cross-check
-(`test_table_8_2a_hma_tir`) + an HMA assertion in `run_test_analysis_8_2` both pass.
+(`test_table_8_2a_hma_tir`) + an HMA assertion in `test_nma_analysis_8_2` both pass.
 - **⚠️ User-set confirmed:** the HMA cells use the **identical set figure 8.2a's HMA violins use** —
   both take `pdf[in_ce_ge3_be_ge3]==True` after `restrict_comparator` (so HMA is gated to
   CE=0-contributing users), filtered to the two strategies. Table and figure agree by construction;

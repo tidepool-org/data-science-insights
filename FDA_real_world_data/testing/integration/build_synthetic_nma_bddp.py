@@ -36,14 +36,15 @@ from nma_test_helpers import (  # type: ignore # noqa: E402
 # `dev.default.bddp_sample_all_2` column-for-column. Per the reuse map in
 # the NMA TDD plan, PLN-1008 piggybacks on these constants rather than
 # forking the schema.
-sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "..")))
-from FDA_real_world_data.testing.integration.build_synthetic_bddp import (  # type: ignore # noqa: E402
+if _here not in sys.path:
+    sys.path.insert(0, _here)
+from build_synthetic_bddp import (  # type: ignore # noqa: E402
     BDDP_COLUMNS,
     BDDP_SCHEMA,
 )
 
 # Two schema deltas from FDA's BDDP_SCHEMA, both because FDA never runs the NMA staging:
-#   1. `rate` — export_user_day_tdd reads it on HealthKit basal rows (TRY_CAST(rate AS DOUBLE)
+#   1. `rate` — export_nma_user_day_tdd reads it on HealthKit basal rows (TRY_CAST(rate AS DOUBLE)
 #      + PARTITION BY ..., rate, duration); without it the TDD SQL fails to COMPILE.
 #   2. `normal` STRING (not double) — the bolus classifier does get_json_object(normal,'$.value'),
 #      which requires a STRING (real bddp_sample_all_2.normal is a string; FDA types it double).
@@ -191,7 +192,7 @@ def _archetype_low_coverage(uid="nma_user_low_coverage"):
 
 
 def _archetype_below_min_days(uid="nma_user_below_min_days"):
-    """6.4 — 8 days; user dropped by ≥10-user-day rule in export_user_day_analysis_ready."""
+    """6.4 — 8 days; user dropped by ≥10-user-day rule in export_nma_user_day_analysis_ready."""
     rows = []
     for d in range(8):
         day = START_DAY + timedelta(days=d)
@@ -276,7 +277,7 @@ def _archetype_known_interaction(uid="nma_user_known_interaction"):
 
     Four 5-day cells (CE=0/BE=0 × {AB, TB}, CE>0 × {AB, TB}). AB days emit
     5 autoboluses; TB days emit 0 autoboluses + 1 non-meal bolus (so
-    export_user_day_strategy can label them temp_basal via the loop_recs
+    export_nma_user_day_strategy can label them temp_basal via the loop_recs
     table the integration pipeline pre-populates).
 
     Interaction baked in via TIR: AB×CE=0=80, TB×CE=0=70, AB×CE>0=70, TB×CE>0=75.
@@ -503,7 +504,7 @@ def build_user_dates(spark, table_name: str) -> None:
 
 def build_user_gender(spark, table_name: str) -> None:
     """Write the per-user sex aux table (`dev.default.user_gender`-shaped:
-    columns `userid`, `gender`). LEFT JOINed by export_user_day_analysis_ready
+    columns `userid`, `gender`). LEFT JOINed by export_nma_user_day_analysis_ready
     for §8.1 Sample Information."""
     rows = [{"userid": uid, "gender": g} for uid, g in USER_GENDER.items()]
     pdf = pd.DataFrame(rows, columns=["userid", "gender"])
@@ -518,12 +519,12 @@ def build_user_diagnosis_type(spark, table_name: str, loop_recommendations_table
 
     Mirrors dev.fda_510k_rwd.user_diagnosis_type (FDA data_staging/
     export_user_diagnosis_type.py): the Loop-user universe is the distinct `_userId` in
-    the day table. export_user_day_analysis_ready LEFT JOINs this on the RAW `_userId`
+    the day table. export_nma_user_day_analysis_ready LEFT JOINs this on the RAW `_userId`
     (pre-hash) and derives `diagnosis_group` from its label columns; the loader selects
     the primary groups. Marking every synthetic user type1 keeps the cohorts at their
     pre-selection composition so the existing user-survival invariants hold; the
     selection's exclusion path (type 2, other, unknown left out of the primary) is
-    exercised by testing/analysis/test_data_loader.py.
+    exercised by testing/analysis/test_nma_loading.py.
 
     Columns match production: `_userId, diagnosis_patients, diagnosis_seagull, is_jaeb,
     is_lada, diagnosis_type, diagnosis_group`.
@@ -545,7 +546,7 @@ def build_user_diagnosis_type(spark, table_name: str, loop_recommendations_table
 
 
 def build_loop_cbg(spark, table_name: str) -> None:
-    """Write the synthetic `loop_cbg` cleaned-CGM table that export_user_day_cbg
+    """Write the synthetic `loop_cbg` cleaned-CGM table that export_nma_user_day_cbg
     slices (columns `_userId`, `cbg_timestamp`, `cbg_mg_dl`, `is_plausible`).
 
     NMA does not rebuild loop_cbg from BDDP (FDA's export_cbg_from_loop reads

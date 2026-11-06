@@ -1,6 +1,6 @@
 # Plan: move the NMA (PLN-1008) subproject into FDA_real_world_data (2026-11-06, draft for MC)
 
-Status: plan only; nothing moved. MC's ask (2026-11-06): "make a plan for moving the NMA into the overall FDA folder while preserving the git history and getting everything organized. Don't do those changes until I get back from my run and we commit this overnight batch." The move starts after that commit and is itself a short series of commits, the first a pure rename.
+Status: steps 1 and 2 done 2026-11-06 (commit e5211ab the renames, the wiring commit after it; the deviations are recorded in `project_history.md` under that date: outputs under `analysis/outputs/nma/<old names>`, the pre-move architecture frozen rather than deleted, the loader to dissolve in step 3 with a pure-frame and Spark split for every population, the analysis driver's NMA group deferred to step 3). Step 3 (de-duplication) is next; step 4 is MC's Databricks runs. Written as a plan: MC's ask (2026-11-06): "make a plan for moving the NMA into the overall FDA folder while preserving the git history and getting everything organized. Don't do those changes until I get back from my run and we commit this overnight batch." The move starts after that commit and is itself a short series of commits, the first a pure rename.
 
 ## 1. Why, and what it must preserve
 

@@ -10,7 +10,7 @@ keeping the latest `created_timestamp` per (_userId, carb_timestamp, carb_grams)
 matching the FDA carbs exporter.
 
 Output is one row per *valid analysis day* (anchored on the FDA loop_recommendations
-universe, symmetric with export_user_day_bolus_counts): deduped per-day carb totals
+universe, symmetric with export_nma_user_day_bolus_counts): deduped per-day carb totals
 are LEFT JOINed onto the universe and coalesced to 0, so CE=0 days — no food records
 on a valid Loop day — appear with carb_grams_total = 0 / carb_entry_count = 0 rather
 than vanishing.

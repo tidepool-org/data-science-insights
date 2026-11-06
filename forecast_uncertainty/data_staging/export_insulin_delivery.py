@@ -2,7 +2,7 @@
 
 Run on Databricks; Claude does not execute this. Companion to behavior_model/data_staging/export_behavior_traces.py
 (SAME candidates table, pick, pseudonym salt and per-user timezone handling) and to
-no_meal_announcement/data_staging/export_user_day_tdd.py, whose BDDP basal semantics this follows:
+FDA_real_world_data/data_staging/export_nma_user_day_tdd.py (no_meal_announcement/data_staging/export_user_day_tdd.py before the move of 2026-11-06), whose BDDP basal semantics this follows:
   * Loop uploads every basal segment twice. HealthKit stream (origin source 'Loop', deliveryType 'temp'): `rate` is
     the DELIVERED rate. Loop-direct stream (origin.name 'com.loopkit.Loop', deliveryType 'automated'): `rate` is the
     COMMANDED rate and `payload.deliveredUnits` is what was delivered. Never sum the two streams; the local code picks

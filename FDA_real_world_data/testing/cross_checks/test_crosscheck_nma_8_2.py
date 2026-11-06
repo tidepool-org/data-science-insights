@@ -1,12 +1,14 @@
 """Independently recompute PRIMARY §8.2 table cells and cross-check the pipeline; §12.x supplement out of scope."""
 
 import os
+import sys
 
 import pandas as pd
-import pytest
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-SNAPSHOT = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma_user_day_analysis_ready.csv"))
+sys.path.insert(0, os.path.normpath(os.path.join(_DIR, "..")))
+from offline_test_helpers import require_statsmodels, run_tests, skip  # noqa: E402
+SNAPSHOT = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma", "nma_user_day_analysis_ready.csv"))
 OUT = os.path.normpath(os.path.join(_DIR, "..", "..", "analysis", "outputs"))
 
 
@@ -15,11 +17,11 @@ def _skip_unless_snapshot_has(*cols):
     column — e.g. the D23 `in_analysis_cohort` merge. A not-ready input is a prerequisite, not a failure
     (a bare checkout / stale snapshot shouldn't drown the suite)."""
     if not os.path.exists(SNAPSHOT):
-        pytest.skip(f"snapshot not on disk: {SNAPSHOT}")
+        skip(f"snapshot not on disk: {SNAPSHOT}")
     have = set(pd.read_csv(SNAPSHOT, nrows=0).columns)
     missing = [c for c in cols if c not in have]
     if missing:
-        pytest.skip(f"snapshot missing {missing} — regenerate it (predates the 2026-11-05 cohort-table migration, D23)")
+        skip(f"snapshot missing {missing} — regenerate it (predates the 2026-11-05 cohort-table migration, D23)")
 
 
 def test_table_8_2a_nma_autobolus_tir():
@@ -27,7 +29,7 @@ def test_table_8_2a_nma_autobolus_tir():
     output_csv = os.path.join(OUT, "analysis_8_2/all/table_8_2a_marginal_cells.csv")
     _skip_unless_snapshot_has("in_analysis_cohort", "diagnosis_group")
     if not os.path.exists(output_csv):
-        pytest.fail(f"output table missing: {output_csv} — regenerate the analysis outputs from the snapshot")
+        raise AssertionError(f"output table missing: {output_csv} — regenerate the analysis outputs from the snapshot")
 
     df = pd.read_csv(SNAPSHOT, usecols=["_userId", "in_analysis_cohort", "diagnosis_group", "in_ce0_be_inf", "delivery_strategy", "tir"])
 
@@ -60,7 +62,7 @@ def test_table_8_2a_hma_tir():
     output_csv = os.path.join(OUT, "analysis_8_2/all/table_8_2a_marginal_cells.csv")
     _skip_unless_snapshot_has("in_analysis_cohort", "diagnosis_group")
     if not os.path.exists(output_csv):
-        pytest.fail(f"output table missing: {output_csv} — regenerate the analysis outputs from the snapshot")
+        raise AssertionError(f"output table missing: {output_csv} — regenerate the analysis outputs from the snapshot")
 
     df = pd.read_csv(SNAPSHOT, usecols=["_userId", "in_analysis_cohort", "diagnosis_group", "in_ce0_be_inf", "in_ce_ge3_be_ge3", "delivery_strategy", "tir"])
 
@@ -88,14 +90,14 @@ def test_table_8_2a_hma_tir():
 
 def test_table_8_2b_interaction_tir():
     """Table 8.2b interaction LMM (broadest arm), refit independently."""
-    pytest.importorskip("statsmodels")
+    require_statsmodels()
     from statsmodels.regression.mixed_linear_model import MixedLM
     import warnings
 
     output_csv = os.path.join(OUT, "analysis_8_2/all/table_8_2b_interaction.csv")
     _skip_unless_snapshot_has("in_analysis_cohort", "diagnosis_group")
     if not os.path.exists(output_csv):
-        pytest.fail(f"output table missing: {output_csv} — regenerate the analysis outputs from the snapshot")
+        raise AssertionError(f"output table missing: {output_csv} — regenerate the analysis outputs from the snapshot")
 
     df = pd.read_csv(SNAPSHOT, usecols=["_userId", "in_analysis_cohort", "diagnosis_group", "in_ce0_be_inf", "in_ce_gt0", "delivery_strategy", "tir"])
 
@@ -128,6 +130,14 @@ def test_table_8_2b_interaction_tir():
         ]["interaction_coef"].iloc[0]
     )
     if pd.isna(published):
-        pytest.fail("published interaction coef is NaN — regenerate analysis outputs with statsmodels available")
+        raise AssertionError("published interaction coef is NaN — regenerate analysis outputs with statsmodels available")
 
     assert abs(recompute - published) < 0.05
+
+
+if __name__ == "__main__":
+    run_tests([
+        test_table_8_2a_nma_autobolus_tir,
+        test_table_8_2a_hma_tir,
+        test_table_8_2b_interaction_tir,
+    ], "test_crosscheck_nma_8_2")

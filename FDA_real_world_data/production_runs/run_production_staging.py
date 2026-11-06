@@ -80,6 +80,15 @@ import export_cbg_from_stable  # noqa: E402
 import export_correction_range_history  # noqa: E402
 import export_loop_dose_classification  # noqa: E402
 import export_loop_recommendations  # noqa: E402
+import export_nma_user_day_age  # noqa: E402
+import export_nma_user_day_analysis_ready  # noqa: E402
+import export_nma_user_day_bolus_classification  # noqa: E402
+import export_nma_user_day_bolus_counts  # noqa: E402
+import export_nma_user_day_carbs  # noqa: E402
+import export_nma_user_day_cbg  # noqa: E402
+import export_nma_user_day_classification  # noqa: E402
+import export_nma_user_day_tdd  # noqa: E402
+import compute_nma_user_day_glycemic_endpoints  # noqa: E402
 import export_override_guardrail_flags  # noqa: E402
 import export_overrides_all  # noqa: E402
 import export_dose_response_episodes  # noqa: E402
@@ -194,6 +203,32 @@ def build_cohorts(spark, boxes=None):
     export_dose_response_episodes.run(spark)
 
 
+def build_nma(spark):
+    """The PLN-1008 chain (the NMA, one report of the submission since 2026-11-03)
+    on the base tables, in fda_analysis_pipeline.yml's Phase 6 order: the user-day
+    CGM slice and its endpoints, the bolus counts by the FDA verdict, carbohydrates,
+    total daily dose, age, the day classification, then the analysis-ready table,
+    which is the NMA cohort table and writes the CSV snapshot the local analyses read."""
+    _say("nma", "nma_user_day_cbg and nma_user_day_coverage")
+    export_nma_user_day_cbg.run(spark)
+    _say("nma", "nma_user_day_glycemic_endpoints")
+    compute_nma_user_day_glycemic_endpoints.run(spark)
+    _say("nma", "nma_user_day_bolus_classification (the FDA verdict per user-day)")
+    export_nma_user_day_bolus_classification.run(spark)
+    _say("nma", "nma_user_day_bolus_counts")
+    export_nma_user_day_bolus_counts.run(spark)
+    _say("nma", "nma_user_day_carbs")
+    export_nma_user_day_carbs.run(spark)
+    _say("nma", "nma_user_day_tdd")
+    export_nma_user_day_tdd.run(spark)
+    _say("nma", "nma_user_day_age")
+    export_nma_user_day_age.run(spark)
+    _say("nma", "nma_user_day_classification")
+    export_nma_user_day_classification.run(spark)
+    _say("nma", "nma_user_day_analysis_ready (the cohort table) and its CSV snapshot")
+    export_nma_user_day_analysis_ready.run(spark)
+
+
 def build_issued_cohorts(spark, boxes=None):
     """The issued vintage's cohort table beside each window build's, from the
     snapshot copies under the version gate of that time."""
@@ -203,14 +238,16 @@ def build_issued_cohorts(spark, boxes=None):
         export_transition_cohort.run(spark, zero_version_is_missing=ISSUED_ZERO_VERSION_IS_MISSING, **names)
 
 
-# Every step in dependency order: base first, then the four independent
-# subtrees, then the cohort tables that close them, then the issued vintage's.
+# Every step in dependency order: base first, then the five independent
+# subtrees (the NMA chain among them since 2026-11-06), then the cohort
+# tables that close the PLN-1001 ones, then the issued vintage's.
 STEPS = [
     ("base", build_base),
     ("transition", build_transition),
     ("stable", build_stable),
     ("durability", build_durability),
     ("ab_days", build_ab_days),
+    ("nma", build_nma),
     ("cohorts", build_cohorts),
     ("issued", build_issued_cohorts),
 ]
