@@ -207,9 +207,9 @@ def plot_nma_days_vs_tir(tables):
             ax = axes[i][j]
             d = u.dropna(subset=[ycol, "n_nma"])
             x, y = d["n_nma"].to_numpy(float), d[ycol].to_numpy(float)
-            ax.scatter(x, y, s=8, alpha=0.25, color="#607cff")
+            ax.scatter(x, y, s=8, alpha=0.25, color="#627cff")
             if base is not None:
-                ax.axhline(base, color="#241144", ls="--", lw=1)
+                ax.axhline(base, color="#281946", ls="--", lw=1)
             if len(d) > 2:
                 lx = np.log10(x)
                 b1, b0 = np.polyfit(lx, y, 1)

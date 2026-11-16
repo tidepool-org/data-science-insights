@@ -52,7 +52,7 @@ def plot_transition_cbg(user_id, seg_info, title_suffix="", user_label=""):
 
     fig, ax = plt.subplots(figsize=(14, 5))
 
-    ax.plot(x1, seg1_cbg["cbg_mg_dl"], "-", lw=1, alpha=0.6, color="#607cff", label="Temp Basal")
+    ax.plot(x1, seg1_cbg["cbg_mg_dl"], "-", lw=1, alpha=0.6, color="#627cff", label="Temp Basal")
     ax.plot(x2, seg2_cbg["cbg_mg_dl"], "-", lw=1, alpha=0.6, color="#4f59be", label="Autobolus")
 
     ax.axhspan(70, 180, color="green", alpha=0.08)

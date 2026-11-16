@@ -100,8 +100,8 @@ def plot_distribution(isf_df, output_path=None):
 
     _, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    axes[0].hist(s, bins=60, edgecolor="black", color="#607cff")
-    axes[0].axvline(s.median(), color="#241144", ls="--", lw=2,
+    axes[0].hist(s, bins=60, edgecolor="black", color="#627cff")
+    axes[0].axvline(s.median(), color="#281946", ls="--", lw=2,
                     label=f"median = {s.median():.0f}")
     axes[0].axvline(s.mean(), color="#8B0000", ls="-", lw=2,
                     label=f"mean = {s.mean():.0f}")
@@ -113,7 +113,7 @@ def plot_distribution(isf_df, output_path=None):
 
     user_median = isf_df.groupby("_userId")["isf_mgdl_per_u"].median()
     axes[1].hist(user_median, bins=40, edgecolor="black", color="#4f59be")
-    axes[1].axvline(user_median.median(), color="#241144", ls="--", lw=2,
+    axes[1].axvline(user_median.median(), color="#281946", ls="--", lw=2,
                     label=f"median = {user_median.median():.0f}")
     axes[1].set_xlabel("Per-user median ISF (mg/dL per U)")
     axes[1].set_ylabel("Number of users")

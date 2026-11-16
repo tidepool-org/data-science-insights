@@ -17,9 +17,12 @@ FONT = {
 # =============================================================================
 # Color scheme
 # =============================================================================
-COLORS_PRIMARY   = "#607cff"
+# Tidepool brand purple and its dark variant, from tidepool-org/viz src/styles/colors.css
+# (--brand-purple, --brand-purple-dark); aligned 2026-11-10 (were #607cff / #241144). The
+# secondary has no brand source and is kept as the house mid-tone.
+COLORS_PRIMARY   = "#627cff"
 COLORS_SECONDARY = "#4f59be"
-COLORS_ACCENT    = "#241144"
+COLORS_ACCENT    = "#281946"
 
 # One canonical shade per glycemic range — Temp Basal and Autobolus bars share it (the two
 # bars are distinguished by x-position + axis labels, not by shade). Matches NMA's RANGE_COLORS

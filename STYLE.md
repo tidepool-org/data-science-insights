@@ -58,6 +58,7 @@ Contents: 1 Language · 2 Numbers and evidence · 3 Documents · 4 Figures · 5 
 - **PLN** (house sections): header block; 1 Purpose; 2 References [n]; 3 Background; 4 Objectives; 5 Materials; 6 Data collection / sample information; 7 Methods; 8 Analyses (table and figure descriptions in the body, shells in a landscape appendix at the end); 9 Verification; 10 Acceptance criteria; 11 Limitations; appendices (analyses considered and not pursued; verification; implementation notes marked internal; revision history; table shells).
 - **Supplement** (S1 pattern): header block; purpose; data source and the record being documented; rules; counts; coverage and consistency; data checks; limitations; provenance and the asserted checks; landscape appendix of numbered tables. Tables the parent plan cites by number keep those numbers.
 - **Report** (IR-6B pattern): key figures for the response up front; combined figures in the body; per-group breakouts in a landscape appendix; a separate supplementary-materials document for provenance, plotted values, and checks.
+- **Bullets carry a bold lead ending in a colon, then the detail** (MC, 2026-11-06, set on the Loop 3.0 deck and applying to slides and documents alike): the bold leads alone must read as the summary of the list, so a reader can skim them and stop.
 - **Header block** (two-column table): Document ID · Revision · Date · Prepared by · Prepared in support of · Related documents. Unknown numbers are written "document number to be supplied", never invented.
 - **Framing of comparative tables and figures (MC, 2026-09-22): dosing strategy outermost, insulin groups nested under each** — temporary basal first, then automated bolus, and under each the insulin groups (RAI, URAI; or the brands) in a fixed order — so the insulin comparison within a strategy is what the eye reads. Tables carry a two-level header (strategy row over insulin row); figures use one panel or block per strategy with the insulin groups inside it. The temp-basal versus autobolus comparison is read across blocks, descriptively, because those are not the same users at the same time.
 - **No repeated numbers across tables.** A differences table (e.g. URAI − RAI with its interval and effect size) carries the differences only; the group means and intervals live in the summary table it refers to. Each number appears once, in the table whose purpose it serves.
@@ -82,13 +83,13 @@ Contents: 1 Language · 2 Numbers and evidence · 3 Documents · 4 Figures · 5 
 
 ## 4. Figures
 
-Palette and fonts come from `FDA_real_world_data/analysis/utils/constants.py` (values copied here on 2026-09-22; that file is the source of truth):
+Palette and fonts come from `FDA_real_world_data/analysis/utils/constants.py` (values copied here on 2026-09-22, brand values aligned 2026-11-10; that file is the source of truth). The primary and accent are Tidepool's brand purple and its dark variant as published in `tidepool-org/viz` `src/styles/colors.css` (`--brand-purple #627CFF`, `--brand-purple-dark #281946`); the secondary is a house mid-tone with no brand source. **Partner colours for decks and diagrams** (ownership, never data): Tidepool `#627CFF`, UCSB navy `#003660` and gold `#FEBC11` (brand.ucsb.edu digital palette), Replica Health `#0B6353` (given by MC, 2026-11-10).
 
 | Role | Constant | Value |
 |---|---|---|
-| primary series (e.g. autobolus) | `COLORS_PRIMARY` | `#607cff` |
+| primary series (e.g. autobolus) | `COLORS_PRIMARY` | `#627cff` (Tidepool brand purple) |
 | secondary series | `COLORS_SECONDARY` | `#4f59be` |
-| accent / contrast series (e.g. temp-basal) | `COLORS_ACCENT` | `#241144` |
+| accent / contrast series (e.g. temp-basal) | `COLORS_ACCENT` | `#281946` (Tidepool brand purple, dark) |
 
 Glycemic-range band colours (`COLORS_STACKED_BAR`): the range a metric measures is the honest encoding, so a metric's line, violin, and bar wear its band colour (TIR → 70–180, TBR → 54–70, <54 → its own, TAR → 180–250, >250 → its own); non-range metrics (mean glucose, CV, hypo rate) take the brand colours (primary, secondary, accent).
 

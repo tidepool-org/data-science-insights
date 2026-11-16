@@ -258,7 +258,7 @@ def plot_multi_prediction_timeline(prediction_data: Dict = None, plot_save_path:
     # Plot real glucose data - next 7 hours in green  
     next_7_hours = glucose_window[glucose_window['hours_from_start'] > 6]
     ax1.plot(next_7_hours['hours_from_start'], next_7_hours['glucose'],
-            color='#607cff', linewidth=3, label='Actual Glucose (6-13 hours)', alpha=0.8)
+            color='#627cff', linewidth=3, label='Actual Glucose (6-13 hours)', alpha=0.8)
     
     # Plot predictions
     prediction_colors = plt.cm.cividis(np.linspace(0.3, 0.9, 13))

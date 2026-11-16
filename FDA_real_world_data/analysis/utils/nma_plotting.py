@@ -36,7 +36,7 @@ LEGEND_FS = 10.5
 BOOTSTRAP_SEED = 20260520
 
 # Tidepool brand + neutral comparator grey.
-TIDEPOOL = "#607cff"
+TIDEPOOL = "#627cff"
 GRAY = "#9e9e9e"
 
 # High meal-announcement ("high engagement", CE>=3/BE>=3) 5th-category styling: a distinct

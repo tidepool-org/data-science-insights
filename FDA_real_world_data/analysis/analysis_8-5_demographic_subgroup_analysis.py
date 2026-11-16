@@ -77,8 +77,8 @@ from utils.statistics import (
 )
 
 # Per-subgroup category palettes (used in grouped plots)
-PALETTE_GENDER = ["#607cff", "#ff7c60", "#aaaaaa"]
-PALETTE_AGE    = ["#607cff", "#4f59be", "#3a3f8a", "#241144"]
+PALETTE_GENDER = ["#627cff", "#ff7c60", "#aaaaaa"]
+PALETTE_AGE    = ["#627cff", "#4f59be", "#3a3f8a", "#281946"]
 PALETTE_YLD    = ["#76D3A6", "#FF8B7C", "#FB5951"]
 
 

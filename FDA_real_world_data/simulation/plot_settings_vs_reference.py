@@ -79,7 +79,7 @@ PANELS = [
      "Carb Ratio (CIR)", "g/U"),
 ]
 
-USER_COLOR = "#607cff"
+USER_COLOR = "#627cff"
 REF_COLOR = "#bbbbbb"
 
 
@@ -183,7 +183,7 @@ def _draw_panel(ax, user_df, ref_df, user_col, ref_prefix, title, units):
         ref_stats, positions=positions + width / 2, widths=width * 0.9,
         showfliers=False, patch_artist=True,
         boxprops=dict(facecolor=REF_COLOR, edgecolor="black"),
-        medianprops=dict(color="#241144", linewidth=1.5),
+        medianprops=dict(color="#281946", linewidth=1.5),
     )
 
     ax.set_xticks(positions)
@@ -217,7 +217,7 @@ def _draw_overall_panel(ax, user_values, ref_df, ref_prefix, title, units):
         [ref_stats], positions=[1], widths=0.6,
         showfliers=False, patch_artist=True,
         boxprops=dict(facecolor=REF_COLOR, edgecolor="black"),
-        medianprops=dict(color="#241144", linewidth=1.5),
+        medianprops=dict(color="#281946", linewidth=1.5),
     )
 
     ax.set_xticks([0, 1])

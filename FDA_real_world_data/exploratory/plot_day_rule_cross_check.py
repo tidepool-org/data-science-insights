@@ -33,7 +33,7 @@ SIZE_COLOURS = {
     "under 0.25 U": "#dfe5ff",
     "0.25 to 0.5 U": "#b3c0ff",
     "0.5 to 1 U": "#8aa0ff",
-    "1 to 2 U": "#607cff",
+    "1 to 2 U": "#627cff",
     "2 U or more": "#3b4db8",
 }
 CLASSES = [("temp basal", "Temporary-basal days"), ("autobolus", "Autobolus days")]
@@ -105,9 +105,9 @@ def plot_doses_per_day(results_dir: str, result_file: str, count_column: str, ou
     beyond = int(counts[counts.index > x_limit].sum())
     drawn = counts[counts.index <= x_limit].reindex(range(0, x_limit + 1), fill_value=0)
     fig, ax = plt.subplots(figsize=(14, 5))
-    ax.bar(drawn.index, drawn.values, 1.0, color="#607cff", edgecolor="none")
+    ax.bar(drawn.index, drawn.values, 1.0, color="#627cff", edgecolor="none")
     if beyond:
-        ax.bar([x_limit], [beyond], 1.0, color="#241144", edgecolor="none")
+        ax.bar([x_limit], [beyond], 1.0, color="#281946", edgecolor="none")
         ax.annotate(f"over {x_limit}: {beyond:,} user-days ({beyond / total:.1%})",
                     xy=(x_limit, beyond), xytext=(-10, 12), textcoords="offset points",
                     ha="right", fontsize=FONT["annotation"])

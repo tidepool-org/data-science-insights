@@ -287,7 +287,7 @@ def figure_8_3d_r_dist(ce0_strata):
     """Within-user R = tdd/mean_tdd distribution on the headline CE=0/BE≤1 days, with the R=1.0 cut."""
     fig, ax = plt.subplots(figsize=(9, 5))
     r = ce0_strata["tdd_ratio"].clip(0, 3).dropna()
-    ax.hist(r, bins=60, color="#607cff", edgecolor="white", alpha=0.85)
+    ax.hist(r, bins=60, color="#627cff", edgecolor="white", alpha=0.85)
     ax.axvline(R_CUT, color="#E03830", ls="--", lw=2, label="R = 1.0 (Low | High)")
     ax.set_xlabel("R = day TDD / user mean TDD (clipped at 3)")
     ax.set_ylabel("CE=0/BE≤1 user-days")
