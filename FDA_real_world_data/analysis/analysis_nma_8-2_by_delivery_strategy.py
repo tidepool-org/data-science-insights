@@ -18,7 +18,7 @@ alongside.
 
 Mirrors §8.1's per-cohort run()/main() + output-clearing; shares the analysis-ready loader,
 §7.6 cohort filter, CE>0 comparator restriction, and endpoint/classification constants via
-utils/nma_loading, and the interaction LMM via utils/nma_statistics.lmm_day_strategy_interaction.
+utils/data_loading, and the interaction LMM via utils/nma_statistics.lmm_day_strategy_interaction.
 
 Note: autobolus_on days are sparse (~2% of user-days), so within the stringent classifications
 some NMA × autobolus_on cells are too small to fit; those (classification, endpoint) cells are
@@ -75,22 +75,22 @@ except NameError:
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils.nma_loading import (  # noqa: E402
+from utils import nma_statistics  # noqa: E402
+from utils.data_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
-    ENDPOINTS,
+    NMA_ENDPOINTS,
     HIGH_MA_FLAG,
     HIGH_MA_LABEL,
-    STRATEGIES,
-    STRATEGY_COL,
+    DELIVERY_STRATEGIES,
+    DELIVERY_STRATEGY_COLUMN,
     analysis_dir,
-    default_analysis_ready_csv,
-    filter_cohort,
-    load_day_level,
-    load_nma_statistics,
-    prepare_day_level,
-    restrict_comparator,
+    nma_snapshot_csv,
+    select_nma_cohort,
+    load_nma_day_level,
+    prepare_nma_day_level,
+    restrict_nma_comparator,
 )
 from utils.nma_plotting import (  # noqa: E402
     DAY_TYPE_ORDER,
@@ -109,7 +109,7 @@ from utils.nma_plotting import (  # noqa: E402
     violin_box_panel,
 )
 
-# §7.3 delivery strategies (STRATEGIES / STRATEGY_COL) now live in utils.nma_loading (shared with
+# §7.3 delivery strategies (DELIVERY_STRATEGIES / DELIVERY_STRATEGY_COLUMN) now live in utils.data_loading (shared with
 # §8.3); imported above. Any other / null strategy is "ambiguous" and excluded.
 DAY_TYPE_COL = "day_type"
 NMA_LABEL = "NMA"
@@ -134,7 +134,7 @@ def build_day_type_frame(pdf, treatment_flag, treatment_label=NMA_LABEL):
     delivery strategies (ambiguous excluded). The main pass uses the classification's CE=0 flag
     (treatment_label='NMA', disjoint from CE>0); the §12.2 supplement passes HIGH_MA_FLAG /
     HIGH_MA_LABEL (CE>=3/BE>=3 — note this is ⊂ CE>0, an overlapping reference, as in §8.1)."""
-    strat_names = [s for s, _ in STRATEGIES]
+    strat_names = [s for s, _ in DELIVERY_STRATEGIES]
     treat = pdf.loc[pdf[treatment_flag] == True].copy()  # noqa: E712
     treat[DAY_TYPE_COL] = treatment_label
     # Disjoint comparator: drop the treatment arm's own days from the CE>0 reference — a no-op for the main
@@ -142,7 +142,7 @@ def build_day_type_frame(pdf, treatment_flag, treatment_label=NMA_LABEL):
     cmp = pdf.loc[(pdf[COMPARATOR_FLAG] == True) & (pdf[treatment_flag] == False)].copy()  # noqa: E712
     cmp[DAY_TYPE_COL] = COMPARATOR_LABEL
     frame = pd.concat([treat, cmp], ignore_index=True)
-    return frame[frame[STRATEGY_COL].isin(strat_names)].copy()
+    return frame[frame[DELIVERY_STRATEGY_COLUMN].isin(strat_names)].copy()
 
 
 # Display day types for the descriptive 6-cell figures (8.2a/8.2c): the classification's NMA days,
@@ -171,7 +171,7 @@ def build_display_frame(pdf, nma_flag):
     CE>0 comparator days, and HMA (CE>=3/BE>=3) days — each labeled by day_type, two strategies
     only. HMA overlaps CE>0 (its days appear under both labels); intentional, for the descriptive
     6-cell display only (the inferential fits use the disjoint 2-day-type frames)."""
-    strat_names = [s for s, _ in STRATEGIES]
+    strat_names = [s for s, _ in DELIVERY_STRATEGIES]
     parts = []
     for flag, label in [(nma_flag, NMA_LABEL), (COMPARATOR_FLAG, COMPARATOR_LABEL),
                         (HIGH_MA_FLAG, HIGH_MA_LABEL)]:
@@ -179,7 +179,7 @@ def build_display_frame(pdf, nma_flag):
         sub[DAY_TYPE_COL] = label
         parts.append(sub)
     frame = pd.concat(parts, ignore_index=True)
-    return frame[frame[STRATEGY_COL].isin(strat_names)].copy()
+    return frame[frame[DELIVERY_STRATEGY_COLUMN].isin(strat_names)].copy()
 
 
 def build_display_frame_5way(pdf):
@@ -187,7 +187,7 @@ def build_display_frame_5way(pdf):
     labeled by its classification), the CE>0 comparator, and HMA (CE>=3/BE>=3) — two strategies
     only. The nested NMA arms overlap (CE=0/BE=0 ⊂ BE≤1 ⊂ BE≤∞) and HMA ⊂ CE>0; intentional, for
     the descriptive display only (the inferential fits use the disjoint 2-day-type frames)."""
-    strat_names = [s for s, _ in STRATEGIES]
+    strat_names = [s for s, _ in DELIVERY_STRATEGIES]
     arms = list(CLASSIFICATIONS) + [(COMPARATOR_FLAG, COMPARATOR_LABEL), (HIGH_MA_FLAG, HIGH_MA_LABEL)]
     parts = []
     for flag, label in arms:
@@ -195,7 +195,7 @@ def build_display_frame_5way(pdf):
         sub[DAY_TYPE_COL] = label
         parts.append(sub)
     frame = pd.concat(parts, ignore_index=True)
-    return frame[frame[STRATEGY_COL].isin(strat_names)].copy()
+    return frame[frame[DELIVERY_STRATEGY_COLUMN].isin(strat_names)].copy()
 
 
 def fit_interaction_models(frames, nma_stats, treatments=CLASSIFICATIONS, treatment_label=NMA_LABEL):
@@ -216,20 +216,20 @@ def fit_interaction_models(frames, nma_stats, treatments=CLASSIFICATIONS, treatm
     if not has_statsmodels:
         print("  §8.2 LMM skipped: statsmodels not installed — interaction columns will be "
               "NaN. Install with `%pip install statsmodels` (or use an ML runtime).")
-    strat_names = [s for s, _ in STRATEGIES]
+    strat_names = [s for s, _ in DELIVERY_STRATEGIES]
     day_types = [treatment_label, COMPARATOR_LABEL]
     cells = [(d, s) for d in day_types for s in strat_names]
 
     records = []
     for treat_flag, cls_label in treatments:
         frame = frames[cls_label]
-        for col, ep_label in ENDPOINTS:
-            sl = frame[["_userId", DAY_TYPE_COL, STRATEGY_COL, col]].dropna(subset=[col])
-            cell_users = sl.groupby([DAY_TYPE_COL, STRATEGY_COL])["_userId"].nunique()
+        for col, ep_label in NMA_ENDPOINTS:
+            sl = frame[["_userId", DAY_TYPE_COL, DELIVERY_STRATEGY_COLUMN, col]].dropna(subset=[col])
+            cell_users = sl.groupby([DAY_TYPE_COL, DELIVERY_STRATEGY_COLUMN])["_userId"].nunique()
             cells_ok = all(cell_users.get((d, s), 0) >= 2 for d, s in cells)
             fittable = (
                 sl[DAY_TYPE_COL].nunique() == 2
-                and sl[STRATEGY_COL].nunique() == 2
+                and sl[DELIVERY_STRATEGY_COLUMN].nunique() == 2
                 and cells_ok
                 and sl[col].nunique() >= 2
             )
@@ -251,7 +251,7 @@ def fit_interaction_models(frames, nma_stats, treatments=CLASSIFICATIONS, treatm
                         warnings.simplefilter("ignore")
                         res = nma_stats.lmm_day_strategy_interaction(
                             sl, outcome=col, day_type_col=DAY_TYPE_COL,
-                            strategy_col=STRATEGY_COL, user_col="_userId")
+                            strategy_col=DELIVERY_STRATEGY_COLUMN, user_col="_userId")
                     rec.update({
                         "converged": True,
                         "main_day_coef": res["main_day_coef"],
@@ -316,7 +316,7 @@ def build_table_8_2a(frames, records, hma_frames, hma_fits):
             for (d, s), info in mc.items():
                 model_means[(r["classification"], r["endpoint"], d, s)] = info["mean"]
 
-    strat_names = [s for s, _ in STRATEGIES]
+    strat_names = [s for s, _ in DELIVERY_STRATEGIES]
     # (frame, day_types to emit, classification key). The 3 NMA frames emit NMA + CE>0; the HMA
     # frame emits only its CE>=3/BE>=3 cells (CE>0 already present, byte-identical).
     sections = [(frames[cls_label], [NMA_LABEL, COMPARATOR_LABEL], cls_label)
@@ -325,10 +325,10 @@ def build_table_8_2a(frames, records, hma_frames, hma_fits):
 
     rows = []
     for frame, day_types, cls_label in sections:
-        for col, ep_label in ENDPOINTS:
+        for col, ep_label in NMA_ENDPOINTS:
             for d in day_types:
                 for s in strat_names:
-                    cell = frame[(frame[DAY_TYPE_COL] == d) & (frame[STRATEGY_COL] == s)]
+                    cell = frame[(frame[DAY_TYPE_COL] == d) & (frame[DELIVERY_STRATEGY_COLUMN] == s)]
                     per_user = cell.groupby("_userId")[col].mean().dropna()
                     n_u = int(len(per_user))
                     rows.append({
@@ -364,8 +364,8 @@ def _cell_violin_groups(frame, endpoint):
     groups = []
     for d, _alpha in DISPLAY_CELLS_5WAY:
         color = dt_colors[d]
-        for s_name, s_short in STRATEGIES:  # STRATEGIES is TB-first (data_loader), so each pair is TB|AB
-            cell = frame[(frame[STRATEGY_COL] == s_name) & (frame[DAY_TYPE_COL] == d)]
+        for s_name, s_short in DELIVERY_STRATEGIES:  # DELIVERY_STRATEGIES is TB-first (data_loader), so each pair is TB|AB
+            cell = frame[(frame[DELIVERY_STRATEGY_COLUMN] == s_name) & (frame[DAY_TYPE_COL] == d)]
             vals = cell.groupby("_userId")[endpoint].mean().dropna().to_numpy()
             groups.append((f"{s_short}\n{d}", vals, color, STRATEGY_ALPHA[s_name]))
     return groups
@@ -379,7 +379,7 @@ def make_violin_grids(display_frame):
     (day_type_colors(col); AB darker / TB lighter); a light separator divides each day-type TB|AB pair
     from the next, and a dark line + diamonds connects the two across-user means within each pair (the
     TB→AB strategy shift for that day type)."""
-    n_strat = len(STRATEGIES)  # separators between day-type groups (after each TB/AB pair)
+    n_strat = len(DELIVERY_STRATEGIES)  # separators between day-type groups (after each TB/AB pair)
     seps = tuple(n_strat * k + 0.5 for k in range(1, len(DISPLAY_CELLS_5WAY)))
     out = {}
     for key, gtitle, eps in GRIDS:
@@ -409,8 +409,8 @@ def make_interaction_grids(records, hma_records):
     colour. Because the hue varies per endpoint, each panel carries its own arm legend
     (day_type_legend) rather than one figure-level legend. Returns {filename: figure} (a single 4×2
     grid over all 8 endpoints); a panel with no fitted line shows a degenerate note."""
-    strat_names = [s for s, _ in STRATEGIES]
-    strat_short = [sh for _, sh in STRATEGIES]
+    strat_names = [s for s, _ in DELIVERY_STRATEGIES]
+    strat_short = [sh for _, sh in DELIVERY_STRATEGIES]
     by_cls_ep = {(r["classification"], r["endpoint"]): r for r in records}
     by_ep_hma = {r["endpoint"]: r for r in hma_records}
 
@@ -475,9 +475,9 @@ def make_figure_8_2d(display_frames):
 
         bar_labels, user_ns = [], []
         means = {rc: [] for rc in range_keys}
-        for s_name, s_short in STRATEGIES:
+        for s_name, s_short in DELIVERY_STRATEGIES:
             for d in day_type_labels:
-                cell = frame[(frame[STRATEGY_COL] == s_name) & (frame[DAY_TYPE_COL] == d)]
+                cell = frame[(frame[DELIVERY_STRATEGY_COLUMN] == s_name) & (frame[DAY_TYPE_COL] == d)]
                 um = cell.groupby("_userId")[range_keys].mean()
                 bar_labels.append(f"{s_short}\n{d}")
                 user_ns.append(len(um))
@@ -542,7 +542,7 @@ def run(
     fit, which figure 8.2c needs — so it is computed only when tables run OR 8.2c is being rendered
     (tweaking 8.2a/8.2d alone skips it)."""
     figures_only = figures_only or figs_filter is not None  # filtering figures ⇒ skip the tables
-    nma_stats = load_nma_statistics()
+    nma_stats = nma_statistics
     here = analysis_dir()
     if output_dir is None:
         output_dir = os.path.join(here, "outputs", "nma", "analysis_8_2", cohort)
@@ -553,7 +553,7 @@ def run(
     os.makedirs(output_dir, exist_ok=True)
 
     if csv_path is None and spark is None:
-        csv_path = default_analysis_ready_csv(analysis_ready_table)
+        csv_path = nma_snapshot_csv(analysis_ready_table)
         print(f"no Spark session; reading analysis-ready snapshot: {csv_path}")
     if csv_path is not None:
         if not os.path.exists(csv_path):
@@ -562,14 +562,14 @@ def run(
                 "data_staging/export_nma_user_day_analysis_ready.py to create it (it writes "
                 "outputs/nma/<table-name>.csv), or pass csv_path/--csv_path."
             )
-        pdf = prepare_day_level(pd.read_csv(csv_path))
+        pdf = prepare_nma_day_level(pd.read_csv(csv_path))
     else:
-        pdf = load_day_level(spark, analysis_ready_table)
-    pdf = filter_cohort(pdf, cohort=cohort)
-    pdf = restrict_comparator(pdf)
+        pdf = load_nma_day_level(spark, analysis_ready_table)
+    pdf = select_nma_cohort(pdf, cohort=cohort)
+    pdf = restrict_nma_comparator(pdf)
     # Drop ambiguous delivery strategy (§7.3); keep only the two known values.
-    strat_names = [s for s, _ in STRATEGIES]
-    pdf = pdf[pdf[STRATEGY_COL].isin(strat_names)].copy()
+    strat_names = [s for s, _ in DELIVERY_STRATEGIES]
+    pdf = pdf[pdf[DELIVERY_STRATEGY_COLUMN].isin(strat_names)].copy()
 
     # Build the per-classification NMA/CE>0 frames + display frames once (fast); reuse for tables +
     # figures.

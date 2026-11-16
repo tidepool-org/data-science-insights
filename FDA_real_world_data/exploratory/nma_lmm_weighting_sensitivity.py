@@ -59,7 +59,7 @@ def _load(name, path):
 
 a81 = _load("a81", os.path.join(ANALYSIS_DIR, "analysis_nma_8-1_glycemic_outcomes_vs_carb_entry.py"))
 CLS = a81.CLASSIFICATIONS
-ENDPOINTS = a81.ENDPOINTS
+ENDPOINTS = a81.NMA_ENDPOINTS
 CMP = a81.COMPARATOR_FLAG
 
 

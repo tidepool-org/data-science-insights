@@ -9,7 +9,7 @@ controller absorbed without a carb signal (stress test).** This is the pre-speci
 the supplement's "intake confound" story — it separates light-intake CE=0 days from
 unannounced-meal CE=0 days using TDD as the (dose-based, unvalidated) intake proxy.
 
-Mirrors §8.1/§8.2 per-cohort run()/main() + output-clearing; reuses utils/nma_loading (cohort
+Mirrors §8.1/§8.2 per-cohort run()/main() + output-clearing; reuses utils/data_loading (cohort
 filter, comparator restriction) and utils/statistics (paired_within_user, lmm_tdd_stratum).
 
 Eligibility: ≥30 eligible days for a reliable personal TDD reference (`n_eligible_days_for_tdd`)
@@ -120,23 +120,23 @@ except NameError:
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils.nma_loading import (  # noqa: E402
+from utils import nma_statistics  # noqa: E402
+from utils.data_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
-    ENDPOINTS,
+    NMA_ENDPOINTS,
     HIGH_MA_FLAG,
     HIGH_MA_LABEL,
-    STRATEGIES,
-    STRATEGY_COL,
+    DELIVERY_STRATEGIES,
+    DELIVERY_STRATEGY_COLUMN,
     SUPPLEMENT_ARMS,
     analysis_dir,
-    default_analysis_ready_csv,
-    filter_cohort,
-    load_day_level,
-    load_nma_statistics,
-    prepare_day_level,
-    restrict_comparator,
+    nma_snapshot_csv,
+    select_nma_cohort,
+    load_nma_day_level,
+    prepare_nma_day_level,
+    restrict_nma_comparator,
 )
 from utils.nma_plotting import (  # noqa: E402
     DAY_TYPE_ORDER,
@@ -344,7 +344,7 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False, day_types=None, deli
     always cover every eligible day in scope (all 5 day types, after the delivery_strategy filter), so
     the drawn arms read against the same all-days reference as figure 8.3e and the 5-day-type AB
     variant; with a subset the legend entry says "overall, all day types". `delivery_strategy`
-    (default None = all days) restricts to AB/TB days (a STRATEGY_COL
+    (default None = all days) restricts to AB/TB days (a DELIVERY_STRATEGY_COLUMN
     value, e.g. "autobolus_on"); on the percentile axis it is applied AFTER the within-user rank, so the
     x-axis stays the OVERALL all-eligible-days percentile (only which days are *shown* changes); the
     absolute axis is order-free.
@@ -363,10 +363,10 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False, day_types=None, deli
     else:
         df["_x"] = df["tdd_units"]
     if delivery_strategy is not None:
-        df = df[df[STRATEGY_COL] == delivery_strategy].copy()
+        df = df[df[DELIVERY_STRATEGY_COLUMN] == delivery_strategy].copy()
     # Per-day colour = most-specific day type (the tightest nested CE=0 class, else HMA, else CE>0);
     # first match wins, so dots get one crisp day_type_colors("tir") colour. Days in none of the 5 (CE>0
-    # of non-CE=0-contributing users, zeroed by restrict_comparator) fall through to "" and are dropped.
+    # of non-CE=0-contributing users, zeroed by restrict_nma_comparator) fall through to "" and are dropped.
     f0, f1, finf = (c[0] for c in CLASSIFICATIONS)  # in_ce0_be0 / in_ce0_be_le1 / in_ce0_be_inf
     df["dotcat"] = np.select(
         [df[f0] == True, df[f1] == True, df[finf] == True,          # noqa: E712
@@ -504,7 +504,7 @@ def figure_8_3e_tir_vs_tdd_pct(pdf, *, tercile_bands=False, day_types=None, deli
             else f"TIR vs {x_name}: " + " vs ".join(order))
     notes = []
     if delivery_strategy is not None:
-        notes.append(f"{dict(STRATEGIES).get(delivery_strategy, delivery_strategy)} days only")
+        notes.append(f"{dict(DELIVERY_STRATEGIES).get(delivery_strategy, delivery_strategy)} days only")
     if tercile_bands and x_axis == "percentile":
         notes.append("overall-ref tercile bands")
     if x_axis == "absolute_tdd":
@@ -698,7 +698,7 @@ def run(
     skipping the rest — so iterating on one figure avoids re-rendering the others (notably the
     8.3e/12.3h scatters). Implies figures_only (you're tweaking a figure)."""
     figures_only = figures_only or figs_filter is not None  # filtering figures ⇒ skip the tables
-    nma_stats = load_nma_statistics()
+    nma_stats = nma_statistics
     here = analysis_dir()
     if output_dir is None:
         output_dir = os.path.join(here, "outputs", "nma", "analysis_8_3", cohort)
@@ -707,18 +707,18 @@ def run(
     os.makedirs(output_dir, exist_ok=True)
 
     if csv_path is None and spark is None:
-        csv_path = default_analysis_ready_csv(analysis_ready_table)
+        csv_path = nma_snapshot_csv(analysis_ready_table)
         print(f"no Spark session; reading analysis-ready snapshot: {csv_path}")
     if csv_path is not None:
         if not os.path.exists(csv_path):
             raise FileNotFoundError(
                 f"analysis-ready CSV not found at {csv_path}. Run "
                 "data_staging/export_nma_user_day_analysis_ready.py first, or pass --csv_path.")
-        pdf = prepare_day_level(pd.read_csv(csv_path))
+        pdf = prepare_nma_day_level(pd.read_csv(csv_path))
     else:
-        pdf = load_day_level(spark, analysis_ready_table)
-    pdf = filter_cohort(pdf, cohort=cohort)
-    pdf = restrict_comparator(pdf)
+        pdf = load_nma_day_level(spark, analysis_ready_table)
+    pdf = select_nma_cohort(pdf, cohort=cohort)
+    pdf = restrict_nma_comparator(pdf)
 
     # ---- Strata frames (FAST: groupby/where; no LMM or bootstrap). Computed up front because BOTH
     # the tables and the figures consume them; under figures_only the slow table writes below are

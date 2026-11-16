@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "analysis"))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..")))
 from offline_test_helpers import require_statsmodels, run_tests  # noqa: E402
 
-from utils.nma_loading import ENDPOINTS, load_nma_statistics  # type: ignore # noqa: E402
+from utils import nma_statistics  # type: ignore # noqa: E402
+from utils.data_loading import NMA_ENDPOINTS  # type: ignore # noqa: E402
 from utils.strata import (  # type: ignore # noqa: E402
     _ce0_strata,
     _rank_strata,
@@ -113,12 +114,12 @@ def test_same_user_set_gate_keeps_only_users_in_every_stratum():
 # ---------------------------------------------------------------------------
 
 def _all_endpoint_cols(tir_value):
-    return {col: (tir_value if col == "tir" else 0.0) for col, _ in ENDPOINTS}
+    return {col: (tir_value if col == "tir" else 0.0) for col, _ in NMA_ENDPOINTS}
 
 
 def test_table_8_3c_lmm_degenerate_emits_not_converged_row():
     """A single user per stratum (<2) must short-circuit to a converged=False NaN row, not raise."""
-    nma_stats = load_nma_statistics()
+    nma_stats = nma_statistics
     rows = [{"_userId": "u1", "tdd_stratum": st, **_all_endpoint_cols(tir)}
             for st, tir in [("Low", 75.0), ("Low", 76.0), ("High", 60.0), ("High", 61.0)]]
     out = table_8_3c_lmm({"CE=0/BE=0": pd.DataFrame(rows)}, nma_stats)
@@ -130,7 +131,7 @@ def test_table_8_3c_lmm_degenerate_emits_not_converged_row():
 def test_table_8_3c_lmm_converges_with_two_users_per_stratum():
     """Happy path: ≥2 users in each stratum → converged=True, coef = Low − High > 0."""
     require_statsmodels()
-    nma_stats = load_nma_statistics()
+    nma_stats = nma_statistics
     rows = []
     for u in ["u1", "u2", "u3"]:
         for st, tir in [("Low", 75.0), ("High", 60.0)]:

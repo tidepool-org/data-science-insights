@@ -16,7 +16,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from .nma_loading import ENDPOINTS, SUPPLEMENT_ARMS
+from .data_loading import NMA_ENDPOINTS, SUPPLEMENT_ARMS
 
 MIN_REF_DAYS = 30        # ≥30 eligible days for a reliable personal TDD reference (§8.3)
 R_CUT = 1.0              # Low (R<1.0) vs High (R≥1.0) for the prespecified mean-reference binary
@@ -96,7 +96,7 @@ def table_8_3a_per_user_by_stratum(strata_by_cls, strata_order=("Low", "High")):
     delivery-strategy cross-tab (section labels carry the strategy suffix)."""
     rows = []
     for cls_label, df in strata_by_cls.items():
-        for col, ep_label in ENDPOINTS:
+        for col, ep_label in NMA_ENDPOINTS:
             for stratum in strata_order:
                 m = _per_user_stratum_mean(df, col, stratum).dropna()
                 sub = df[df["tdd_stratum"] == stratum]
@@ -115,7 +115,7 @@ def table_8_3b_within_user(strata_by_cls, nma_stats):
     paired-t companion, cluster-bootstrap CI). Only users with ≥1 day in BOTH strata contribute."""
     rows = []
     for cls_label, df in strata_by_cls.items():
-        for col, ep_label in ENDPOINTS:
+        for col, ep_label in NMA_ENDPOINTS:
             low = _per_user_stratum_mean(df, col, "Low").dropna()
             high = _per_user_stratum_mean(df, col, "High").dropna()
             res = nma_stats.paired_within_user(low, high)  # diff = Low − High
@@ -137,7 +137,7 @@ def table_8_3c_lmm(strata_by_cls, nma_stats):
     yield a converged=False NaN row."""
     rows = []
     for cls_label, df in strata_by_cls.items():
-        for col, ep_label in ENDPOINTS:
+        for col, ep_label in NMA_ENDPOINTS:
             sl = df[["_userId", "tdd_stratum", col]].dropna(subset=[col])
             n_low = sl.loc[sl["tdd_stratum"] == "Low", "_userId"].nunique()
             n_high = sl.loc[sl["tdd_stratum"] == "High", "_userId"].nunique()

@@ -222,8 +222,39 @@ def test_constants_are_the_staging_constants():
     print("PASS: the loader re-exports the staging constants")
 
 
+def test_prepare_transition_cohort_selects_rows_and_groups():
+    """The pure half of a loader on a hand-built table: coerce, assert, keep the
+    predicate's rows, select the diagnosis groups (the FDA-wide split, 2026-11-16)."""
+    frame = pd.DataFrame([
+        _window("a", 1, "2024-01-01"),                                    # in, type 1
+        _window("b", 1, "2024-01-01"),                                    # in, LADA-labelled JAEB member
+        _window("c", 1, "2024-01-01"),                                    # in the table, type 2
+        _window("d", 1, "2024-01-01", passes_loop_version_gate=False),    # out: version
+    ])
+    frame["diagnosis_group"] = ["type1", "type1 with LADA label", "type2", "type1"]
+    frame["tb_to_ab_age_years"] = ["40", "51", "33", "27"]               # numeric strings, as Spark decimals arrive
+    staged = pd.concat([frame, dl.transition_predicates(frame)], axis=1)
+    primary = dl.prepare_transition_cohort(staged)
+    assert primary["_userId"].tolist() == ["a", "b"], "the primary groups of the admitted windows"
+    assert primary["tb_to_ab_age_years"].dtype.kind in "if", "numeric strings coerced"
+    assert primary["tb_to_ab_seg1_start"].iloc[0] == pd.Timestamp("2024-01-01"), "dates kept"
+    every = dl.prepare_transition_cohort(staged, diagnosis_groups=None)
+    assert every["_userId"].tolist() == ["a", "b", "c"], "None keeps every group"
+    all_rows = dl.prepare_transition_cohort(staged, predicate=None, diagnosis_groups=None)
+    assert len(all_rows) == 4, "predicate None keeps every row"
+    broken = staged.copy(); broken.loc[3, "in_transition_cohort"] = True
+    try:
+        dl.prepare_transition_cohort(broken)
+    except AssertionError as error:
+        assert "in_transition_cohort" in str(error)
+        print("PASS: prepare_transition_cohort selects rows and groups and refuses a disagreeing table")
+    else:
+        raise AssertionError("a wrong staged predicate was accepted")
+
+
 if __name__ == "__main__":
     test_transition_predicates_and_best_window()
+    test_prepare_transition_cohort_selects_rows_and_groups()
     test_activation_predicates()
     test_stable_and_durability_predicates()
     test_interactive_review_predicates()

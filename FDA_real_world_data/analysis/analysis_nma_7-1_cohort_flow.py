@@ -47,11 +47,12 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from utils.nma_loading import (  # noqa: E402
+from utils import cohort_flow  # noqa: E402
+from utils.data_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
-    CRITERION_COLUMNS,
+    NMA_CRITERION_COLUMNS,
     DIAGNOSIS_GROUPS,
     HIGH_MA_FLAG,
     HIGH_MA_LABEL,
@@ -59,9 +60,8 @@ from utils.nma_loading import (  # noqa: E402
     PRIMARY_DIAGNOSIS_GROUPS,
     analysis_dir,
     as_bool,
-    assert_cohort_predicates,
-    default_analysis_ready_csv,
-    load_fda_cohort_flow,
+    assert_nma_day_predicates,
+    nma_snapshot_csv,
 )
 
 ANALYSIS_READY_TABLE = "dev.fda_510k_rwd.nma_user_day_analysis_ready"
@@ -143,9 +143,9 @@ def write_csv(frame, output_dir, name):
 
 
 def run(csv_path=None, issued_csv=None, output_dir=OUTPUT_DIR):
-    flow = load_fda_cohort_flow()
+    flow = cohort_flow
     if csv_path is None:
-        csv_path = default_analysis_ready_csv(ANALYSIS_READY_TABLE)
+        csv_path = nma_snapshot_csv(ANALYSIS_READY_TABLE)
     shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -154,7 +154,7 @@ def run(csv_path=None, issued_csv=None, output_dir=OUTPUT_DIR):
     print("=" * 60)
     print(f"\n1. Reading the cohort table: {csv_path}")
     pdf = pd.read_csv(csv_path)
-    assert_cohort_predicates(pdf)
+    assert_nma_day_predicates(pdf)
     current = flow.count_flow(pdf, stages(flow), unit="user_days")
     flow.assert_monotone(current)
     flow.assert_monotone(current, value="n_user_days")

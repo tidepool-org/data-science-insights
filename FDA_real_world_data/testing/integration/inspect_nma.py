@@ -33,15 +33,15 @@ _here = os.path.dirname(os.path.abspath(__file__))
 _analysis_dir = os.path.normpath(os.path.join(_here, "..", "..", "analysis"))
 if _analysis_dir not in sys.path:
     sys.path.insert(0, _analysis_dir)
-from utils.nma_loading import (  # type: ignore # noqa: E402
+from utils.data_loading import (  # type: ignore # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
-    ENDPOINTS,
+    NMA_ENDPOINTS,
     FIGURE_ARMS,
-    filter_cohort,
-    prepare_day_level,
-    restrict_comparator,
+    select_nma_cohort,
+    prepare_nma_day_level,
+    restrict_nma_comparator,
 )
 from utils.nma_plotting import (  # type: ignore # noqa: E402
     GRAY,
@@ -68,10 +68,10 @@ def _to_pdf(table_or_df, spark=None):
 
 
 def _eligible(pdf):
-    """The eligible-day view §8.1 analyses: prepare_day_level (day/user eligible +
+    """The eligible-day view §8.1 analyses: prepare_nma_day_level (day/user eligible +
     numeric coercion) then the §8.1 CE>0 comparator restriction. No cohort filter so
     pediatric + adult are both present (cohort split is asserted separately)."""
-    return restrict_comparator(prepare_day_level(pdf))
+    return restrict_nma_comparator(prepare_nma_day_level(pdf))
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ def arm_counts_sql(spark, table):
 def per_arm_endpoint_sql(spark, table):
     """Per-arm mean of every endpoint over eligible days (day-level, unweighted)."""
     arm_cols = [c for c, _ in CLASSIFICATIONS] + [COMPARATOR_FLAG]
-    ep_cols = [c for c, _ in ENDPOINTS]
+    ep_cols = [c for c, _ in NMA_ENDPOINTS]
     selects = []
     for arm in arm_cols:
         for ep in ep_cols:
@@ -265,7 +265,7 @@ def plot_arm_tir_violin(elig, out_path):
 def plot_endpoint_grid(elig, out_path):
     """2×4 grid: per-user-mean violin for each endpoint, all 4 arms."""
     fig, axes = plt.subplots(2, 4, figsize=(20, 9))
-    for ax, (ep, label) in zip(axes.flat, ENDPOINTS):
+    for ax, (ep, label) in zip(axes.flat, NMA_ENDPOINTS):
         violin_box_panel(ax, _arm_groups(elig, ep), title=label,
                          title_color=endpoint_color(ep),
                          separators=(len(CLASSIFICATIONS) + 0.5,))

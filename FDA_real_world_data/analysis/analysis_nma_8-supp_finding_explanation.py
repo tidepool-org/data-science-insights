@@ -52,18 +52,18 @@ except NameError:
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils.nma_loading import (  # noqa: E402
+from utils import nma_statistics  # noqa: E402
+from utils.data_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
-    ENDPOINTS,
+    NMA_ENDPOINTS,
     analysis_dir,
-    default_analysis_ready_csv,
-    filter_cohort,
-    load_day_level,
-    load_nma_statistics,
-    prepare_day_level,
-    restrict_comparator,
+    nma_snapshot_csv,
+    select_nma_cohort,
+    load_nma_day_level,
+    prepare_nma_day_level,
+    restrict_nma_comparator,
 )
 from utils.nma_plotting import (  # noqa: E402
     SUPTITLE_FS,
@@ -250,7 +250,7 @@ def table_s3_decomposition(pdf, nma_stats, a81):
     if ΔTIR ≈ −ΔTAR with ΔTBR ≈ 0, the gain is benign (less hyper); a positive ΔTBR / Δhypo is
     a safety flag (running low)."""
     rows = []
-    for col, label in ENDPOINTS:
+    for col, label in NMA_ENDPOINTS:
         nma = a81.per_user_arm_mean(pdf, col, NMA_FLAG).dropna()
         cmp = a81.per_user_arm_mean(pdf, col, COMPARATOR_FLAG).dropna()
         res = nma_stats.paired_within_user(nma, cmp)
@@ -342,7 +342,7 @@ def run(
     csv_path=None,
 ):
     """Run the supplement for one age cohort → outputs/nma/analysis_8_supp/<cohort>/."""
-    nma_stats = load_nma_statistics()
+    nma_stats = nma_statistics
     a81 = _load_a81()
     here = analysis_dir()
     if output_dir is None:
@@ -352,18 +352,18 @@ def run(
     os.makedirs(output_dir, exist_ok=True)
 
     if csv_path is None and spark is None:
-        csv_path = default_analysis_ready_csv(analysis_ready_table)
+        csv_path = nma_snapshot_csv(analysis_ready_table)
         print(f"no Spark session; reading analysis-ready snapshot: {csv_path}")
     if csv_path is not None:
         if not os.path.exists(csv_path):
             raise FileNotFoundError(
                 f"analysis-ready CSV not found at {csv_path}. Run "
                 "data_staging/export_nma_user_day_analysis_ready.py first, or pass --csv_path.")
-        pdf = prepare_day_level(pd.read_csv(csv_path))
+        pdf = prepare_nma_day_level(pd.read_csv(csv_path))
     else:
-        pdf = load_day_level(spark, analysis_ready_table)
-    pdf = filter_cohort(pdf, cohort=cohort)
-    pdf = restrict_comparator(pdf)
+        pdf = load_nma_day_level(spark, analysis_ready_table)
+    pdf = select_nma_cohort(pdf, cohort=cohort)
+    pdf = restrict_nma_comparator(pdf)
 
     # S1
     table_s1_intake(pdf, nma_stats, a81).to_csv(

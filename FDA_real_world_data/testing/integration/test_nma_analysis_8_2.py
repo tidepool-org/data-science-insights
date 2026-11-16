@@ -26,7 +26,7 @@ import tempfile
 import pandas as pd
 
 # sys.path bootstrap: __file__ undefined under the run-button → Workspace fallback. Adds this
-# dir (for `import run_nma_pipeline`) and analysis/ (utils.nma_loading).
+# dir (for `import run_nma_pipeline`) and analysis/ (utils.data_loading).
 try:
     _here = os.path.dirname(os.path.abspath(__file__))
 except NameError:
@@ -37,13 +37,13 @@ for _p in (_here, _analysis_dir):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from utils.nma_loading import (  # noqa: E402
+from utils.data_loading import (  # noqa: E402
     HIGH_MA_FLAG,
     HIGH_MA_LABEL,
-    STRATEGY_COL,
-    filter_cohort,
-    prepare_day_level,
-    restrict_comparator,
+    DELIVERY_STRATEGY_COLUMN,
+    select_nma_cohort,
+    prepare_nma_day_level,
+    restrict_nma_comparator,
 )
 
 import run_nma_pipeline as _run_pipeline  # noqa: E402
@@ -82,14 +82,14 @@ def _assert_recovers_interaction_design(spark, tables, raw_pdf, tmp_dir):
     """§8.2 design-recovery + aggregation-correctness assertions. `raw_pdf` = analysis-ready
     table as pandas; `tmp_dir` = a directory for throwaway §8.2 outputs."""
     a82 = _load_analysis_8_2()
-    prepared = prepare_day_level(raw_pdf)  # eligible days of eligible users (numeric-coerced)
+    prepared = prepare_nma_day_level(raw_pdf)  # eligible days of eligible users (numeric-coerced)
 
     # ── A. the 4-cell day_type × strategy design recovered through staging ─────
     u = prepared[prepared["_userId"] == INTERACTION_USER]
     assert len(u) == 20, f"{INTERACTION_USER} should contribute 20 eligible days, got {len(u)}"
 
     def cell_tir(arm_flag, strat):
-        c = u[(u[arm_flag] == True) & (u[STRATEGY_COL] == strat)]  # noqa: E712
+        c = u[(u[arm_flag] == True) & (u[DELIVERY_STRATEGY_COLUMN] == strat)]  # noqa: E712
         return (float(c["tir"].mean()), int(len(c)))
 
     nma_ab, n1 = cell_tir("in_ce0_be_inf", "autobolus_on")
@@ -113,11 +113,11 @@ def _assert_recovers_interaction_design(spark, tables, raw_pdf, tmp_dir):
     # table_8_2a observed_mean = per-user mean within (day_type, strategy) cell, averaged across
     # users (equal weight). Re-derive the broadest-arm cells the same way and assert §8.2 matches
     # — a correctness check on the aggregation robust to the archetype mix.
-    elig = restrict_comparator(filter_cohort(prepared, cohort="all"))
-    elig = elig[elig[STRATEGY_COL].isin(STRATS)]
+    elig = restrict_nma_comparator(select_nma_cohort(prepared, cohort="all"))
+    elig = elig[elig[DELIVERY_STRATEGY_COLUMN].isin(STRATS)]
 
     def rederive(arm_flag, strat):
-        cell = elig[(elig[arm_flag] == True) & (elig[STRATEGY_COL] == strat)]  # noqa: E712
+        cell = elig[(elig[arm_flag] == True) & (elig[DELIVERY_STRATEGY_COLUMN] == strat)]  # noqa: E712
         return float(cell.groupby("_userId")["tir"].mean().mean())
 
     t2a = pd.read_csv(os.path.join(out_all, "table_8_2a_marginal_cells.csv"))

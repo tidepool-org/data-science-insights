@@ -81,25 +81,25 @@ except NameError:
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils.nma_loading import (  # noqa: E402
+from utils import nma_statistics  # noqa: E402
+from utils import statistics as fda_statistics  # noqa: E402
+from utils.data_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
-    ENDPOINTS,
+    NMA_ENDPOINTS,
     FIGURE_ARMS,
     HIGH_MA_FLAG,
     HIGH_MA_LABEL,
     SUPPLEMENT_ARMS,
-    WINDOW_DAYS,
-    WINDOW_HALF,
+    NMA_WINDOW_DAYS,
+    NMA_WINDOW_HALF,
     analysis_dir,
-    default_analysis_ready_csv,
-    filter_cohort,
-    load_day_level,
-    load_fda_statistics,
-    load_nma_statistics,
-    prepare_day_level,
-    restrict_comparator,
+    nma_snapshot_csv,
+    select_nma_cohort,
+    load_nma_day_level,
+    prepare_nma_day_level,
+    restrict_nma_comparator,
     windowed_matched_means,
 )
 from utils.nma_plotting import (  # noqa: E402
@@ -163,9 +163,9 @@ def per_user_arm_mean(pdf, endpoint, arm_flag):
 def contrasts_table(pdf, stats_mod):
     """Method A paired stats for every (classification, endpoint)."""
     rows = []
-    comparator = {col: per_user_arm_mean(pdf, col, COMPARATOR_FLAG) for col, _ in ENDPOINTS}
+    comparator = {col: per_user_arm_mean(pdf, col, COMPARATOR_FLAG) for col, _ in NMA_ENDPOINTS}
     for nma_flag, cls_label in CLASSIFICATIONS:
-        for col, ep_label in ENDPOINTS:
+        for col, ep_label in NMA_ENDPOINTS:
             nma = per_user_arm_mean(pdf, col, nma_flag)
             wide = pd.DataFrame({"NMA": nma, "CMP": comparator[col]}).dropna()
             # diff = seg2 - seg1 -> seg1=comparator, seg2=NMA gives NMA - CE>0.
@@ -202,7 +202,7 @@ def create_table_8_1a(pdf):
     a per-arm view distinct from Table 8.1c's cohort-wide CE>0-day TDD summary."""
     arm_labels = [lab for _, lab in SUPPLEMENT_ARMS]
     table = {}  # row label -> {arm label: display cell}
-    for col, ep_label in ENDPOINTS + [("tdd_units", "Mean TDD (U/day)")]:
+    for col, ep_label in NMA_ENDPOINTS + [("tdd_units", "Mean TDD (U/day)")]:
         table[ep_label] = {}
         for flag, arm_label in SUPPLEMENT_ARMS:
             m = per_user_arm_mean(pdf, col, flag).dropna()
@@ -242,7 +242,7 @@ def create_table_8_1b(pdf, nma_stats, classifications=CLASSIFICATIONS):
               "Install with `%pip install statsmodels` (or use an ML runtime).")
     rows = []
     for nma_flag, cls_label in classifications:
-        for col, ep_label in ENDPOINTS:
+        for col, ep_label in NMA_ENDPOINTS:
             # Day-level 2-arm slice; arm reference = CE>0 so the coef is NMA - CE>0.
             nma = pdf.loc[pdf[nma_flag] == True, ["_userId", col]].assign(arm="NMA")  # noqa: E712
             # Disjoint comparator: exclude the treatment arm's own days from the CE>0 reference. No-op for
@@ -609,17 +609,17 @@ def make_paired_delta_grids(pdf):
 
 # §12.1 windowed match-feasibility (Table 12.1d) — the window-population cutoff that splits an unmatched
 # day into a coverage "sparse/gap" vs a behavioural "sustained non-announcing" day: fewer than this many
-# of the user's own days inside the ±WINDOW_HALF window ⇒ sparse/gap. (decisions.md D15.)
+# of the user's own days inside the ±NMA_WINDOW_HALF window ⇒ sparse/gap. (decisions.md D15.)
 POP_WIN_THRESHOLD = 20
 
 
 def create_windowed_match_feasibility(pdf, classifications=CLASSIFICATIONS):
-    """Table 12.1d: per NMA arm, how feasible the windowed (±WINDOW_HALF-day) CE>0 match is, and WHY the
+    """Table 12.1d: per NMA arm, how feasible the windowed (±NMA_WINDOW_HALF-day) CE>0 match is, and WHY the
     unmatched CE=0 days are unmatched. A CE=0 day is *matched* iff the user has a CE>0 day (any carb-logging
-    day, `carb_entry_count > 0` — unrestricted, not the restrict_comparator flag) within ±WINDOW_HALF
+    day, `carb_entry_count > 0` — unrestricted, not the restrict_nma_comparator flag) within ±NMA_WINDOW_HALF
     calendar days. Unmatched days are partitioned into: **pure non-announcer** (the user logs no carbs at
     all → zero CE>0 days, so they can never match), **sparse/gap** (fewer than POP_WIN_THRESHOLD of the
-    user's days fall in the ±WINDOW_HALF window → a coverage gap), and **sustained non-announcing** (the
+    user's days fall in the ±NMA_WINDOW_HALF window → a coverage gap), and **sustained non-announcing** (the
     rest — a deep CE=0 stretch). Also reports the nearest-CE>0 calendar distance (median [IQR]) over the
     unmatched days that have any CE>0 day. Reconstructed to reproduce the retired diagnostic exactly
     (decisions.md D15; validated against outputs/nma/review_feasibility/unmatched_ce0_day_reasons.csv)."""
@@ -645,15 +645,15 @@ def create_windowed_match_feasibility(pdf, classifications=CLASSIFICATIONS):
                 if c.size == 0:
                     pure += 1
                     continue
-                lo = np.searchsorted(c, o - WINDOW_HALF, "left")
-                hi = np.searchsorted(c, o + WINDOW_HALF, "right")
+                lo = np.searchsorted(c, o - NMA_WINDOW_HALF, "left")
+                hi = np.searchsorted(c, o + NMA_WINDOW_HALF, "right")
                 if hi > lo:
                     matched += 1
                     continue
                 i = np.searchsorted(c, o)
                 nearest.append(min(abs(int(c[j]) - o) for j in (i, i - 1) if 0 <= j < c.size))
-                wlo = np.searchsorted(a, o - WINDOW_HALF, "left")
-                whi = np.searchsorted(a, o + WINDOW_HALF, "right")
+                wlo = np.searchsorted(a, o - NMA_WINDOW_HALF, "left")
+                whi = np.searchsorted(a, o + NMA_WINDOW_HALF, "right")
                 if (whi - wlo) < POP_WIN_THRESHOLD:
                     sparse += 1
                 else:
@@ -671,28 +671,28 @@ def create_windowed_match_feasibility(pdf, classifications=CLASSIFICATIONS):
             "nearest_cepos_median_d": round(float(np.median(nn)), 0),
             "nearest_cepos_p25_d": round(float(np.percentile(nn, 25)), 0),
             "nearest_cepos_p75_d": round(float(np.percentile(nn, 75)), 0),
-            "window_half_days": WINDOW_HALF, "pop_win_threshold": POP_WIN_THRESHOLD,
+            "window_half_days": NMA_WINDOW_HALF, "pop_win_threshold": POP_WIN_THRESHOLD,
         })
     return pd.DataFrame(rows)
 
 
 def create_windowed_contrast_table(pdf, fda_stats, classifications=CLASSIFICATIONS):
     """Table 12.1 (windowed-comparator sensitivity): the §8.1 NMA-vs-CE>0 contrast recomputed with a
-    per-NMA-day ±(WINDOW_DAYS/2)-day temporal match — each NMA day is compared only to the mean of
-    that user's CE>0 days within ±(WINDOW_DAYS/2) calendar days (utils.nma_loading.windowed_matched_means),
+    per-NMA-day ±(NMA_WINDOW_DAYS/2)-day temporal match — each NMA day is compared only to the mean of
+    that user's CE>0 days within ±(NMA_WINDOW_DAYS/2) calendar days (utils.data_loading.windowed_matched_means),
     per nested classification × endpoint. Per-user windowed Δ (NMA − local CE>0 mean) summarized
     across users with equal weight (Method A: paired-t + Wilcoxon + t-CI). The pooled-within-user
     full-record contrast (table_8_1a_expanded / Table 8.1a) stays primary; the full-record Δ on the
     SAME matched users (diff_full) is reported alongside so the window's effect is visible."""
     rows = []
     for nma_flag, cls_label in classifications:
-        per_user, cov = windowed_matched_means(pdf, nma_flag, COMPARATOR_FLAG, ENDPOINTS)
+        per_user, cov = windowed_matched_means(pdf, nma_flag, COMPARATOR_FLAG, NMA_ENDPOINTS)
         pct = round(100.0 * cov["matched_nma_days"] / max(1, cov["total_nma_days"]), 1)
         # Full-record per-user means on the matched users (one groupby per arm, all endpoints).
         mu = pdf[pdf["_userId"].isin(set(per_user["_userId"]))] if len(per_user) else pdf.iloc[:0]
-        nma_full = mu[mu[nma_flag] == True].groupby("_userId")[[c for c, _ in ENDPOINTS]].mean()  # noqa: E712
-        cmp_full = mu[mu[COMPARATOR_FLAG] == True].groupby("_userId")[[c for c, _ in ENDPOINTS]].mean()  # noqa: E712
-        for col, ep_label in ENDPOINTS:
+        nma_full = mu[mu[nma_flag] == True].groupby("_userId")[[c for c, _ in NMA_ENDPOINTS]].mean()  # noqa: E712
+        cmp_full = mu[mu[COMPARATOR_FLAG] == True].groupby("_userId")[[c for c, _ in NMA_ENDPOINTS]].mean()  # noqa: E712
+        for col, ep_label in NMA_ENDPOINTS:
             base = {"classification": cls_label, "endpoint": col, "label": ep_label,
                     "matched_nma_days": cov["matched_nma_days"],
                     "total_nma_days": cov["total_nma_days"], "pct_matched": pct}
@@ -718,15 +718,15 @@ def create_windowed_contrast_table(pdf, fda_stats, classifications=CLASSIFICATIO
 
 def make_windowed_delta_grids(pdf):
     """Figure 12.1c (single 4×2 grid; last in the windowed set, mirroring main 8.1c): within-user
-    windowed Δ on the headline arm (CE=0/BE≤1), per-NMA-day ±(WINDOW_DAYS/2)-day match — overlays
+    windowed Δ on the headline arm (CE=0/BE≤1), per-NMA-day ±(NMA_WINDOW_DAYS/2)-day match — overlays
     NMA − CE>0 and NMA − CE>=3/BE>=3 (the windowed companion to the full-record paired-delta grid
     8.1c). NMA−CE>0 in the endpoint range colour, NMA−CE>=3/BE>=3 in bronze; mean line, dashed 0.
     CE=0/BE≤1's TIR/TAR/mean-glucose/CV contrasts are method-robust (Method A & B concur in sign on
     all three nested arms, post-D7-regen snapshot, decisions.md D5 update 2026-06-07); the
     Method-A-vs-B divergence caveat attaches to the below-range endpoints (<54, <70) only."""
     headline_flag = CLASSIFICATIONS[1][0]  # in_ce0_be_le1 — CE=0/BE<=1, the headline NMA arm
-    per_user, _ = windowed_matched_means(pdf, headline_flag, COMPARATOR_FLAG, ENDPOINTS)
-    per_user_hi, _ = windowed_matched_means(pdf, headline_flag, HIGH_MA_FLAG, ENDPOINTS)
+    per_user, _ = windowed_matched_means(pdf, headline_flag, COMPARATOR_FLAG, NMA_ENDPOINTS)
+    per_user_hi, _ = windowed_matched_means(pdf, headline_flag, HIGH_MA_FLAG, NMA_ENDPOINTS)
 
     def panel(ax, col, label):
         base = endpoint_color(col)
@@ -738,19 +738,19 @@ def make_windowed_delta_grids(pdf):
 
     return render_4x2_grid(panel, fig_stem="figure_12_1c_windowed_delta",
                            subtitle=f"within-user windowed Δ (NMA − CE>0, NMA − CE>=3/BE>=3; "
-                                    f"±{WINDOW_DAYS // 2}d) — headline NMA arm: CE=0 / BE≤1")
+                                    f"±{NMA_WINDOW_DAYS // 2}d) — headline NMA arm: CE=0 / BE≤1")
 
 
 def make_windowed_violin_grids(pdf):
     """Figure 12.1b (single 4×2 grid): per-user windowed means by arm — the 3 nested NMA arms, the CE>0
-    comparator, and the CE>=3/BE>=3 high-engagement arm, each on the per-NMA-day ±(WINDOW_DAYS/2)-day
+    comparator, and the CE>=3/BE>=3 high-engagement arm, each on the per-NMA-day ±(NMA_WINDOW_DAYS/2)-day
     match. The windowed companion to the full-record violin grid (8.1b). Each arm's colour is the
     endpoint's glycemic-range band colour (3 nested CE=0 arms dark→light ramp, CE>0 grey, HMA bronze)
     via day_type_colors."""
-    win = {lab: windowed_matched_means(pdf, flag, COMPARATOR_FLAG, ENDPOINTS)[0]
+    win = {lab: windowed_matched_means(pdf, flag, COMPARATOR_FLAG, NMA_ENDPOINTS)[0]
            for flag, lab in CLASSIFICATIONS}
     broadest = CLASSIFICATIONS[-1][1]  # CE=0/BE<=inf — supplies the CE>0 windowed comparator group
-    win_hi = windowed_matched_means(pdf, HIGH_MA_FLAG, COMPARATOR_FLAG, ENDPOINTS)[0]
+    win_hi = windowed_matched_means(pdf, HIGH_MA_FLAG, COMPARATOR_FLAG, NMA_ENDPOINTS)[0]
 
     def panel(ax, col, label):
         arm_cols = day_type_colors(col)
@@ -764,20 +764,20 @@ def make_windowed_violin_grids(pdf):
 
     return render_4x2_grid(panel, fig_stem="figure_12_1b_windowed_violin",
                            subtitle=f"per-user windowed means by arm (NMA, CE>0, CE>=3/BE>=3; "
-                                    f"±{WINDOW_DAYS // 2}d match)", figsize=(14, 17))
+                                    f"±{NMA_WINDOW_DAYS // 2}d match)", figsize=(14, 17))
 
 
 def make_windowed_stacked_bar(pdf):
     """Figure 12.1a (windowed companion to 8.1a, first in the windowed set to mirror the main figure
     order — stacked bar, violins, Δ-histograms): mean % time in glycemic ranges by arm
-    from per-NMA-day ±(WINDOW_DAYS/2)-day matched per-user means — the 3 NMA arms, CE>0, and the
+    from per-NMA-day ±(NMA_WINDOW_DAYS/2)-day matched per-user means — the 3 NMA arms, CE>0, and the
     CE>=3/BE>=3 high-engagement arm. Equal-user weight (consistent with 8.1a / Method A); each
     range is derived per user from the windowed endpoint means (linear, so == windowed mean of the
     range). Arm matching: NMA arms + CE>=3/BE>=3 vs CE>0; CE>0 from the broadest arm's match."""
-    win = {lab: windowed_matched_means(pdf, flag, COMPARATOR_FLAG, ENDPOINTS)[0]
+    win = {lab: windowed_matched_means(pdf, flag, COMPARATOR_FLAG, NMA_ENDPOINTS)[0]
            for flag, lab in CLASSIFICATIONS}
     broadest = CLASSIFICATIONS[-1][1]
-    win_hi = windowed_matched_means(pdf, HIGH_MA_FLAG, COMPARATOR_FLAG, ENDPOINTS)[0]
+    win_hi = windowed_matched_means(pdf, HIGH_MA_FLAG, COMPARATOR_FLAG, NMA_ENDPOINTS)[0]
 
     def ranges_for(arm_label):
         if arm_label == COMPARATOR_LABEL:
@@ -827,7 +827,7 @@ def make_windowed_stacked_bar(pdf):
     ax.legend(title="Glucose (mg/dL)", bbox_to_anchor=(1.01, 1), loc="upper left")
     for xi, u in enumerate(user_ns):
         ax.text(xi, 101, f"users={u}", ha="center", va="bottom", fontsize=11)
-    ax.set_title(f"Windowed mean time in glycemic ranges by arm (±{WINDOW_DAYS // 2}d match)",
+    ax.set_title(f"Windowed mean time in glycemic ranges by arm (±{NMA_WINDOW_DAYS // 2}d match)",
                  fontsize=SUPTITLE_FS)
     fig.tight_layout()
     return fig
@@ -856,8 +856,8 @@ def run(
     full run first so the tables exist. figs_filter (a substring, e.g. "8_1b") renders only matching
     figure builders (tags: 8_1a/b/c, 12_1a/b/c) and implies figures_only."""
     figures_only = figures_only or figs_filter is not None  # filtering figures ⇒ skip the tables
-    fda_stats = load_fda_statistics()
-    nma_stats = load_nma_statistics()
+    fda_stats = fda_statistics
+    nma_stats = nma_statistics
     here = analysis_dir()
     if output_dir is None:
         output_dir = os.path.join(here, "outputs", "nma", "analysis_8_1", cohort)
@@ -870,7 +870,7 @@ def run(
     os.makedirs(output_dir, exist_ok=True)
 
     if csv_path is None and spark is None:
-        csv_path = default_analysis_ready_csv(analysis_ready_table)
+        csv_path = nma_snapshot_csv(analysis_ready_table)
         print(f"no Spark session; reading analysis-ready snapshot: {csv_path}")
     if csv_path is not None:
         if not os.path.exists(csv_path):
@@ -879,11 +879,11 @@ def run(
                 "data_staging/export_nma_user_day_analysis_ready.py to create it (it writes "
                 "outputs/nma/<table-name>.csv), or pass csv_path/--csv_path."
             )
-        pdf = prepare_day_level(pd.read_csv(csv_path))
+        pdf = prepare_nma_day_level(pd.read_csv(csv_path))
     else:
-        pdf = load_day_level(spark, analysis_ready_table)
-    pdf = filter_cohort(pdf, cohort=cohort)
-    pdf = restrict_comparator(pdf)
+        pdf = load_nma_day_level(spark, analysis_ready_table)
+    pdf = select_nma_cohort(pdf, cohort=cohort)
+    pdf = restrict_nma_comparator(pdf)
 
     # ---- Tables (SLOW: LMM + cluster-bootstrap contrasts). Skipped under figures_only so a figure
     # tweak re-renders in seconds without recomputing the statistics. ----

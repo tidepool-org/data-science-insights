@@ -8,7 +8,7 @@ catching leakage between arms, weighting artifacts, mis-calibrated alpha / pseud
 
 Unlike `cross_checks` (deliberately self-contained so a bug can't be shared), the negative
 controls *reuse the real machinery unchanged* (`analysis/utils/statistics.py` +
-`nma_loading.py`) and swap only the day-type label or the outcome — that reuse is the point.
+the NMA section of `data_loading.py`) and swap only the day-type label or the outcome — that reuse is the point.
 
 Spec: project_docs/negative_controls_and_traceability.md §1. Outputs are user-aggregated
 statistics only → inherently de-identified (no user id leaves this module).
@@ -42,13 +42,13 @@ _ANALYSIS = os.path.normpath(os.path.join(_DIR, "..", "..", "analysis"))
 
 if _ANALYSIS not in sys.path:
     sys.path.insert(0, _ANALYSIS)
-from utils import nma_loading as data_loader  # noqa: E402
-nma_stats = data_loader.load_nma_statistics()
+from utils import data_loading, nma_statistics  # noqa: E402
+nma_stats = nma_statistics
 
 # Reuse the project's single source of truth for arms + endpoints.
-CLASSIFICATIONS = data_loader.CLASSIFICATIONS          # 3 nested NMA arms: (flag, label)
-COMPARATOR_FLAG = data_loader.COMPARATOR_FLAG          # "in_ce_gt0"
-ENDPOINTS = data_loader.ENDPOINTS                      # 8 precomputed per-day endpoint columns
+CLASSIFICATIONS = data_loading.CLASSIFICATIONS          # 3 nested NMA arms: (flag, label)
+COMPARATOR_FLAG = data_loading.COMPARATOR_FLAG          # "in_ce_gt0"
+ENDPOINTS = data_loading.NMA_ENDPOINTS                      # 8 precomputed per-day endpoint columns
 
 # The headline NMA arm (D20): the single arm featured wherever one arm is shown.
 HEADLINE_NMA_FLAG = "in_ce0_be_le1"
@@ -79,9 +79,9 @@ def _binom_band(p0, B, k=BAND_K):
 def load_eligible(csv_path=SNAPSHOT, cohort="all"):
     """The eligible-day frame the analyses run on: prepare_day_level → filter_cohort →
     restrict_comparator (the exact §7.1/§7.6/§8.1 pipeline preamble, reused unchanged; the cohort table's predicates asserted on the way)."""
-    pdf = data_loader.prepare_day_level(pd.read_csv(csv_path))
-    pdf = data_loader.filter_cohort(pdf, cohort=cohort)
-    pdf = data_loader.restrict_comparator(pdf)
+    pdf = data_loading.prepare_nma_day_level(pd.read_csv(csv_path))
+    pdf = data_loading.select_nma_cohort(pdf, cohort=cohort)
+    pdf = data_loading.restrict_nma_comparator(pdf)
     return pdf
 
 

@@ -526,7 +526,7 @@ def build_user_diagnosis_type(spark, table_name: str, loop_recommendations_table
     the primary groups. Marking every synthetic user type1 keeps the cohorts at their
     pre-selection composition so the existing user-survival invariants hold; the
     selection's exclusion path (type 2, other, unknown left out of the primary) is
-    exercised by testing/analysis/test_nma_loading.py.
+    exercised by testing/analysis/test_data_loading_nma.py.
 
     Columns match production: `_userId, diagnosis_patients, diagnosis_seagull, is_jaeb,
     is_lada, diagnosis_type, diagnosis_group`.

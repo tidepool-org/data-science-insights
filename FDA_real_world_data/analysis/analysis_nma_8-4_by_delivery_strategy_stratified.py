@@ -105,21 +105,21 @@ except NameError:
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils.nma_loading import (  # noqa: E402
+from utils import nma_statistics  # noqa: E402
+from utils.data_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
     COMPARATOR_LABEL,
-    ENDPOINTS,
-    STRATEGIES,
-    STRATEGY_COL,
+    NMA_ENDPOINTS,
+    DELIVERY_STRATEGIES,
+    DELIVERY_STRATEGY_COLUMN,
     SUPPLEMENT_ARMS,
     analysis_dir,
-    default_analysis_ready_csv,
-    filter_cohort,
-    load_day_level,
-    load_nma_statistics,
-    prepare_day_level,
-    restrict_comparator,
+    nma_snapshot_csv,
+    select_nma_cohort,
+    load_nma_day_level,
+    prepare_nma_day_level,
+    restrict_nma_comparator,
 )
 from utils.strata import (  # noqa: E402
     _rank_strata,
@@ -149,7 +149,7 @@ APPENDIX_ARMS = SUPPLEMENT_ARMS                                    # all 5 (3 ne
 PRIMARY_ENDPOINT = "tir"
 PRIMARY_REFERENCE = "overall"     # promoted §8.3 reference (D12); CE=0-ref companion → Appendix §12.4
 CARB_COUNT_COL = "carb_entry_count"
-STRAT_NAMES = [s for s, _ in STRATEGIES]   # ["temp_basal_only", "autobolus_on"] (TB-first)
+STRAT_NAMES = [s for s, _ in DELIVERY_STRATEGIES]   # ["temp_basal_only", "autobolus_on"] (TB-first)
 
 
 def _order(split):
@@ -166,7 +166,7 @@ def _composite_gate(df, cells):
     user means compare a single user set across all cells of a day type (the D12 same-user-set gate
     extended to the strategy dimension). Guards thin High-TDD × TB without dropping the run."""
     needed = {f"{st}|{s}" for st, s in cells}
-    key = df["tdd_stratum"].astype(str) + "|" + df[STRATEGY_COL].astype(str)
+    key = df["tdd_stratum"].astype(str) + "|" + df[DELIVERY_STRATEGY_COLUMN].astype(str)
     have = key.groupby(df["_userId"]).apply(lambda s: needed.issubset(set(s)))
     keep = have[have].index
     return df[df["_userId"].isin(keep)].copy()
@@ -179,7 +179,7 @@ def _arm_strategy_frame(pdf, arm_flag, *, reference, split):
     (overall ref) BEFORE the strategy filter, so the strategy filter does not distort the TDD norm."""
     order = _order(split)
     df = _rank_strata(pdf, arm_flag, reference=reference, split=split)
-    df = df[df[STRATEGY_COL].isin(STRAT_NAMES)].copy()
+    df = df[df[DELIVERY_STRATEGY_COLUMN].isin(STRAT_NAMES)].copy()
     cells = [(st, s) for st in order for s in STRAT_NAMES]
     return _composite_gate(df, cells)
 
@@ -193,8 +193,8 @@ def table_strategy_cross(pdf, arms, *, reference, split):
     frames = []
     for arm_flag, arm_label in arms:
         gated = _arm_strategy_frame(pdf, arm_flag, reference=reference, split=split)
-        sections = {f"{arm_label} / {s_short}": gated[gated[STRATEGY_COL] == s_name].copy()
-                    for s_name, s_short in STRATEGIES}
+        sections = {f"{arm_label} / {s_short}": gated[gated[DELIVERY_STRATEGY_COLUMN] == s_name].copy()
+                    for s_name, s_short in DELIVERY_STRATEGIES}
         t = table_8_3a_per_user_by_stratum(sections, strata_order=order)
         frames.append(t)
     out = pd.concat(frames, ignore_index=True)
@@ -236,12 +236,12 @@ def fit_strategy_interaction(pdf, arms, nma_stats, *, reference, split):
     rows = []
     for arm_flag, arm_label in arms:
         gated = _arm_strategy_frame(pdf, arm_flag, reference=reference, split=split)
-        for col, ep_label in ENDPOINTS:
-            sl = gated[["_userId", "tdd_stratum", STRATEGY_COL, col]].dropna(subset=[col])
-            cell_users = sl.groupby(["tdd_stratum", STRATEGY_COL])["_userId"].nunique()
+        for col, ep_label in NMA_ENDPOINTS:
+            sl = gated[["_userId", "tdd_stratum", DELIVERY_STRATEGY_COLUMN, col]].dropna(subset=[col])
+            cell_users = sl.groupby(["tdd_stratum", DELIVERY_STRATEGY_COLUMN])["_userId"].nunique()
             cells_ok = all(cell_users.get((st, s), 0) >= 2 for st, s in cells)
             fittable = (sl["tdd_stratum"].nunique() == len(order)
-                        and sl[STRATEGY_COL].nunique() == 2
+                        and sl[DELIVERY_STRATEGY_COLUMN].nunique() == 2
                         and cells_ok and sl[col].nunique() >= 2)
             rec = _empty_interaction_rec(arm_label, col, ep_label,
                                          int(sl["_userId"].nunique()), int(len(sl)))
@@ -251,7 +251,7 @@ def fit_strategy_interaction(pdf, arms, nma_stats, *, reference, split):
                         warnings.simplefilter("ignore")
                         res = nma_stats.lmm_day_strategy_interaction(
                             sl, outcome=col, day_type_col="tdd_stratum",
-                            strategy_col=STRATEGY_COL, user_col="_userId")
+                            strategy_col=DELIVERY_STRATEGY_COLUMN, user_col="_userId")
                     rec.update({
                         "converged": True,
                         "stratum_main_coef_low_minus_high": res["main_day_coef"],
@@ -289,11 +289,11 @@ def table_strategy_within_user(pdf, arms, nma_stats, *, reference, split):
     rows = []
     for arm_flag, arm_label in arms:
         gated = _arm_strategy_frame(pdf, arm_flag, reference=reference, split=split)
-        for col, ep_label in ENDPOINTS:
+        for col, ep_label in NMA_ENDPOINTS:
             for st in order:
                 sub = gated[gated["tdd_stratum"] == st]
-                tb = sub[sub[STRATEGY_COL] == "temp_basal_only"].groupby("_userId")[col].mean()
-                ab = sub[sub[STRATEGY_COL] == "autobolus_on"].groupby("_userId")[col].mean()
+                tb = sub[sub[DELIVERY_STRATEGY_COLUMN] == "temp_basal_only"].groupby("_userId")[col].mean()
+                ab = sub[sub[DELIVERY_STRATEGY_COLUMN] == "autobolus_on"].groupby("_userId")[col].mean()
                 paired = pd.DataFrame({"tb": tb, "ab": ab}).dropna()
                 res = nma_stats.paired_within_user(paired["tb"], paired["ab"])  # diff = TB − AB
                 rows.append({
@@ -320,11 +320,11 @@ def _carb_per_user(pdf):
     `ce_gt0` = fraction of days with ≥1 carb entry; mean carb entries/day. Returns
     (day_level_gated, per_frac, per_rate) where per_frac/per_rate are user × strategy wide frames
     restricted to users with ≥1 TB and ≥1 AB day (same-user-set gate for the paired contrast)."""
-    df = pdf[pdf[STRATEGY_COL].isin(STRAT_NAMES)].dropna(subset=[CARB_COUNT_COL]).copy()
+    df = pdf[pdf[DELIVERY_STRATEGY_COLUMN].isin(STRAT_NAMES)].dropna(subset=[CARB_COUNT_COL]).copy()
     df["ce_gt0"] = (df[CARB_COUNT_COL] > 0).astype(float)
-    g = df.groupby(["_userId", STRATEGY_COL])
-    per_frac = g["ce_gt0"].mean().unstack(STRATEGY_COL)
-    per_rate = g[CARB_COUNT_COL].mean().unstack(STRATEGY_COL)
+    g = df.groupby(["_userId", DELIVERY_STRATEGY_COLUMN])
+    per_frac = g["ce_gt0"].mean().unstack(DELIVERY_STRATEGY_COLUMN)
+    per_rate = g[CARB_COUNT_COL].mean().unstack(DELIVERY_STRATEGY_COLUMN)
     both = (per_frac.dropna(subset=STRAT_NAMES).index
             .intersection(per_rate.dropna(subset=STRAT_NAMES).index))
     return df[df["_userId"].isin(both)].copy(), per_frac.loc[both], per_rate.loc[both]
@@ -351,11 +351,11 @@ def table_carb_entry_by_strategy(per_frac, per_rate, df_g, nma_stats):
             "lmm_coef_tb_minus_ab": np.nan, "lmm_ci_lo": np.nan, "lmm_ci_hi": np.nan,
             "lmm_p": np.nan, "lmm_converged": False,
         }
-        if has_sm and df_g[STRATEGY_COL].nunique() == 2 and df_g[outcome_col].nunique() >= 2:
+        if has_sm and df_g[DELIVERY_STRATEGY_COLUMN].nunique() == 2 and df_g[outcome_col].nunique() >= 2:
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    lr = nma_stats.lmm_arm_contrast(df_g, outcome=outcome_col, arm_col=STRATEGY_COL)
+                    lr = nma_stats.lmm_arm_contrast(df_g, outcome=outcome_col, arm_col=DELIVERY_STRATEGY_COLUMN)
                 # term = delivery_strategy[T.temp_basal_only] (ref = AB) → coef = TB − AB
                 rec.update({"lmm_coef_tb_minus_ab": lr["coef"], "lmm_ci_lo": lr["ci_lo"],
                             "lmm_ci_hi": lr["ci_hi"], "lmm_p": lr["pvalue"], "lmm_converged": True})
@@ -407,8 +407,8 @@ def figure_8_4a_strategy_bars(pdf, arms, *, reference="overall", split="binary",
     cells = {}
     for arm_flag, arm_label in arms:
         gated = _arm_strategy_frame(pdf, arm_flag, reference=reference, split=split)
-        for s_name, s_short in STRATEGIES:
-            cells[(arm_label, s_name)] = gated[gated[STRATEGY_COL] == s_name]
+        for s_name, s_short in DELIVERY_STRATEGIES:
+            cells[(arm_label, s_name)] = gated[gated[DELIVERY_STRATEGY_COLUMN] == s_name]
     arm_labels = [a for a in DAY_TYPE_ORDER if any(a == al for _, al in arms)]
     ref = f" ({ref_note})" if ref_note else ""
 
@@ -455,7 +455,7 @@ def run(
     builders (tags: 8_4a/8_4b/12_4a/12_4b/12_4c) and implies figures_only. Do a full run first so the
     table CSVs exist."""
     figures_only = figures_only or figs_filter is not None  # filtering figures ⇒ skip the tables
-    nma_stats = load_nma_statistics()
+    nma_stats = nma_statistics
     here = analysis_dir()
     if output_dir is None:
         output_dir = os.path.join(here, "outputs", "nma", "analysis_8_4", cohort)
@@ -464,18 +464,18 @@ def run(
     os.makedirs(output_dir, exist_ok=True)
 
     if csv_path is None and spark is None:
-        csv_path = default_analysis_ready_csv(analysis_ready_table)
+        csv_path = nma_snapshot_csv(analysis_ready_table)
         print(f"no Spark session; reading analysis-ready snapshot: {csv_path}")
     if csv_path is not None:
         if not os.path.exists(csv_path):
             raise FileNotFoundError(
                 f"analysis-ready CSV not found at {csv_path}. Run "
                 "data_staging/export_nma_user_day_analysis_ready.py first, or pass --csv_path.")
-        pdf = prepare_day_level(pd.read_csv(csv_path))
+        pdf = prepare_nma_day_level(pd.read_csv(csv_path))
     else:
-        pdf = load_day_level(spark, analysis_ready_table)
-    pdf = filter_cohort(pdf, cohort=cohort)
-    pdf = restrict_comparator(pdf)
+        pdf = load_nma_day_level(spark, analysis_ready_table)
+    pdf = select_nma_cohort(pdf, cohort=cohort)
+    pdf = restrict_nma_comparator(pdf)
     # NB: ambiguous delivery strategy is NOT dropped globally here — the overall-reference TDD rank
     # (_rank_strata) must be computed over the user's ALL eligible days; the strategy filter is applied
     # downstream inside _arm_strategy_frame / _carb_per_user.

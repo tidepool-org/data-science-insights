@@ -1,6 +1,6 @@
 """
-Unit tests for `analysis/utils/nma_loading.py` — the shared cohort / comparator /
-day-level helpers. Pure pandas (no Spark, no statsmodels), so they run in the
+Unit tests for the NMA section of `analysis/utils/data_loading.py` — the cohort /
+comparator / day-level helpers. Pure pandas (no Spark, no statsmodels), so they run in the
 local non-Spark layer.
 
 Each helper is fed a small designed DataFrame with a hand-computed expectation.
@@ -12,36 +12,36 @@ import sys
 import numpy as np
 import pandas as pd
 
-# The loader is a module of the analysis `utils` package (it imports its siblings), so add
+# The loader is a module of the analysis `utils` package, so add
 # analysis/ to the path and import it the way the analyses do.
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "analysis")))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..")))
 from offline_test_helpers import run_tests  # noqa: E402
 
-from utils.nma_loading import (  # type: ignore # noqa: E402
+from utils.data_loading import (  # type: ignore # noqa: E402
     DIAGNOSIS_GROUPS,
-    assert_cohort_predicates,
-    cohort_predicates,
-    filter_cohort,
-    prepare_day_level,
-    restrict_comparator,
+    assert_nma_day_predicates,
+    nma_day_predicates,
+    select_nma_cohort,
+    prepare_nma_day_level,
+    restrict_nma_comparator,
     windowed_matched_means,
 )
 
 
 # ---------------------------------------------------------------------------
-# restrict_comparator — zero CE>0 / HMA for users with no CE=0 day
+# restrict_nma_comparator — zero CE>0 / HMA for users with no CE=0 day
 # ---------------------------------------------------------------------------
 
-def test_restrict_comparator_zeros_non_ce0_users():
+def test_restrict_nma_comparator_zeros_non_ce0_users():
     df = pd.DataFrame({
         "_userId":          ["u1", "u1", "u2", "u2"],
         "in_ce0_be_inf":    [True, False, False, False],
         "in_ce_gt0":        [False, True, True, True],
         "in_ce_ge3_be_ge3": [False, False, True, True],
     })
-    out = restrict_comparator(df)
+    out = restrict_nma_comparator(df)
     u1 = out[out["_userId"] == "u1"]
     u2 = out[out["_userId"] == "u2"]
     # u1 contributed a CE=0 day → its comparator flags are untouched.
@@ -51,24 +51,24 @@ def test_restrict_comparator_zeros_non_ce0_users():
     assert (u2["in_ce_ge3_be_ge3"] == False).all()
 
 
-def test_restrict_comparator_no_hma_column_is_ok():
+def test_restrict_nma_comparator_no_hma_column_is_ok():
     """The HMA flag is optional (older snapshots) — restrict must not require it."""
     df = pd.DataFrame({
         "_userId":       ["u1", "u2"],
         "in_ce0_be_inf": [True, False],
         "in_ce_gt0":     [True, True],
     })
-    out = restrict_comparator(df)
+    out = restrict_nma_comparator(df)
     assert out.loc[out["_userId"] == "u2", "in_ce_gt0"].tolist() == [False]
 
 
 # ---------------------------------------------------------------------------
-# filter_cohort — §7.6 age cohort + the diagnosis-group selection (D23)
+# select_nma_cohort — §7.6 age cohort + the diagnosis-group selection (D23)
 # ---------------------------------------------------------------------------
 
 def _cohort_frame():
     """Rows of the analysis cohort (the age gate is a staged column, applied by
-    prepare_day_level, so it is not re-applied here): an adult, a pediatric user, one
+    prepare_nma_day_level, so it is not re-applied here): an adult, a pediatric user, one
     with an unknown DOB, and a LADA-labelled JAEB member (the primary cohort keeps it)."""
     return pd.DataFrame({
         "_userId":         ["a", "p", "u", "l"],
@@ -78,18 +78,18 @@ def _cohort_frame():
     })
 
 
-def test_filter_cohort_adult_excludes_unknown_dob():
-    out = filter_cohort(_cohort_frame(), cohort="adult")
+def test_select_nma_cohort_adult_excludes_unknown_dob():
+    out = select_nma_cohort(_cohort_frame(), cohort="adult")
     assert set(out["_userId"]) == {"a", "l"}
 
 
-def test_filter_cohort_pediatric():
-    out = filter_cohort(_cohort_frame(), cohort="pediatric")
+def test_select_nma_cohort_pediatric():
+    out = select_nma_cohort(_cohort_frame(), cohort="pediatric")
     assert out["_userId"].tolist() == ["p"]
 
 
-def test_filter_cohort_all_retains_unknown_dob():
-    out = filter_cohort(_cohort_frame(), cohort="all")
+def test_select_nma_cohort_all_retains_unknown_dob():
+    out = select_nma_cohort(_cohort_frame(), cohort="all")
     assert set(out["_userId"]) == {"a", "p", "u", "l"}
 
 
@@ -103,22 +103,22 @@ def _diagnosis_frame():
     })
 
 
-def test_filter_cohort_primary_groups_by_default():
-    out = filter_cohort(_diagnosis_frame(), cohort="all")
+def test_select_nma_cohort_primary_groups_by_default():
+    out = select_nma_cohort(_diagnosis_frame(), cohort="all")
     assert out["_userId"].tolist() == ["t1", "lada_jaeb"], "the type-1 gate admits the LADA-labelled JAEB member"
 
 
-def test_filter_cohort_every_group_on_request():
-    out = filter_cohort(_diagnosis_frame(), cohort="all", diagnosis_groups=None)
+def test_select_nma_cohort_every_group_on_request():
+    out = select_nma_cohort(_diagnosis_frame(), cohort="all", diagnosis_groups=None)
     assert set(out["_userId"]) == {"t1", "lada_jaeb", "lada", "t2", "oth", "unk"}
-    lada = filter_cohort(_diagnosis_frame(), cohort="all", diagnosis_groups=("lada", "type1 with LADA label"))
+    lada = select_nma_cohort(_diagnosis_frame(), cohort="all", diagnosis_groups=("lada", "type1 with LADA label"))
     assert set(lada["_userId"]) == {"lada_jaeb", "lada"}
 
 
-def test_filter_cohort_refuses_an_unknown_group():
+def test_select_nma_cohort_refuses_an_unknown_group():
     raised = False
     try:
-        filter_cohort(_diagnosis_frame(), cohort="all", diagnosis_groups=("type1", "mody"))
+        select_nma_cohort(_diagnosis_frame(), cohort="all", diagnosis_groups=("type1", "mody"))
     except AssertionError:
         raised = True
     assert raised
@@ -126,7 +126,7 @@ def test_filter_cohort_refuses_an_unknown_group():
 
 
 # ---------------------------------------------------------------------------
-# prepare_day_level — numeric coercion, the predicate assertion, the cohort rows
+# prepare_nma_day_level — numeric coercion, the predicate assertion, the cohort rows
 # ---------------------------------------------------------------------------
 
 def _cohort_table():
@@ -142,38 +142,38 @@ def _cohort_table():
         "diagnosis_group":          ["type1"] * 6,
         "tir":                      ["80.0", "70.0", "60.0", "50.0", "40.0", "30.0"],
     })
-    return pd.concat([df, cohort_predicates(df)], axis=1)
+    return pd.concat([df, nma_day_predicates(df)], axis=1)
 
 
-def test_cohort_predicates_from_the_criteria():
+def test_nma_day_predicates_from_the_criteria():
     df = _cohort_table()
     assert df["in_analysis_cohort"].tolist() == [True, False, False, False, False, True]
     assert df["in_strategy_contrast"].tolist() == [True, False, False, False, False, False], \
         "a neither day is in the cohort and in no strategy contrast"
 
 
-def test_prepare_day_level_keeps_the_cohort_and_coerces_numeric():
-    out = prepare_day_level(_cohort_table())
+def test_prepare_nma_day_level_keeps_the_cohort_and_coerces_numeric():
+    out = prepare_nma_day_level(_cohort_table())
     assert out["_userId"].tolist() == ["a", "n"]
     assert out["tir"].dtype.kind == "f" and out["tir"].iloc[0] == 80.0
 
 
-def test_prepare_day_level_refuses_a_disagreeing_predicate():
+def test_prepare_nma_day_level_refuses_a_disagreeing_predicate():
     df = _cohort_table()
     df.loc[1, "in_analysis_cohort"] = True      # the staged predicate contradicts the version gate
     raised = False
     try:
-        assert_cohort_predicates(df)
+        assert_nma_day_predicates(df)
     except AssertionError as error:
         raised = "in_analysis_cohort" in str(error)
     assert raised
 
 
-def test_prepare_day_level_refuses_a_pre_migration_snapshot():
+def test_prepare_nma_day_level_refuses_a_pre_migration_snapshot():
     df = pd.DataFrame({"_userId": ["a"], "day_eligible": [True], "user_eligible": [True], "tir": [80.0]})
     raised = False
     try:
-        prepare_day_level(df)
+        prepare_nma_day_level(df)
     except AssertionError as error:
         raised = "predates" in str(error)
     assert raised
@@ -219,18 +219,18 @@ def test_windowed_matched_means_empty_arm_keeps_columns():
 
 if __name__ == "__main__":
     run_tests([
-        test_restrict_comparator_zeros_non_ce0_users,
-        test_restrict_comparator_no_hma_column_is_ok,
-        test_filter_cohort_adult_excludes_unknown_dob,
-        test_filter_cohort_pediatric,
-        test_filter_cohort_all_retains_unknown_dob,
-        test_filter_cohort_primary_groups_by_default,
-        test_filter_cohort_every_group_on_request,
-        test_filter_cohort_refuses_an_unknown_group,
-        test_cohort_predicates_from_the_criteria,
-        test_prepare_day_level_keeps_the_cohort_and_coerces_numeric,
-        test_prepare_day_level_refuses_a_disagreeing_predicate,
-        test_prepare_day_level_refuses_a_pre_migration_snapshot,
+        test_restrict_nma_comparator_zeros_non_ce0_users,
+        test_restrict_nma_comparator_no_hma_column_is_ok,
+        test_select_nma_cohort_adult_excludes_unknown_dob,
+        test_select_nma_cohort_pediatric,
+        test_select_nma_cohort_all_retains_unknown_dob,
+        test_select_nma_cohort_primary_groups_by_default,
+        test_select_nma_cohort_every_group_on_request,
+        test_select_nma_cohort_refuses_an_unknown_group,
+        test_nma_day_predicates_from_the_criteria,
+        test_prepare_nma_day_level_keeps_the_cohort_and_coerces_numeric,
+        test_prepare_nma_day_level_refuses_a_disagreeing_predicate,
+        test_prepare_nma_day_level_refuses_a_pre_migration_snapshot,
         test_windowed_matched_means_uses_only_in_window_comparator_days,
         test_windowed_matched_means_empty_arm_keeps_columns,
-    ], "test_nma_loading")
+    ], "test_data_loading_nma")

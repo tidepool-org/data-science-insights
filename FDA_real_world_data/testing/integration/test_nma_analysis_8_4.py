@@ -43,7 +43,7 @@ for _p in (_here, _analysis_dir):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from utils.nma_loading import STRATEGY_COL, prepare_day_level  # noqa: E402
+from utils.data_loading import DELIVERY_STRATEGY_COLUMN, prepare_nma_day_level  # noqa: E402
 
 import run_nma_pipeline as _run_pipeline  # noqa: E402
 
@@ -79,12 +79,12 @@ def _load_analysis_8_4():
 def _assert_strategy_outputs(spark, tables, raw_pdf, tmp_dir):
     """§8.4 structural + composite-gate-invariant + thin-cell-guard + Part-2 assertions."""
     a84 = _load_analysis_8_4()
-    prepared = prepare_day_level(raw_pdf)
+    prepared = prepare_nma_day_level(raw_pdf)
 
     # ── A. sanity: the interaction archetype carries BOTH strategies (Part 2 pairs) ─
     u = prepared[prepared["_userId"] == INTERACTION_USER]
     assert len(u) == 20, f"{INTERACTION_USER} should contribute 20 eligible days, got {len(u)}"
-    assert set(STRATS) <= set(u[STRATEGY_COL]), "interaction archetype must have both AB and TB days"
+    assert set(STRATS) <= set(u[DELIVERY_STRATEGY_COLUMN]), "interaction archetype must have both AB and TB days"
 
     # ── run §8.4 for cohort='all' into a throwaway dir ────────────────────────
     out_all = os.path.join(tmp_dir, "all")

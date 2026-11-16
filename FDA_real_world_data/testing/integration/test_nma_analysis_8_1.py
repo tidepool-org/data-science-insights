@@ -22,7 +22,7 @@ import tempfile
 import pandas as pd
 
 # sys.path bootstrap: __file__ undefined under the run-button → Workspace fallback. Adds this
-# dir (for `import run_nma_pipeline`) and analysis/ (utils.nma_loading).
+# dir (for `import run_nma_pipeline`) and analysis/ (utils.data_loading).
 try:
     _here = os.path.dirname(os.path.abspath(__file__))
 except NameError:
@@ -33,10 +33,10 @@ for _p in (_here, _analysis_dir):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from utils.nma_loading import (  # noqa: E402
-    filter_cohort,
-    prepare_day_level,
-    restrict_comparator,
+from utils.data_loading import (  # noqa: E402
+    select_nma_cohort,
+    prepare_nma_day_level,
+    restrict_nma_comparator,
 )
 
 import run_nma_pipeline as _run_pipeline  # noqa: E402
@@ -81,7 +81,7 @@ def _assert_recovers_paired_diff_design(spark, tables, raw_pdf, tmp_dir):
     """The §8.1 design-recovery + cohort/comparator assertions. `raw_pdf` = analysis-ready
     table as pandas; `tmp_dir` = a directory for throwaway §8.1 outputs."""
     a81 = _load_analysis_8_1()
-    prepared = prepare_day_level(raw_pdf)  # eligible days of eligible users (numeric-coerced)
+    prepared = prepare_nma_day_level(raw_pdf)  # eligible days of eligible users (numeric-coerced)
 
     def run_cohort(cohort, out_dir):
         a81.run(spark=spark, analysis_ready_table=tables["analysis_ready"],
@@ -108,7 +108,7 @@ def _assert_recovers_paired_diff_design(spark, tables, raw_pdf, tmp_dir):
     # contrasts_table aggregates per-user arm means across ALL contributing users, so the
     # CE=0/BE=0 cell is a blend (not 80/70). Re-derive it the same way and assert §8.1 matches
     # — a correctness check on the aggregation that's robust to the archetype mix.
-    elig = restrict_comparator(filter_cohort(prepared, cohort="all"))
+    elig = restrict_nma_comparator(select_nma_cohort(prepared, cohort="all"))
     nma = elig[elig["in_ce0_be0"] == True].groupby("_userId")["tir"].mean()   # noqa: E712
     cmp = elig[elig["in_ce_gt0"] == True].groupby("_userId")["tir"].mean()    # noqa: E712
     wide = pd.DataFrame({"NMA": nma, "CMP": cmp}).dropna()
@@ -133,8 +133,8 @@ def _assert_recovers_paired_diff_design(spark, tables, raw_pdf, tmp_dir):
     assert PAIRED_USER in cmp_users, "user with CE=0 days should remain in comparator"
 
     # ── D. §7.6 cohort split routes the pediatric user; §8.1 runs per cohort ───
-    ped_users = set(filter_cohort(prepared, cohort="pediatric")["_userId"])
-    adult_users = set(filter_cohort(prepared, cohort="adult")["_userId"])
+    ped_users = set(select_nma_cohort(prepared, cohort="pediatric")["_userId"])
+    adult_users = set(select_nma_cohort(prepared, cohort="adult")["_userId"])
     assert ped_users == {PEDIATRIC_USER}, f"pediatric cohort should be just the pediatric user, got {ped_users}"
     assert PEDIATRIC_USER not in adult_users, "pediatric user must not appear in the adult cohort"
     for cohort in ("pediatric", "adult"):

@@ -95,7 +95,7 @@ from cohort_constants import (  # noqa: E402
 )
 from export_loop_recommendations import BOLUS_TAGS  # noqa: E402
 
-# The §7.3 strategy labels, as the analyses read them (analysis/utils/nma_loading.STRATEGIES).
+# The §7.3 strategy labels, as the analyses read them (analysis/utils/data_loading.DELIVERY_STRATEGIES).
 STRATEGY_AUTOBOLUS = "autobolus_on"
 STRATEGY_TEMP_BASAL = "temp_basal_only"
 

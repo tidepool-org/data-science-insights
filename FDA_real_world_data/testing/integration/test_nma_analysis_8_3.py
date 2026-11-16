@@ -34,7 +34,7 @@ for _p in (_here, _analysis_dir):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from utils.nma_loading import prepare_day_level  # noqa: E402
+from utils.data_loading import prepare_nma_day_level  # noqa: E402
 from utils.strata import MIN_REF_DAYS, R_CUT  # noqa: E402
 
 import run_nma_pipeline as _run_pipeline  # noqa: E402
@@ -67,7 +67,7 @@ def _load_analysis_8_3():
 def _assert_recovers_low_high_design(spark, tables, raw_pdf, tmp_dir):
     """§8.3 within-user TDD-stratum design-recovery + output assertions."""
     a83 = _load_analysis_8_3()
-    prepared = prepare_day_level(raw_pdf)
+    prepared = prepare_nma_day_level(raw_pdf)
 
     # ── A. the within-user Low−High TDD design recovered through staging ──────
     u = prepared[prepared["_userId"] == TDD_USER]

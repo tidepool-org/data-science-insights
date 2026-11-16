@@ -9,6 +9,15 @@ then selects the rows the predicate admits and the diagnosis groups asked
 for. No loader applies a gate of its own, so an analysis cohort and its flow
 table (utils/cohort_flow.py) are counted from the same columns.
 
+Every loader is split in two: a pure `prepare_<population>` that takes the
+table as a pandas frame (coerce the numbers, assert, select the rows and the
+groups) and is testable without Spark, and `load_<population>`, which reads
+the table and hands it to the pure half. The PLN-1008 no-meal-announcement
+population (the NMA analyses) is the last section of this module: its
+cohort table is one row per user-day, and its analyses run locally off a
+CSV snapshot of it as well as on Databricks (since 2026-11-16, when the
+NMA's own loader was dissolved here; merge plan step 3).
+
 The thresholds live in data_staging/cohort_constants.py and are re-exported
 here for the analyses that print them.
 """
@@ -16,10 +25,19 @@ here for the analyses that print them.
 import os
 import sys
 
+import numpy as np
 import pandas as pd
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _STAGING_DIR = os.path.normpath(os.path.join(_HERE, "..", "..", "data_staging"))
+
+
+def analysis_dir():
+    """The FDA_real_world_data/analysis/ directory, derived from this module's
+    own location so it holds on Databricks too, where a file run from the Run
+    button has no __file__ of its own."""
+    return os.path.dirname(_HERE)
+
 if _STAGING_DIR not in sys.path:
     sys.path.insert(0, _STAGING_DIR)
 
@@ -119,6 +137,22 @@ def _assert_equal_flags(frame, name, expected, label):
         f"{label}: the staged {name} disagrees with its criterion columns on {mismatches} row(s); "
         f"re-stage the cohort table before analysing"
     )
+
+
+def _admit(frame, assert_predicates, predicate, diagnosis_groups, label, unit):
+    """The pure half of every loader: coerce the numbers, assert the table's
+    staged predicates against its criteria, keep the rows `predicate` admits
+    (None keeps every row), and select the diagnosis groups asked for. Takes
+    a pandas frame, so a loader's logic runs on a hand-built table without
+    Spark."""
+    frame = _coerce_numeric(frame)
+    assert_predicates(frame, label=label)
+    if predicate is not None:
+        frame = frame[as_bool(frame[predicate])].copy()
+        users = frame["_userId"].nunique()
+        tail = "" if unit == "user(s)" else f" for {users} user(s)"
+        print(f"  {label}: {predicate} admits {len(frame)} {unit}{tail}")
+    return _select_groups(frame, diagnosis_groups, label)
 
 
 # ---------------------------------------------------------------------------
@@ -225,12 +259,13 @@ def load_transition_cohort(spark, suffix="", diagnosis_groups=PRIMARY_DIAGNOSIS_
     every window). The whole table is read first so the best-window rule can
     be re-derived across each user's windows."""
     table = f"{CATALOG}.{TRANSITION_COHORT_TABLE.format(suffix=suffix)}"
-    frame = _coerce_numeric(spark.table(table).toPandas())
-    assert_transition_predicates(frame, label=table)
-    if predicate is not None:
-        frame = frame[as_bool(frame[predicate])].copy()
-        print(f"  {table}: {predicate} admits {len(frame)} window(s) for {frame['_userId'].nunique()} user(s)")
-    return _select_groups(frame, diagnosis_groups, table)
+    return prepare_transition_cohort(spark.table(table).toPandas(), predicate, diagnosis_groups, label=table)
+
+
+def prepare_transition_cohort(frame, predicate="in_transition_cohort", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS,
+                              label="transition cohort"):
+    """The pure half of load_transition_cohort, on the cohort table as a frame."""
+    return _admit(frame, assert_transition_predicates, predicate, diagnosis_groups, label, "window(s)")
 
 
 def load_transition_endpoints(spark, suffix="", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS):
@@ -297,12 +332,7 @@ def load_activation_cohort(spark, suffix="", diagnosis_groups=PRIMARY_DIAGNOSIS_
     activation of a rank-1 window.
     """
     table = f"{CATALOG}.{ACTIVATION_COHORT_TABLE.format(suffix=suffix)}"
-    flags = spark.table(table).toPandas()
-    assert_activation_predicates(flags, label=table)
-    if predicate is not None:
-        flags = flags[as_bool(flags[predicate])].copy()
-        print(f"  {table}: {predicate} admits {len(flags)} activation(s) for {flags['_userId'].nunique()} user(s)")
-    flags = _select_groups(flags, diagnosis_groups, table)
+    flags = prepare_activation_cohort(spark.table(table).toPandas(), predicate, diagnosis_groups, label=table)
 
     overrides = spark.table(f"{CATALOG}.overrides_by_segment{suffix}").toPandas()
     overrides = overrides.drop(columns=[c for c in overrides.columns
@@ -312,6 +342,24 @@ def load_activation_cohort(spark, suffix="", diagnosis_groups=PRIMARY_DIAGNOSIS_
         f"{table}: {len(flags)} activation(s) but {len(merged)} found in overrides_by_segment{suffix}"
     )
     return _coerce_numeric(merged)
+
+
+def prepare_activation_cohort(frame, predicate="in_activation_cohort", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS,
+                              label="activation cohort"):
+    """The pure half of load_activation_cohort, on the cohort table as a frame."""
+    return _admit(frame, assert_activation_predicates, predicate, diagnosis_groups, label, "activation(s)")
+
+
+def prepare_override_activations(frame, diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS, label="activation cohort"):
+    """The pure half of load_override_endpoints: the activations of the preset
+    cohort's windows with a starting glucose in range, any period."""
+    frame = _coerce_numeric(frame)
+    assert_activation_predicates(frame, label=label)
+    window, glucose = _flags(frame, "window_in_preset_cohort", "is_starting_glucose_in_range")
+    frame = frame[window & glucose].copy()
+    print(f"  {label}: window in the preset cohort and starting glucose in range admits "
+          f"{len(frame)} activation(s) for {frame['_userId'].nunique()} user(s)")
+    return _select_groups(frame, diagnosis_groups, label)
 
 
 def load_override_endpoints(spark, suffix="", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS):
@@ -326,13 +374,7 @@ def load_override_endpoints(spark, suffix="", diagnosis_groups=PRIMARY_DIAGNOSIS
     plus a 2-hour tail).
     """
     table = f"{CATALOG}.{ACTIVATION_COHORT_TABLE.format(suffix=suffix)}"
-    flags = spark.table(table).toPandas()
-    assert_activation_predicates(flags, label=table)
-    window, glucose = _flags(flags, "window_in_preset_cohort", "is_starting_glucose_in_range")
-    flags = flags[window & glucose].copy()
-    print(f"  {table}: window in the preset cohort and starting glucose in range admits "
-          f"{len(flags)} activation(s) for {flags['_userId'].nunique()} user(s)")
-    flags = _select_groups(flags, diagnosis_groups, table)
+    flags = prepare_override_activations(spark.table(table).toPandas(), diagnosis_groups, label=table)
 
     endpoints = spark.table(f"{CATALOG}.glycemic_endpoints_override{suffix}").toPandas()
     endpoints = endpoints.drop(columns=[c for c in endpoints.columns
@@ -435,12 +477,7 @@ def load_stable_cohort(spark, diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS, predica
     in_jaeb_cohort for the socioeconomic hand-off), one row per user, with
     the segment's glycemic endpoints joined on."""
     table = f"{CATALOG}.{STABLE_COHORT_TABLE}"
-    frame = _coerce_numeric(spark.table(table).toPandas())
-    assert_stable_predicates(frame, label=table)
-    if predicate is not None:
-        frame = frame[as_bool(frame[predicate])].copy()
-        print(f"  {table}: {predicate} admits {len(frame)} user(s)")
-    frame = _select_groups(frame, diagnosis_groups, table)
+    frame = prepare_stable_cohort(spark.table(table).toPandas(), predicate, diagnosis_groups, label=table)
 
     endpoints = spark.table(f"{CATALOG}.glycemic_endpoints_stable_autobolus").toPandas()
     endpoints = _coerce_numeric(endpoints).drop(columns=["segment", "cbg_count"], errors="ignore")
@@ -449,18 +486,25 @@ def load_stable_cohort(spark, diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS, predica
     return merged
 
 
+def prepare_stable_cohort(frame, predicate="in_stable_cohort", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS,
+                          label="stable cohort"):
+    """The pure half of load_stable_cohort, before the endpoints join."""
+    return _admit(frame, assert_stable_predicates, predicate, diagnosis_groups, label, "user(s)")
+
+
+def prepare_durability_cohort(frame, predicate="in_durability_cohort", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS,
+                              label="durability cohort"):
+    """The pure half of load_durability_cohort."""
+    return _admit(frame, assert_durability_predicates, predicate, diagnosis_groups, label, "user(s)")
+
+
 def load_durability_cohort(spark, table_suffix="", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS,
                            predicate="in_durability_cohort"):
     """The users a predicate admits from autobolus_durability{table_suffix}
     (in_durability_cohort for Table 8.7a and the curves, in_jaeb_cohort for
     the hand-off), with every column of the table."""
     table = f"{CATALOG}.{DURABILITY_COHORT_TABLE.format(suffix=table_suffix)}"
-    frame = _coerce_numeric(spark.table(table).toPandas())
-    assert_durability_predicates(frame, label=table)
-    if predicate is not None:
-        frame = frame[as_bool(frame[predicate])].copy()
-        print(f"  {table}: {predicate} admits {len(frame)} user(s)")
-    return _select_groups(frame, diagnosis_groups, table)
+    return prepare_durability_cohort(spark.table(table).toPandas(), predicate, diagnosis_groups, label=table)
 
 
 # ---------------------------------------------------------------------------
@@ -509,12 +553,13 @@ def load_ab_day_cohort(spark, diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS, predica
     frame = spark.table(table)
     if columns is not None:
         frame = frame.select(*columns)
-    frame = _coerce_numeric(frame.toPandas())
-    assert_ab_day_predicates(frame, label=table)
-    if predicate is not None:
-        frame = frame[as_bool(frame[predicate])].copy()
-        print(f"  {table}: {predicate} admits {len(frame)} user-day(s) for {frame['_userId'].nunique()} user(s)")
-    return _select_groups(frame, diagnosis_groups, table)
+    return prepare_ab_day_cohort(frame.toPandas(), predicate, diagnosis_groups, label=table)
+
+
+def prepare_ab_day_cohort(frame, predicate="is_outcome_day", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS,
+                          label="autobolus-day cohort"):
+    """The pure half of load_ab_day_cohort."""
+    return _admit(frame, assert_ab_day_predicates, predicate, diagnosis_groups, label, "user-day(s)")
 
 
 GUARDRAIL_GROUP_LABELS = ("never_preset", "compliant", "p_only", "m_only", "both")
@@ -546,12 +591,13 @@ def load_guardrail_group_cohort(spark, diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS
     with an eligible autobolus day (None), or those with an outcome day
     (in_outcome_cohort, the IR-2 population), with their group."""
     table = f"{CATALOG}.{GUARDRAIL_GROUPS_TABLE}"
-    frame = _coerce_numeric(spark.table(table).toPandas())
-    assert_guardrail_group_predicates(frame, label=table)
-    if predicate is not None:
-        frame = frame[as_bool(frame[predicate])].copy()
-        print(f"  {table}: {predicate} admits {len(frame)} user(s)")
-    return _select_groups(frame, diagnosis_groups, table)
+    return prepare_guardrail_group_cohort(spark.table(table).toPandas(), predicate, diagnosis_groups, label=table)
+
+
+def prepare_guardrail_group_cohort(frame, predicate="in_outcome_cohort", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS,
+                                   label="guardrail groups"):
+    """The pure half of load_guardrail_group_cohort."""
+    return _admit(frame, assert_guardrail_group_predicates, predicate, diagnosis_groups, label, "user(s)")
 
 
 def guardrail_flag_predicates(frame):
@@ -574,12 +620,13 @@ def load_guardrail_flags(spark, diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS, predi
     (is_qualifying for IR-2's checks, in_characterization_cohort for IR-3,
     None for every activation), with the P and M verdicts."""
     table = f"{CATALOG}.{GUARDRAIL_FLAGS_TABLE}"
-    frame = spark.table(table).toPandas()
-    assert_guardrail_flag_predicates(frame, label=table)
-    if predicate is not None:
-        frame = frame[as_bool(frame[predicate])].copy()
-        print(f"  {table}: {predicate} admits {len(frame)} activation(s) for {frame['_userId'].nunique()} user(s)")
-    return _select_groups(frame, diagnosis_groups, table)
+    return prepare_guardrail_flags(spark.table(table).toPandas(), predicate, diagnosis_groups, label=table)
+
+
+def prepare_guardrail_flags(frame, predicate="is_qualifying", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS,
+                            label="guardrail flags"):
+    """The pure half of load_guardrail_flags."""
+    return _admit(frame, assert_guardrail_flag_predicates, predicate, diagnosis_groups, label, "activation(s)")
 
 
 def extreme_preset_predicates(frame):
@@ -601,12 +648,13 @@ def load_extreme_preset_cohort(spark, diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS,
     the category memberships, the per-segment active flags and exposure, and
     the whole-segment endpoints."""
     table = f"{CATALOG}.{EXTREME_PRESET_COHORT_TABLE}"
-    frame = _coerce_numeric(spark.table(table).toPandas())
-    assert_extreme_preset_predicates(frame, label=table)
-    if predicate is not None:
-        frame = frame[as_bool(frame[predicate])].copy()
-        print(f"  {table}: {predicate} admits {len(frame)} user-segment(s)")
-    return _select_groups(frame, diagnosis_groups, table)
+    return prepare_extreme_preset_cohort(spark.table(table).toPandas(), predicate, diagnosis_groups, label=table)
+
+
+def prepare_extreme_preset_cohort(frame, predicate="in_extreme_cohort", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS,
+                                  label="extreme-preset cohort"):
+    """The pure half of load_extreme_preset_cohort."""
+    return _admit(frame, assert_extreme_preset_predicates, predicate, diagnosis_groups, label, "user-segment(s)")
 
 
 def load_extreme_preset_activations(spark, diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS):
@@ -667,12 +715,13 @@ def load_dose_response_candidates(spark, diagnosis_groups=PRIMARY_DIAGNOSIS_GROU
     """Every preset activation with its grain memberships and filters 3 to 5
     (dose_response_candidates, IR-6B); the candidate pool by default."""
     table = f"{CATALOG}.{DOSE_RESPONSE_CANDIDATES_TABLE}"
-    frame = _dose_response_frame(spark, table)
-    assert_dose_response_candidate_predicates(frame, label=table)
-    if predicate is not None:
-        frame = frame[as_bool(frame[predicate])].copy()
-        print(f"  {table}: {predicate} admits {len(frame)} activation(s)")
-    return _select_groups(frame, diagnosis_groups, table)
+    return prepare_dose_response_candidates(_dose_response_frame(spark, table), predicate, diagnosis_groups, label=table)
+
+
+def prepare_dose_response_candidates(frame, predicate="in_candidate_pool", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS,
+                                     label="dose-response candidates"):
+    """The pure half of load_dose_response_candidates."""
+    return _admit(frame, assert_dose_response_candidate_predicates, predicate, diagnosis_groups, label, "activation(s)")
 
 
 def load_dose_response_episodes(spark, diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS, predicate="is_survivor"):
@@ -680,9 +729,225 @@ def load_dose_response_episodes(spark, diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS
     the filter-5 survivors by default, with their window CGM counts, the
     starting glucose, the hypo events, and filters 6 and 7 as columns."""
     table = f"{CATALOG}.{DOSE_RESPONSE_EPISODES_TABLE}"
-    frame = _dose_response_frame(spark, table)
-    assert_dose_response_episode_predicates(frame, label=table)
-    if predicate is not None:
-        frame = frame[as_bool(frame[predicate])].copy()
-        print(f"  {table}: {predicate} admits {len(frame)} episode(s)")
-    return _select_groups(frame, diagnosis_groups, table)
+    return prepare_dose_response_episodes(_dose_response_frame(spark, table), predicate, diagnosis_groups, label=table)
+
+
+def prepare_dose_response_episodes(frame, predicate="is_survivor", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS,
+                                   label="dose-response episodes"):
+    """The pure half of load_dose_response_episodes."""
+    return _admit(frame, assert_dose_response_episode_predicates, predicate, diagnosis_groups, label, "episode(s)")
+
+
+# ---------------------------------------------------------------------------
+# The PLN-1008 no-meal-announcement population (the NMA analyses 7-1, 8-1 to
+# 8-4, and 8-supp): one row per user-day of nma_user_day_analysis_ready, the
+# cohort table and the terminal table of the NMA staging chain (decision
+# D23, 2026-11-05). The analyses run on Databricks through load_nma_day_level
+# or locally off the CSV snapshot at nma_snapshot_csv(); either way the
+# frame goes through prepare_nma_day_level, then select_nma_cohort for the
+# §7.6 age split and the diagnosis groups, then restrict_nma_comparator for
+# the §8.1 comparator rule. The thresholds are cohort_constants.py's.
+# ---------------------------------------------------------------------------
+
+NMA_ANALYSIS_READY_TABLE = "nma_user_day_analysis_ready"
+
+# The cohort table's criterion columns, and the predicates the loader re-derives from them.
+NMA_CRITERION_COLUMNS = ("passes_loop_version_gate", "day_eligible", "user_eligible", "passes_age_gate")
+NMA_PREDICATE_COLUMNS = ("in_analysis_cohort", "in_strategy_contrast")
+
+# (column, display label) — PLN-1008 §6 endpoints in the endpoints table.
+NMA_ENDPOINTS = [
+    ("tir", "Time 70-180 mg/dL (%)"),
+    ("tbr", "Time <70 mg/dL (%)"),
+    ("tbr_very_low", "Time <54 mg/dL (%)"),
+    ("tar", "Time >180 mg/dL (%)"),
+    ("tar_very_high", "Time >250 mg/dL (%)"),
+    ("mean_glucose", "Mean glucose (mg/dL)"),
+    ("cv", "CV (%)"),
+    ("hypo_events", "Hypo events / day"),
+]
+
+# The three nested NMA-like classifications: (arm flag column, label).
+CLASSIFICATIONS = [
+    ("in_ce0_be0", "CE=0/BE=0"),
+    ("in_ce0_be_le1", "CE=0/BE<=1"),
+    ("in_ce0_be_inf", "CE=0/BE<=inf"),
+]
+COMPARATOR_FLAG = "in_ce_gt0"
+COMPARATOR_LABEL = "CE>0"
+
+# Arms shown in figures (3 nested NMA arms + comparator).
+FIGURE_ARMS = CLASSIFICATIONS + [(COMPARATOR_FLAG, COMPARATOR_LABEL)]
+
+# High meal-announcement ("high engagement") arm: >=3 carb entries AND >=3 manual bolus entries —
+# the heavy-announcement end of the spectrum, shown as a 5th category beside the 3 NMA arms + CE>0
+# (Table 8.1a column + figures 8.1a/8.1b) and in parallel supplement contrast tables. Staged as
+# `in_ce_ge3_be_ge3` in export_nma_user_day_classification.py (carried through analysis-ready).
+HIGH_MA_FLAG = "in_ce_ge3_be_ge3"
+HIGH_MA_LABEL = "CE>=3/BE>=3"
+# The 5-category arm set for the supplement / violins (3 NMA + CE>0 + high meal-announcement).
+SUPPLEMENT_ARMS = FIGURE_ARMS + [(HIGH_MA_FLAG, HIGH_MA_LABEL)]
+
+# §7.3 delivery strategies: (column value, short label), in DISPLAY order (TB before AB, per MJC) —
+# this drives the §8.2 figure cell/line/x-axis order and the table row order. The LMM reference is
+# AB (autobolus_on), set alphabetically by statsmodels regardless of this list order, so coefficients
+# are unaffected by the ordering. Any other / null strategy is "ambiguous" and excluded (the staging
+# CASE currently emits only these two values). Shared by §8.2 + §8.3 (cross-tab) — single source.
+DELIVERY_STRATEGIES = [("temp_basal_only", "TB"), ("autobolus_on", "AB")]
+DELIVERY_STRATEGY_COLUMN = "delivery_strategy"
+
+# Rolling temporal-match window for the §8.1 windowed-comparator sensitivity: a CE=0 (NMA) day is
+# paired only against CE>0 comparator days within ± NMA_WINDOW_HALF calendar days of it (same user), to
+# control within-user temporal drift (Loop-version era, seasonality). See windowed_matched_means.
+NMA_WINDOW_DAYS = 90
+NMA_WINDOW_HALF = 45
+
+
+def nma_snapshot_csv(analysis_ready_table=NMA_ANALYSIS_READY_TABLE):
+    """Where data_staging/export_nma_user_day_analysis_ready.py writes its CSV snapshot —
+    FDA_real_world_data/outputs/nma/<table-name>.csv. Takes the bare or the catalog-qualified
+    table name."""
+    fname = analysis_ready_table.split(".")[-1] + ".csv"
+    return os.path.normpath(os.path.join(analysis_dir(), "..", "outputs", "nma", fname))
+
+
+def nma_day_predicates(frame):
+    """Re-derive the NMA cohort table's predicates from its criterion columns."""
+    version, day, user, age = _flags(frame, *NMA_CRITERION_COLUMNS)
+    in_cohort = version & day & user & age
+    return pd.DataFrame({
+        "in_analysis_cohort": in_cohort,
+        "in_strategy_contrast": in_cohort & frame[DELIVERY_STRATEGY_COLUMN].notna(),
+    })
+
+
+def assert_nma_day_predicates(frame, label=NMA_ANALYSIS_READY_TABLE):
+    """Refuse a cohort table whose staged predicates disagree with its criteria (the
+    loader's half of execution plan Gate C), or that predates the migration."""
+    missing = [c for c in NMA_CRITERION_COLUMNS + NMA_PREDICATE_COLUMNS + ("diagnosis_group",)
+               if c not in frame.columns]
+    assert not missing, (
+        f"{label}: no column(s) {missing}; the table predates the 2026-11-05 cohort-table "
+        f"migration (D23). Re-run data_staging/export_nma_user_day_analysis_ready.py."
+    )
+    expected = nma_day_predicates(frame)
+    for name in NMA_PREDICATE_COLUMNS:
+        _assert_equal_flags(frame, name, expected[name], label)
+
+
+def prepare_nma_day_level(frame, label=NMA_ANALYSIS_READY_TABLE):
+    """The pure half of load_nma_day_level: coerce the numbers, assert the cohort table's
+    predicates, and keep the rows of the analysis cohort (`in_analysis_cohort`: the version
+    gate, CGM coverage, the user's eligible-day count, the age gate; §7.1 and §6). Every
+    diagnosis group is kept; select_nma_cohort selects."""
+    return _admit(frame, assert_nma_day_predicates, "in_analysis_cohort", None, label, "user-day(s)")
+
+
+def load_nma_day_level(spark, analysis_ready_table=f"{CATALOG}.{NMA_ANALYSIS_READY_TABLE}"):
+    """The analysis cohort's rows, with arm flags + endpoints."""
+    return prepare_nma_day_level(spark.table(analysis_ready_table).toPandas(), label=analysis_ready_table)
+
+
+def select_nma_cohort(frame, cohort="all", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS):
+    """§7.6 age cohort and the diagnosis-group selection. NULL `is_pediatric` (DOB unknown or
+    implausible) is excluded from both adult and pediatric, retained in `all`. The §6 age
+    floor is a column of the cohort table (`passes_age_gate`) and already applied by
+    prepare_nma_day_level.
+
+    `diagnosis_groups` selects the groups kept (cohort_constants.DIAGNOSIS_GROUPS): the
+    primary cohort by default (type 1, the LADA-labelled JAEB members included), None for
+    every group (the by-group appendix). The group is a column, never a filter at staging."""
+    out = frame
+    if cohort == "adult":
+        out = out[out["is_pediatric"] == False]  # noqa: E712
+    elif cohort == "pediatric":
+        out = out[out["is_pediatric"] == True]  # noqa: E712
+    elif cohort != "all":
+        raise ValueError(f"unknown cohort: {cohort!r}")
+    return _select_groups(out, diagnosis_groups, f"NMA cohort {cohort!r}").copy()
+
+
+def restrict_nma_comparator(frame):
+    """§8.1 Table 8.1a: the comparison arms — CE>0 and the CE>=3/BE>=3 high meal-announcement
+    supplement arm — are restricted to users who contributed >=1 CE=0 day in at least one of the
+    three NMA classifications. The arms are nested under in_ce0_be_inf (CE=0), so that reduces to
+    ">=1 in_ce0_be_inf day". Zero in_ce_gt0 (and in_ce_ge3_be_ge3) for users with no CE=0 day so
+    every table/figure compares the same CE=0-contributing cohort."""
+    ce0_users = set(frame.loc[frame["in_ce0_be_inf"] == True, "_userId"])  # noqa: E712
+    out = frame.copy()
+    non_ce0 = ~out["_userId"].isin(ce0_users)
+    out.loc[non_ce0, "in_ce_gt0"] = False
+    if HIGH_MA_FLAG in out.columns:
+        out.loc[non_ce0, HIGH_MA_FLAG] = False
+    return out
+
+
+def windowed_matched_means(pdf, nma_flag, cmp_flag, endpoints, half=NMA_WINDOW_HALF):
+    """Per-NMA-day ±`half`-day matched comparator inputs (the §8.1 windowed-comparator sensitivity).
+
+    For the §8.1 NMA-vs-CE>0 contrast, anchor on each NMA (`nma_flag`) day; its comparator value is
+    the MEAN of `cmp_flag` comparator days (CE>0 = COMPARATOR_FLAG) within ±half CALENDAR days of
+    THAT day (same user). Only NMA days with >=1 in-window comparator are kept; a comparator day
+    near several NMA days contributes to each of their local means. Matching contemporaneous days
+    removes within-user temporal drift (Loop-version era, seasonality) from the contrast.
+
+    Returns (per_user, coverage):
+      per_user — one row per user with >=1 matched NMA day; columns `{ep}__nma` (mean over the
+                 user's matched NMA days of the NMA-day value) and `{ep}__cmp` (mean over those
+                 days of the local comparator mean) for each ep in `endpoints`. The per-user
+                 windowed contrast for `ep` is `{ep}__nma - {ep}__cmp` (equal-user weight, D5).
+      coverage — dict(total_nma_days, matched_nma_days, n_users_matched).
+
+    Requires `nma_flag` + `cmp_flag` boolean columns and `local_day` (YYYY-MM-DD). Implementation:
+    per user, encode days as calendar-day ordinals and use cumulative-sum + searchsorted so each
+    NMA day's in-window comparator mean is O(log n)."""
+    ep_cols = [e[0] if isinstance(e, (tuple, list)) else e for e in endpoints]
+    ordv_all = (pd.to_datetime(pdf["local_day"]) - pd.Timestamp("2000-01-01")).dt.days
+    rows = []
+    total_nma = matched_nma = 0
+    for _, sub in pdf.groupby("_userId"):
+        nm = (sub[nma_flag] == True).to_numpy()   # noqa: E712
+        # Comparator pool excludes the treatment arm's own days: no-op for disjoint CE=0-vs-CE>0 matching;
+        # for the overlapping CE>=3/BE>=3 windowed contrast it stops HMA days being their own comparator.
+        cm = ((sub[cmp_flag] == True) & (sub[nma_flag] == False)).to_numpy()    # noqa: E712
+        n_nma = int(nm.sum())
+        if n_nma == 0:
+            continue
+        total_nma += n_nma
+        if cm.sum() == 0:
+            continue
+        ordv = ordv_all.loc[sub.index].to_numpy()
+        n_pos = np.where(nm)[0]
+        c_pos = np.where(cm)[0]
+        n_ord = ordv[n_pos]
+        c_ord = ordv[c_pos]
+        order = np.argsort(c_ord)
+        c_ord_s = c_ord[order]
+        lo = np.searchsorted(c_ord_s, n_ord - half, side="left")
+        hi = np.searchsorted(c_ord_s, n_ord + half, side="right")   # inclusive ±half (91-day window)
+        cnt = hi - lo
+        keep = cnt > 0
+        matched_nma += int(keep.sum())
+        if not keep.any():
+            continue
+        rec = {"_userId": sub["_userId"].iloc[0]}
+        for ep in ep_cols:
+            cv = sub[ep].to_numpy()[c_pos][order].astype(float)
+            prefix = np.concatenate([[0.0], np.cumsum(cv)])         # prefix sums over sorted comparator days
+            local = (prefix[hi] - prefix[lo]) / np.where(cnt > 0, cnt, 1)   # local comparator mean per NMA day
+            nv = sub[ep].to_numpy()[n_pos].astype(float)
+            rec[f"{ep}__nma"] = np.nanmean(nv[keep])
+            rec[f"{ep}__cmp"] = np.nanmean(local[keep])
+        rows.append(rec)
+    per_user = pd.DataFrame(rows)
+    if per_user.empty:
+        # No user had a matched NMA day (e.g. an arm with no qualifying days — like the HMA arm in a
+        # cohort/fixture with no CE>=3/BE>=3 days). Return an EMPTY frame that still carries the
+        # {ep}__nma / {ep}__cmp columns, so callers get empty Series rather than a KeyError on a
+        # column-less frame (the guarded callers check len()>0; the figure builders index by column).
+        per_user = pd.DataFrame(columns=(["_userId"]
+                                         + [f"{ep}__nma" for ep in ep_cols]
+                                         + [f"{ep}__cmp" for ep in ep_cols]))
+    coverage = {"total_nma_days": total_nma, "matched_nma_days": matched_nma,
+                "n_users_matched": len(per_user)}
+    return per_user, coverage
