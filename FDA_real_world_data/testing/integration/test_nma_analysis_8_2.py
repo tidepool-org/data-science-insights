@@ -156,12 +156,15 @@ def _assert_recovers_interaction_design(spark, tables, raw_pdf, tmp_dir):
     # NB: the aggregate LMM blends ALL fixture users, so its interaction is NOT the single archetype's
     # baked −15 (that per-user design is proven in check A) — convergence + a finite coef is the claim.
 
-    # ── C2. the §12.2 HMA (CE>=3/BE>=3) × strategy interaction converges (HMA archetype pair) ──
+    # ── C2. the §12.2 HMA (CE>=3/BE>=3) × strategy interaction converges ──
+    # Needs >=2 users in all four cells: the HMA pair fills the HMA cells, and the known-interaction
+    # pair fills the comparator's temp-basal cell (the §12.2 comparator excludes the HMA days).
     t122 = pd.read_csv(os.path.join(out_all, "table_12_2a_high_engagement_interaction.csv"))
     h_tir = t122[t122["endpoint"] == "tir"]
     assert len(h_tir) == 1, "missing §12.2 HMA interaction TIR row"
     assert bool(h_tir.iloc[0]["converged"]), (
-        "§12.2 HMA × strategy interaction (Table 12.2a) should converge on TIR with the HMA pair")
+        "§12.2 HMA × strategy interaction (Table 12.2a) should converge on TIR with the HMA pair "
+        "and the known-interaction pair")
 
     # ── D. all §8.2 artifacts written (cohort='all') ──────────────────────────
     for csv in ("table_8_2a_marginal_cells.csv", "table_8_2b_interaction.csv",

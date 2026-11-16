@@ -215,6 +215,18 @@ def test_known_interaction_spans_20_days_in_four_cells():
     assert len(_by_type(rows, "food")) == 20
 
 
+def test_known_interaction_pair_shares_the_design():
+    """The twin exists so the §12.2 comparator's temp-basal cell has two users; it must be the
+    original's design under a different id, or the pair proves nothing."""
+    original = nb._archetype_known_interaction()
+    twin = nb.ARCHETYPES["nma_user_known_interaction_2"]()
+    assert {r["_userId"] for r in twin} == {"nma_user_known_interaction_2"}
+    assert len(_days_with_cbg(twin)) == len(_days_with_cbg(original)) == 20
+    assert len(_autoboluses(twin)) == len(_autoboluses(original))
+    assert len(_manual_boluses(twin)) == len(_manual_boluses(original))
+    assert len(_by_type(twin, "food")) == len(_by_type(original, "food"))
+
+
 # ---------------------------------------------------------------------------
 # 6.10 nma_user_known_low_high_tdd
 # ---------------------------------------------------------------------------
@@ -303,7 +315,7 @@ def test_convergence_pairs_registered():
 # ---------------------------------------------------------------------------
 
 def test_archetypes_dict_user_count():
-    assert len(nb.ARCHETYPES) == 16
+    assert len(nb.ARCHETYPES) == 17
     assert set(nb.ARCHETYPES) == set(nb.DEMOGRAPHICS) == set(nb.ARCHETYPE_DAYS) == set(nb.USER_GENDER)
 
 
@@ -324,8 +336,8 @@ def test_to_bddp_row_has_all_bddp_columns():
     fail otherwise)."""
     minimal = next(iter(nb._archetype_pure_be0()))
     expanded = nb._to_bddp_row(minimal)
-    # _to_bddp_row expands to NMA_BDDP_COLUMNS (= BDDP_COLUMNS + the NMA-only `rate` column).
-    assert set(expanded) == set(nb.NMA_BDDP_COLUMNS)
+    # _to_bddp_row expands to the FDA fixture's BDDP_COLUMNS (the NMA fixture has no columns of its own).
+    assert set(expanded) == set(BDDP_COLUMNS)
 
 
 def test_to_bddp_row_defaults_timezone_offset():
@@ -361,6 +373,7 @@ if __name__ == "__main__":
         test_known_paired_diff_spans_20_days_with_correct_carb_pattern,
         test_known_paired_diff_tir_designed_by_segment,
         test_known_interaction_spans_20_days_in_four_cells,
+        test_known_interaction_pair_shares_the_design,
         test_known_low_high_tdd_spans_30_days_all_ce0_be0,
         test_known_low_high_tdd_low_segment_has_lower_basal_rate,
         test_known_hma_shape,

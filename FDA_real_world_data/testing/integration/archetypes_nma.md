@@ -14,6 +14,7 @@ analytic property is recoverable on the master table.
 | `nma_user_ambiguous_strategy` | 14 | 0 AB recs, 0 TB recs per day | Days excluded from Analysis 2 only |
 | `nma_user_tdd_drift` | 60 | TDD rises linearly 30 → 80 U | Rolling-30d sensitivity exercise |
 | `nma_user_known_paired_diff` | 20 | 10 CE=0/BE=0 days at TIR=80%, 10 CE>0 days at TIR=70% | Table 8.1a CE=0/BE=0 vs CE>0 TIR Δ ≈ +10% |
+| `nma_user_known_interaction_2` | 20 | Twin of `nma_user_known_interaction` (identical design) | With the original, the §12.2 comparator's CE>0 × temp_basal_only cell has 2 users, so Table 12.2a fits (the comparator excludes the HMA days) |
 | `nma_user_known_interaction` | 20 | Designed day_type × delivery_strategy interaction | Table 8.2b interaction coef matches design |
 | `nma_user_known_low_high_tdd` | 30 | 15 R<1 CE=0/BE=0 days at TIR=75%, 15 R≥1 CE=0/BE=0 days at TIR=60% | Table 8.3b Low−High Δ ≈ +15% |
 

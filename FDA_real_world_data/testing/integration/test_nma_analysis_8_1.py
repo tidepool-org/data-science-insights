@@ -175,15 +175,17 @@ def main(spark=None):
     print("[test_nma_analysis_8_1] building / reusing the staging pipeline...")
     tables = _run_pipeline.run(spark)  # idempotent — builds → analysis-ready if not present
     raw_pdf = spark.table(tables["analysis_ready"]).toPandas()
-    # §7 type-1 carry guard: the diagnosis merge must resolve on the RAW _userId in the base CTE
-    # (pre-hash). A join misplaced onto the hashed outer-SELECT key would match nothing → all-NULL
-    # diagnosis_type → filter_cohort silently dropping the entire cohort. The fixture is all-type1,
-    # so the column must be present and 'type1' for every row.
-    assert "diagnosis_type" in raw_pdf.columns, "analysis_ready missing diagnosis_type — merge not wired"
-    assert (raw_pdf["diagnosis_type"] == "type1").all(), (
-        "diagnosis_type is not 'type1' for all fixture rows — check the pre-hash join placement "
-        f"(value counts: {raw_pdf['diagnosis_type'].value_counts(dropna=False).to_dict()})"
+    # The diagnosis join must resolve on the RAW _userId before hashing: a join misplaced onto the
+    # hashed key would match nothing, every row would carry 'unknown' (the COALESCE default) with
+    # is_primary_diagnosis false, and the loader's primary-group selection would drop the whole
+    # cohort. The fixture's lookup marks every synthetic user type1, so both columns must say so.
+    assert "diagnosis_group" in raw_pdf.columns, "analysis_ready missing diagnosis_group — join not wired"
+    assert (raw_pdf["diagnosis_group"] == "type1").all(), (
+        "diagnosis_group is not 'type1' for all fixture rows — check the pre-hash join placement "
+        f"(value counts: {raw_pdf['diagnosis_group'].value_counts(dropna=False).to_dict()})"
     )
+    assert raw_pdf["is_primary_diagnosis"].astype(bool).all(), (
+        "is_primary_diagnosis must be true for every fixture row")
     tmp_dir = tempfile.mkdtemp(prefix="nma_a81_")
     print(f"[test_nma_analysis_8_1] running §8.1 checks (outputs → {tmp_dir})...")
     _assert_recovers_paired_diff_design(spark, tables, raw_pdf, tmp_dir)

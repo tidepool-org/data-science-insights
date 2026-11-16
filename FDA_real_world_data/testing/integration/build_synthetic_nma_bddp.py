@@ -32,24 +32,19 @@ from nma_test_helpers import (  # type: ignore # noqa: E402
     make_cbg_rows_at_target_tir,
 )
 
-# Imports FDA's BDDP_COLUMNS / BDDP_SCHEMA so the saved table matches
-# `dev.default.bddp_sample_all_2` column-for-column. Per the reuse map in
-# the NMA TDD plan, PLN-1008 piggybacks on these constants rather than
-# forking the schema.
+# The fixture is written with the FDA synthetic BDDP's column list and schema, exactly, so
+# the NMA staging and the FDA dose classifier (which the NMA harness runs on this extract)
+# read the same shape the FDA suite runs on. The NMA builder used to append a `rate` column
+# and retype `normal` as a string; the FDA fixture has carried `rate` since 2026-11-03, and
+# both readers of `normal` cast it themselves (the dose classifier through CAST AS STRING
+# and TRY_CAST AS DOUBLE, the TDD staging through TRY_CAST AS DOUBLE), so neither override
+# is needed and the `rate` one broke the build with a duplicate column (2026-11-16).
 if _here not in sys.path:
     sys.path.insert(0, _here)
 from build_synthetic_bddp import (  # type: ignore # noqa: E402
     BDDP_COLUMNS,
     BDDP_SCHEMA,
 )
-
-# Two schema deltas from FDA's BDDP_SCHEMA, both because FDA never runs the NMA staging:
-#   1. `rate` — export_nma_user_day_tdd reads it on HealthKit basal rows (TRY_CAST(rate AS DOUBLE)
-#      + PARTITION BY ..., rate, duration); without it the TDD SQL fails to COMPILE.
-#   2. `normal` STRING (not double) — the bolus classifier does get_json_object(normal,'$.value'),
-#      which requires a STRING (real bddp_sample_all_2.normal is a string; FDA types it double).
-NMA_BDDP_COLUMNS = BDDP_COLUMNS + ["rate"]
-NMA_BDDP_SCHEMA = BDDP_SCHEMA.replace("`normal` double", "`normal` string") + ", `rate` double"
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +66,7 @@ DEMOGRAPHICS = {
     "nma_user_tdd_drift":          {"dob": date(1985, 1, 1)},   # 39
     "nma_user_known_paired_diff":  {"dob": date(1985, 1, 1)},   # 39
     "nma_user_known_interaction":  {"dob": date(1985, 1, 1)},   # 39
+    "nma_user_known_interaction_2": {"dob": date(1985, 1, 1)},  # 39 — §12.2 pair (comparator temp-basal cell → LMM converges)
     "nma_user_known_low_high_tdd": {"dob": date(1985, 1, 1)},   # 39
     "nma_user_ce_pos_only":        {"dob": date(1988, 1, 1)},   # 36 — comparator-restriction probe
     "nma_user_known_hma":          {"dob": date(1985, 1, 1)},   # 39 — HMA (CE>=3/BE>=3) arm
@@ -93,6 +89,7 @@ ARCHETYPE_DAYS = {
     "nma_user_tdd_drift":          60,
     "nma_user_known_paired_diff":  20,
     "nma_user_known_interaction":  20,
+    "nma_user_known_interaction_2": 20,
     "nma_user_known_low_high_tdd": 30,
     "nma_user_ce_pos_only":        14,
     "nma_user_known_hma":          30,
@@ -115,6 +112,7 @@ USER_GENDER = {
     "nma_user_tdd_drift":          "M",
     "nma_user_known_paired_diff":  "M",
     "nma_user_known_interaction":  "F",
+    "nma_user_known_interaction_2": "M",
     "nma_user_known_low_high_tdd": "F",
     "nma_user_ce_pos_only":        "M",
     "nma_user_known_hma":          "M",
@@ -276,12 +274,17 @@ def _archetype_known_interaction(uid="nma_user_known_interaction"):
     """6.9 — 20 days designed for day_type × delivery_strategy interaction.
 
     Four 5-day cells (CE=0/BE=0 × {AB, TB}, CE>0 × {AB, TB}). AB days emit
-    5 autoboluses; TB days emit 0 autoboluses + 1 non-meal bolus (so
-    export_nma_user_day_strategy can label them temp_basal via the loop_recs
-    table the integration pipeline pre-populates).
+    5 autoboluses; TB days emit 0 autoboluses + 1 non-meal bolus on a basal
+    row carrying Loop's automatically-issued key, so the FDA day table the
+    harness builds labels them temp_basal_only.
 
     Interaction baked in via TIR: AB×CE=0=80, TB×CE=0=70, AB×CE>0=70, TB×CE>0=75.
     Unit 22.5 asserts the recovered interaction coefficient matches.
+
+    Registered as a PAIR (`nma_user_known_interaction` + `_2`, identical design): this is the
+    only archetype with CE>0 temp-basal days that are not high meal-announcement days, and the
+    §12.2 fit's comparator excludes the HMA days (2026-06-26), so without the twin its CE>0 ×
+    temp_basal_only cell has one user and the fit is skipped as degenerate.
     """
     cells = [
         ("ce0_be0", "ab", 80.0),
@@ -427,6 +430,9 @@ ARCHETYPES = {
     "nma_user_tdd_drift":          _archetype_tdd_drift,
     "nma_user_known_paired_diff":  _archetype_known_paired_diff,
     "nma_user_known_interaction":  _archetype_known_interaction,
+    # §12.2 pair — the only archetype with CE>0 temp-basal days outside the HMA arm; the twin gives the
+    # §12.2 comparator (CE>0 without the HMA days) a 2nd user in its temp_basal_only cell so the fit runs.
+    "nma_user_known_interaction_2": lambda: _archetype_known_interaction("nma_user_known_interaction_2"),
     "nma_user_known_low_high_tdd": _archetype_known_low_high_tdd,
     "nma_user_ce_pos_only":        _archetype_ce_pos_only,
     # HMA pair (identical design) — gives the CE>=3/BE>=3 LMMs >=2 users/cell so they converge.
@@ -453,14 +459,10 @@ def _to_bddp_row(row: dict) -> dict:
     needs every BDDP column present so the saved table is `bddp_sample_all_2`-
     shaped. Missing columns default to None.
     """
-    base = {c: None for c in NMA_BDDP_COLUMNS}
-    base.update({k: v for k, v in row.items() if k in NMA_BDDP_COLUMNS})
+    base = {c: None for c in BDDP_COLUMNS}
+    base.update({k: v for k, v in row.items() if k in BDDP_COLUMNS})
     if base.get("timezoneOffset") is None:
         base["timezoneOffset"] = TZ_OFFSET_MIN
-    # `normal` is a STRING column (see NMA_BDDP_SCHEMA) — serialize the numeric value so
-    # createDataFrame accepts it and the classifier's get_json_object / TRY_CAST both work.
-    if base.get("normal") is not None:
-        base["normal"] = str(base["normal"])
     return base
 
 
@@ -478,9 +480,9 @@ def build_synthetic_nma_bddp(spark, output_table: str) -> None:
     from FDA's build_synthetic_bddp).
     """
     rows = [_to_bddp_row(r) for r in _build_rows()]
-    pdf = pd.DataFrame(rows, columns=NMA_BDDP_COLUMNS)
+    pdf = pd.DataFrame(rows, columns=BDDP_COLUMNS)
     (
-        spark.createDataFrame(pdf, schema=NMA_BDDP_SCHEMA)
+        spark.createDataFrame(pdf, schema=BDDP_SCHEMA)
         .write.mode("overwrite")
         .option("overwriteSchema", "true")
         .saveAsTable(output_table)
