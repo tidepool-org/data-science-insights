@@ -105,6 +105,11 @@ PROD_TOKEN = "prod"
 ALL_TOKEN = "all"
 
 MANIFEST_PATH = os.path.join("outputs", "run_manifest.json")
+# What the Run button runs: it passes no arguments, so this selection stands in for
+# --analyses (None means every analysis). Set for the run at hand and recorded in the
+# history with the run; the CLI's --analyses overrides it. 2026-11-17: merge plan step 4,
+# the PLN-1008 analyses on the production analysis-ready table.
+RUN_BUTTON_ANALYSES = [name for name, _ in NMA_ANALYSES]
 
 
 def load_analysis(filename):
@@ -216,5 +221,5 @@ if __name__ == "__main__":
         spark,
         boxes=_suffixes(_args.boxes, BOX_SUFFIXES),
         coverages=_suffixes(_args.coverages, COVERAGE_SUFFIXES),
-        analyses=None if _args.analyses is None else [a for a in _args.analyses.split(",") if a],
+        analyses=RUN_BUTTON_ANALYSES if _args.analyses is None else [a for a in _args.analyses.split(",") if a],
     )

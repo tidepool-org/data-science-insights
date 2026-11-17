@@ -257,6 +257,11 @@ STEPS = [
 # 2026-11-05: "default for run production should just do the one box"); the
 # variants are built on request, for the supplement flow tables.
 DEFAULT_BOXES = [""]
+# What the Run button runs: it passes no arguments, so this selection stands in for
+# --steps (None means every step). Set for the run at hand and recorded in the history
+# with the run; the CLI's --steps overrides it. 2026-11-17: merge plan step 4, the
+# PLN-1008 chain on the rebuilt base tables.
+RUN_BUTTON_STEPS = ["nma"]
 # CLI spelling for every build of a family.
 ALL_TOKEN = "all"
 
@@ -319,7 +324,7 @@ if __name__ == "__main__":
     _args, _ = _parser.parse_known_args()
     run(
         spark,
-        steps=None if _args.steps is None else [s for s in _args.steps.split(",") if s],
+        steps=RUN_BUTTON_STEPS if _args.steps is None else [s for s in _args.steps.split(",") if s],
         boxes=_suffixes(_args.boxes),
         coverages=_suffixes(_args.coverages),
     )
