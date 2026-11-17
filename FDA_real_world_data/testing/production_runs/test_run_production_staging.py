@@ -26,7 +26,7 @@ STAGING_RUNS = [
     "compute_glycemic_endpoints", "export_segments_within_guardrails", "export_overrides_all",
     "export_correction_range_history", "export_ab_day_cohort", "export_override_guardrail_flags",
     "export_cbg_from_ab_days",
-    "export_nma_user_day_cbg", "compute_nma_user_day_glycemic_endpoints",
+    "compute_nma_user_day_glycemic_endpoints",
     "export_nma_user_day_bolus_classification", "export_nma_user_day_bolus_counts",
     "export_nma_user_day_carbs", "export_nma_user_day_tdd", "export_nma_user_day_age",
     "export_nma_user_day_classification", "export_nma_user_day_analysis_ready",
@@ -79,7 +79,7 @@ def test_every_step_in_dependency_order():
             "export_overrides_all", "export_correction_range_history", "export_ab_day_cohort",
             "export_override_guardrail_flags", "export_cbg_from_ab_days", "compute_glycemic_endpoints",
             # the NMA chain (2026-11-06), in the job file's Phase 6 order
-            "export_nma_user_day_cbg", "compute_nma_user_day_glycemic_endpoints",
+            "compute_nma_user_day_glycemic_endpoints",
             "export_nma_user_day_bolus_classification", "export_nma_user_day_bolus_counts",
             "export_nma_user_day_carbs", "export_nma_user_day_tdd", "export_nma_user_day_age",
             "export_nma_user_day_classification", "export_nma_user_day_analysis_ready",

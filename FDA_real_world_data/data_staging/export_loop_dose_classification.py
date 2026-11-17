@@ -60,6 +60,17 @@ export_loop_recommendations.py (the day projection).
 """
 
 import argparse
+import os
+import sys
+
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _HERE = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging"
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from cohort_constants import health_source_name_sql  # noqa: E402
 
 
 CATALOG = "dev.fda_510k_rwd"
@@ -110,6 +121,7 @@ def run(
     tag_columns = ",\n           ".join(f"MAX({tag}) AS {tag}" for tag in TAGS)
     any_tag = ", ".join(f"MAX({tag})" for tag in TAGS)
     plugin_version_int = version_int_sql("r.plugin_version")
+    health_source_name = health_source_name_sql("b.origin")
     spark.sql(f"""
     --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
@@ -156,7 +168,7 @@ def run(
              get_json_object(b.origin, '$.version')                                AS plugin_version,
              regexp_extract(get_json_object(b.origin, '$.id'), ':(.*)$', 1)        AS origin_id_suffix,
              b.suppressed IS NOT NULL                                              AS has_suppressed,
-             get_json_object(b.origin, '$.payload.sourceRevision.source.name')     AS health_source_name,
+             {health_source_name}                                                     AS health_source_name,
              COALESCE(get_json_object(b.origin, '$.payload.sourceRevision.source.bundleIdentifier')
                       RLIKE '{LOOP_APP_IDENTIFIER_PATTERN}', FALSE)                AS health_loop_app,
              get_json_object(b.payload, '$["com.loopkit.InsulinKit.MetadataKeyAutomaticallyIssued"]') AS automatic_key_raw,

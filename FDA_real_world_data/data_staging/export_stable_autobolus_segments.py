@@ -1,3 +1,15 @@
+import os
+import sys
+
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _HERE = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging"
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from cohort_constants import age_years_sql  # noqa: E402
+
 CATALOG = "dev.fda_510k_rwd"
 
 # PLN-1001 Analysis 6 (RPT-1001 Rev 02 §4.4): a 14-day segment of 100%
@@ -18,6 +30,7 @@ def run(
     user_dates_table="dev.default.bddp_user_dates",
     user_gender_table="dev.default.user_gender",
 ):
+    age_years = age_years_sql("sc.segment_start", "d.dob")
     spark.sql(f"""
     --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
@@ -87,7 +100,7 @@ def run(
       d.dob,
       d.diagnosis_date,
       g.gender,
-      ROUND(DATEDIFF(sc.segment_start, d.dob) / 365.25, 1) AS age_years,
+      {age_years} AS age_years,
       ROUND(DATEDIFF(sc.segment_start, d.diagnosis_date) / 365.25, 1) AS years_lwd
 
     FROM scored sc

@@ -3,7 +3,7 @@ Spark test for `data_staging/export_nma_user_day_classification.py` — §7.2 ne
 eligibility.
 
 Covers: the four nested classifications (CE=0/BE=0 ⊆ CE=0/BE<=1 ⊆ CE=0/BE<=inf; CE>0 comparator),
-the CE>=3/BE>=3 HMA flag, day_eligible (coverage is_eligible, COALESCE FALSE when no coverage row),
+the CE>=3/BE>=3 HMA flag, day_eligible (the autobolus-day cohort's is_coverage_ok, COALESCE FALSE when no row),
 and user_eligible (>=10 eligible user-days). Counts coalesce to 0 (zero-entry days surface).
 
 Run on Databricks. Silent on success.
@@ -35,7 +35,7 @@ from staging_test_helpers import (  # type: ignore # noqa: E402
 )
 
 RECS_TABLE = f"{TEST_SCHEMA}._test_input_cls_recs"
-COVERAGE_TABLE = f"{TEST_SCHEMA}._test_input_cls_coverage"
+COVERAGE_TABLE = f"{TEST_SCHEMA}._test_input_cls_ab_day_cohort"
 BOLUS_TABLE = f"{TEST_SCHEMA}._test_input_cls_bolus"
 CARBS_TABLE = f"{TEST_SCHEMA}._test_input_cls_carbs"
 OUTPUT_TABLE = f"{TEST_SCHEMA}._test_output_cls"
@@ -65,11 +65,12 @@ CARBS = [
     {"_userId": "user_a", "local_day": _d(4), "carb_entry_count": 2, "carb_grams_total": 60.0},  # CE>0
     {"_userId": "user_a", "local_day": _d(5), "carb_entry_count": 3, "carb_grams_total": 90.0},  # HMA
 ]
-# Coverage: user_a d1-10 eligible, d11 explicit ineligible, d12 omitted (→ COALESCE FALSE).
+# The autobolus-day cohort rows (the per-day coverage flag): user_a d1-10 covered, d11 not,
+# d12 omitted (→ COALESCE FALSE).
 COVERAGE = (
-    [{"_userId": "user_a", "local_day": _d(n), "is_eligible": True} for n in range(1, 11)]
-    + [{"_userId": "user_a", "local_day": _d(11), "is_eligible": False}]
-    + [{"_userId": "user_b", "local_day": _d(n), "is_eligible": True} for n in range(1, 4)]
+    [{"_userId": "user_a", "day": _d(n), "is_coverage_ok": True} for n in range(1, 11)]
+    + [{"_userId": "user_a", "day": _d(11), "is_coverage_ok": False}]
+    + [{"_userId": "user_b", "day": _d(n), "is_coverage_ok": True} for n in range(1, 4)]
 )
 
 try:
@@ -77,7 +78,7 @@ try:
     setup_test_table(spark, COVERAGE_TABLE, COVERAGE)
     setup_test_table(spark, BOLUS_TABLE, BOLUS)
     setup_test_table(spark, CARBS_TABLE, CARBS)
-    run(spark, loop_recommendations_table=RECS_TABLE, coverage_table=COVERAGE_TABLE,
+    run(spark, loop_recommendations_table=RECS_TABLE, ab_day_cohort_table=COVERAGE_TABLE,
         bolus_counts_table=BOLUS_TABLE, carbs_table=CARBS_TABLE, output_table=OUTPUT_TABLE)
     res = read_test_output(spark, OUTPUT_TABLE)
     by = {(r["_userId"], pd.Timestamp(r["local_day"]).date()): r for _, r in res.iterrows()}

@@ -21,6 +21,17 @@ Maps to PLN-1008:
 """
 
 import argparse
+import os
+import sys
+
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _HERE = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging"
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from cohort_constants import PEDIATRIC_AGE_CUTOFF_YEARS, age_years_sql  # noqa: E402
 
 # §7.6 pediatric/adult cutoff.
 PEDIATRIC_AGE_CUTOFF = 18
@@ -37,36 +48,22 @@ def run(
     user_dates_table="dev.default.bddp_user_dates",
     output_table="dev.fda_510k_rwd.nma_user_day_age",
 ):
+    age_years = age_years_sql("lr.day", "ud.dob")
     spark.sql(f"""
 --begin-sql
 CREATE OR REPLACE TABLE {output_table} AS
-WITH raw AS (
-  SELECT
-    lr._userId,
-    lr.day AS local_day,
-    ud.dob,
-    DATEDIFF(lr.day, ud.dob) / 365.25 AS age_raw
-  FROM {loop_recommendations_table} lr
-  LEFT JOIN {user_dates_table} ud
-    ON lr._userId = ud.userid
-)
 SELECT
-  _userId,
-  local_day,
-  -- Null the age when DOB is unknown OR the computed age is implausible (corrupt DOB:
-  -- future-dated => negative, or older than {MAX_PLAUSIBLE_AGE}). is_pediatric follows.
+  lr._userId,
+  lr.day AS local_day,
+  {age_years} AS age_years,
   CASE
-    WHEN dob IS NULL THEN NULL
-    WHEN age_raw < 0 OR age_raw > {MAX_PLAUSIBLE_AGE} THEN NULL
-    ELSE ROUND(age_raw, 1)
-  END AS age_years,
-  CASE
-    WHEN dob IS NULL THEN NULL
-    WHEN age_raw < 0 OR age_raw > {MAX_PLAUSIBLE_AGE} THEN NULL
-    WHEN age_raw < {PEDIATRIC_AGE_CUTOFF} THEN TRUE
+    WHEN {age_years} IS NULL THEN NULL
+    WHEN {age_years} < {PEDIATRIC_AGE_CUTOFF_YEARS} THEN TRUE
     ELSE FALSE
   END AS is_pediatric
-FROM raw
+FROM {loop_recommendations_table} lr
+LEFT JOIN {user_dates_table} ud
+  ON lr._userId = ud.userid
 ;
 """)
 

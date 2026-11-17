@@ -334,8 +334,6 @@ flowchart LR
     nbc["nma_user_day_bolus_classification (its own dose classifier)"]:::dup
     nbce["nma_bolus_classification (event grain, not wired)"]:::unused
     nbcnt["nma_user_day_bolus_counts"]:::table
-    ncbg["nma_user_day_cbg"]:::table
-    ncov["nma_user_day_coverage"]:::table
     nend["nma_user_day_glycemic_endpoints"]:::table
     ntdd["nma_user_day_tdd"]:::table
     ncls["nma_user_day_classification"]:::table
@@ -353,14 +351,12 @@ flowchart LR
   bddp -- "export_bolus_classification" --> nbce
   day -.-> nbce
   nbc -- "export_user_day_bolus_counts" --> nbcnt
-  cbg -- "export_user_day_cbg" --> ncbg
-  cbg -- "same script" --> ncov
-  ncbg -- "compute_user_day_glycemic_endpoints" --> nend
+  cbg -- "compute_nma_user_day_glycemic_endpoints" --> nend
+  abd -. "is_coverage_ok (D24)" .-> ncls
   bddp -- "export_user_day_tdd" --> ntdd
   day -- "export_user_day_classification" --> ncls
   nbcnt -.-> ncls
   ncarbs -.-> ncls
-  ncov -.-> ncls
   day -- "export_user_day_analysis_ready" --> nar
   nage -.-> nar
   nbc -.-> nar
@@ -528,10 +524,9 @@ One row per table the current staging writes. "Read by" lists the staging script
 | `nma_user_day_bolus_classification` | `export_user_day_bolus_classification` | `bddp_sample_all_2`, `loop_recommendations` | `export_user_day_bolus_counts`, `export_user_day_analysis_ready` |
 | `nma_bolus_classification` | `export_bolus_classification` | `bddp_sample_all_2`, `loop_recommendations` | nothing in staging; two exploratory scripts |
 | `nma_user_day_bolus_counts` | `export_user_day_bolus_counts` | `nma_user_day_bolus_classification` | `export_user_day_classification` |
-| `nma_user_day_cbg`, `nma_user_day_coverage` | `export_user_day_cbg` | `loop_cbg` | `compute_user_day_glycemic_endpoints`, `export_user_day_classification` |
-| `nma_user_day_glycemic_endpoints` | `compute_user_day_glycemic_endpoints` | `nma_user_day_cbg` | `export_user_day_analysis_ready` |
+| `nma_user_day_glycemic_endpoints` | `compute_nma_user_day_glycemic_endpoints` | `loop_cbg` | `export_user_day_analysis_ready` |
 | `nma_user_day_tdd` | `export_user_day_tdd` | `bddp_sample_all_2` | `export_user_day_analysis_ready` |
-| `nma_user_day_classification` | `export_user_day_classification` | `loop_recommendations`, `nma_user_day_bolus_counts`, `nma_user_day_carbs`, `nma_user_day_coverage` | `export_user_day_analysis_ready` |
+| `nma_user_day_classification` | `export_nma_user_day_classification` | `loop_recommendations`, `nma_user_day_bolus_counts`, `nma_user_day_carbs`, `ab_day_cohort` (`is_coverage_ok`) | `export_user_day_analysis_ready` |
 | `nma_user_day_analysis_ready` | `export_user_day_analysis_ready` | the `nma_*` tables above, `loop_recommendations`, `user_diagnosis_type`, `user_gender` | the CSV snapshot, the parity check |
 
 Tables in the catalog (and in the 2026-10-29 snapshot) that **no current script writes**: `loop_recommendation_day`, `loop_recommendation_healthkit_day`, `valid_transition_segments_day`, `valid_transition_segments_healthkit_day`, `nma_user_day_master` (no producer anywhere in the repository); `loop_user_carbs`, `user_days_closed_loop` (`closed_loop_rwd_analysis/`), `loop_user_tir_unfiltered` (`power_analysis/`), `behavior_trace_candidates`, `behavior_trace_candidates_b` (`behavior_model/`, `forecast_uncertainty/`). None is read by any submission analysis.
@@ -647,3 +642,4 @@ Ordered as the depth-first pass takes them (MC, 2026-11-05: PLN-1001 first and s
 
 11. The five legacy tables with no producer (`loop_recommendation_day`, `loop_recommendation_healthkit_day`, `valid_transition_segments_day`, `valid_transition_segments_healthkit_day`, `nma_user_day_master`) and their vintage copies can be dropped. The four tables from other subprojects belong in those subprojects' own schemas, so the submission schema holds only what the submission reads.
 12. The `_box080` tables stay until the RFAI response is out (execution plan §5 item 9); the vintage copies stay until the parity gates have run on them.
+12. **Built 2026-11-17 (NMA decisions D24 to D26; the review of the NMA chain against the FDA machinery).** The NMA's day CGM slice and coverage table retire: the endpoints read `loop_cbg` with the reading's date as the day, and `day_eligible` is the autobolus-day cohort's `is_coverage_ok` (201 of 288, the FDA convention; the NMA had 202). A carbohydrate entry is 1 to 150 g in every plan, read through `cohort_constants.carb_entries_sql` by both carbohydrate exports (one dedup, one pair of bounds). Every staging age comes from `cohort_constants.age_years_sql`, NULL for a corrupt date of birth; the transition-segment export's `> 6` is the shared gate's `>= 6`. The pediatric cutoff, the age bound, the user-day minimum, and the two source markers the dose classifier and the TDD export share live in the constants module. The figures of section 3 show the retired tables until the map is re-rendered (`docs/render_pipeline_map.py`).

@@ -26,6 +26,19 @@ the loaders judge a missing version on the date) and the min/median/max daily
 automated-bolus count among the second period's autobolus days.
 """
 
+import os
+import sys
+
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _HERE = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging"
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from cohort_constants import age_gate_sql, age_years_sql  # noqa: E402
+
+
 
 CATALOG = "dev.fda_510k_rwd"
 
@@ -49,6 +62,8 @@ def run(
     min_period_days = int(min_period_days)
     if not 0 < min_period_days <= SEGMENT_DAYS:
         raise ValueError(f"min_period_days must be 1 to {SEGMENT_DAYS}, got {min_period_days}")
+    age_years = age_years_sql("t.tb_to_ab_seg1_start", "d.dob")
+    age_gate = age_gate_sql(age_years)
     spark.sql(f"""
 --begin-sql
 CREATE OR REPLACE TABLE {output_table} AS
@@ -212,13 +227,13 @@ SELECT
   d.diagnosis_date,
   d.dob,
   g.gender,
-  ROUND(DATEDIFF(t.tb_to_ab_seg1_start, d.dob) / 365.25, 1) AS tb_to_ab_age_years,
+  {age_years} AS tb_to_ab_age_years,
   ROUND(DATEDIFF(t.tb_to_ab_seg1_start, d.diagnosis_date) / 365.25, 1) AS tb_to_ab_years_lwd
 
 FROM valid_user_table t
 LEFT JOIN {user_dates_table} d ON t._userId = d.userid
 LEFT JOIN {user_gender_table} g ON t._userId = g.userid
-WHERE ROUND(DATEDIFF(t.tb_to_ab_seg1_start, d.dob) / 365.25, 1) > 6 OR d.dob IS NULL
+WHERE {age_gate}
 ORDER BY t._userId, t.segment_rank
 ;
 """)

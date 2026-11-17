@@ -24,6 +24,11 @@ SAMPLES_PER_DAY = 288
 # count truncates, as the loader always did (2,822 readings).
 MIN_CGM_COVERAGE = 0.70
 MIN_CBG_COUNT = int(SEGMENT_DAYS * SAMPLES_PER_DAY * MIN_CGM_COVERAGE)
+# A single day's coverage floor, in readings, truncated the same way (201).
+# The autobolus-day cohort table carries it for every Loop user's day, and
+# PLN-1008 reads that table since 2026-11-17 (its own copy rounded up to
+# 202; MC: one rule).
+MIN_DAILY_CBG_COUNT = int(SAMPLES_PER_DAY * MIN_CGM_COVERAGE)
 
 # --- The Loop version gate ------------------------------------------------------
 # Loop 3.4.0 changed the algorithm under study, so a window must end on a
@@ -40,11 +45,26 @@ MAX_SEG2_END_DATE = "2024-07-13"
 # The Loop automated-bolus indication starts at 6 years; a user whose date of
 # birth is unknown is kept (PLN-1001 §6; the loaders since 2026-07-30).
 MIN_AGE_YEARS = 6
+# An age is the years from the date of birth to the day in question, to one
+# decimal. A date of birth that gives a negative age or one above this bound
+# is corrupt, and the age is unknown (NULL) in every population (MC,
+# 2026-11-17: "ages nulled when negative or implausible"); the age gate then
+# keeps the user as it keeps an unknown date of birth. Until 2026-11-17 only
+# PLN-1008 nulled, and a negative age failed the FDA gate.
+MAX_PLAUSIBLE_AGE_YEARS = 120
+# PLN-1008 §7.6 reports children and adults apart at this cutoff.
+PEDIATRIC_AGE_CUTOFF_YEARS = 18
+# PLN-1008 §7.1: a user contributes at least this many eligible days.
+MIN_USER_ELIGIBLE_DAYS = 10
 
 # --- Carbohydrate entries (analysis 8-8) ------------------------------------
-# A food entry counts toward a period's carbohydrate data when its grams are
-# plausible: at least 1 g and at most 150 g (analysis 8-8's per-entry filter,
-# a literal there until 2026-11-05).
+# A food record is a carbohydrate entry when its net grams are plausible: at
+# least 1 g and at most 150 g (analysis 8-8's per-entry filter, a literal
+# there until 2026-11-05). Since 2026-11-17 the bounds apply where the entries
+# are read from the extract (carb_entries_sql), for every plan: a 0 g record
+# is not an entry (MC, 2026-11-17: "0 should not count as a carb entry, and a
+# ceiling of 150"), so PLN-1008's carb-entry count and the transition cohort's
+# carbohydrate data agree on what an entry is.
 CARB_ENTRY_MIN_GRAMS = 1
 CARB_ENTRY_MAX_GRAMS = 150
 
@@ -169,3 +189,63 @@ def loop_version_gate_sql(version_int, end_date, zero_version_is_missing=True):
 def age_gate_sql(age_years):
     """The age gate as a SQL predicate: at least MIN_AGE_YEARS, or unknown."""
     return f"({age_years} >= {MIN_AGE_YEARS} OR {age_years} IS NULL)"
+
+
+def age_years_sql(day, dob):
+    """The age in years on `day` from `dob` as a SQL expression, to one decimal;
+    NULL when the date of birth is unknown or gives a negative age or one above
+    MAX_PLAUSIBLE_AGE_YEARS. Every staging script that computes an age uses it."""
+    raw = f"(DATEDIFF({day}, {dob}) / 365.25)"
+    return (f"(CASE WHEN {dob} IS NULL THEN NULL "
+            f"WHEN {raw} < 0 OR {raw} > {MAX_PLAUSIBLE_AGE_YEARS} THEN NULL "
+            f"ELSE ROUND({raw}, 1) END)")
+
+
+def carb_entries_sql(bddp_table):
+    """The carbohydrate entries of the extract as a SQL subquery: one row per
+    food record whose net carbohydrate reading is in [CARB_ENTRY_MIN_GRAMS,
+    CARB_ENTRY_MAX_GRAMS], duplicates (the same user, time, and grams) collapsed
+    to the latest created. Columns: _userId, carb_timestamp, carb_grams. Both
+    carbohydrate exports read entries through it, so the dedup and the bounds
+    are written once."""
+    return f"""(
+      SELECT _userId, carb_timestamp, carb_grams
+      FROM (
+        SELECT _userId, carb_timestamp, carb_grams,
+               ROW_NUMBER() OVER (
+                 PARTITION BY _userId, carb_timestamp, carb_grams
+                 ORDER BY created_timestamp DESC
+               ) AS rn
+        FROM (
+          SELECT _userId,
+                 TRY_CAST(time_string AS TIMESTAMP) AS carb_timestamp,
+                 TRY_CAST(get_json_object(nutrition, '$.carbohydrate.net') AS DOUBLE) AS carb_grams,
+                 created_timestamp
+          FROM {bddp_table}
+          WHERE type = 'food'
+            AND nutrition IS NOT NULL
+            AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
+        )
+        WHERE carb_grams BETWEEN {CARB_ENTRY_MIN_GRAMS} AND {CARB_ENTRY_MAX_GRAMS}
+      )
+      WHERE rn = 1
+    )"""
+
+
+# --- Source markers (docs/dose_markers_in_code_2026-10-30.md) -----------------
+# Where a record came from, read from its origin JSON: the Apple Health source
+# name (Loop writes its own name there) and the app identifier of a record Loop
+# uploaded directly. The dose classifier and the PLN-1008 total-daily-dose
+# export read the same two fields through these.
+HEALTH_SOURCE_NAME_LOOP = "Loop"
+LOOP_APP_IDENTIFIER = "com.loopkit.Loop"
+
+
+def health_source_name_sql(origin):
+    """The Apple Health source name of a record, from its origin JSON."""
+    return f"get_json_object({origin}, '$.payload.sourceRevision.source.name')"
+
+
+def app_identifier_sql(origin):
+    """The app identifier of a record, from its origin JSON."""
+    return f"get_json_object({origin}, '$.name')"

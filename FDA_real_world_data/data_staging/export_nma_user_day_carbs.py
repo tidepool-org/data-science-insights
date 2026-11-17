@@ -1,7 +1,9 @@
 """Per-user-day announced-carbohydrate totals (CE).
 
 Sum of net carb grams from BDDP `food` records, bucketed to the day. Day-level
-analogue of FDA `export_carbohydrates_from_transitions.py` — same source filter
+analogue of FDA `export_carbohydrates_from_transitions.py`; both read the entries through
+cohort_constants.carb_entries_sql since 2026-11-17 (the dedup and the 1 to 150 g bounds written once;
+a 0 g record is not an entry, MC 2026-11-17), the same source filter
 (`type='food'`, net carbs via `get_json_object(nutrition, '$.carbohydrate.net')`)
 and `created_timestamp` dedup, but at user-day grain instead of segment-bounded.
 
@@ -32,6 +34,17 @@ Maps to PLN-1008:
 """
 
 import argparse
+import os
+import sys
+
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _HERE = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging"
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from cohort_constants import carb_entries_sql  # noqa: E402
 
 
 def run(
@@ -40,44 +53,18 @@ def run(
     loop_recommendations_table="dev.fda_510k_rwd.loop_recommendations",
     output_table="dev.fda_510k_rwd.nma_user_day_carbs",
 ):
+    carb_entries = carb_entries_sql(input_table)
     spark.sql(f"""
 --begin-sql
 CREATE OR REPLACE TABLE {output_table} AS
 
-WITH raw_carbs AS (
+WITH deduped_carbs AS (
   SELECT
     _userId,
-    CAST(LEFT(time_string, 10) AS DATE) AS local_day,
-    TRY_CAST(time_string AS TIMESTAMP) AS carb_timestamp,
-    TRY_CAST(get_json_object(nutrition, '$.carbohydrate.net') AS DOUBLE) AS carb_grams,
-    created_timestamp
-  FROM {input_table}
-  WHERE type = 'food'
-    AND nutrition IS NOT NULL
-    AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
-),
-
-deduped_carbs AS (
-  SELECT
-    _userId,
-    local_day,
+    CAST(carb_timestamp AS DATE) AS local_day,
     carb_grams
-  FROM (
-    SELECT
-      _userId,
-      local_day,
-      carb_timestamp,
-      carb_grams,
-      ROW_NUMBER() OVER (
-        PARTITION BY _userId, carb_timestamp, carb_grams
-        ORDER BY created_timestamp DESC
-      ) AS rn
-    FROM raw_carbs
-    WHERE carb_grams IS NOT NULL
-  )
-  WHERE rn = 1
+  FROM {carb_entries}
 ),
-
 carb_day_totals AS (
   SELECT
     _userId,

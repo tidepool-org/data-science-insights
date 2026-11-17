@@ -38,7 +38,7 @@ DAG order (mirrors `fda_analysis_pipeline.yml`):
             -> cbg_from_ab_days -> compute_glycemic_endpoints (ab_days)
          -> the PLN-1008 chain (Phase 6 of the job; merged here 2026-11-17), on the
             same day table, loop_cbg, and diagnosis lookup:
-            nma_user_day_cbg (+ coverage) -> nma_user_day_glycemic_endpoints
+            loop_cbg -> nma_user_day_glycemic_endpoints; ab_day_cohort -> the coverage flag
             nma_user_day_bolus_classification -> nma_user_day_bolus_counts
             nma_user_day_carbs, nma_user_day_tdd, nma_user_day_age
             -> nma_user_day_classification -> nma_user_day_analysis_ready
@@ -119,8 +119,6 @@ TABLES = {
     "dose_response_episodes": f"{P}dose_response_episodes",
     # PLN-1008 (merged 2026-11-17): the NMA chain on the same fixture, day table,
     # loop_cbg, and diagnosis lookup; the production names under the test prefix
-    "nma_cbg": f"{P}nma_user_day_cbg",
-    "nma_coverage": f"{P}nma_user_day_coverage",
     "nma_glycemic_endpoints": f"{P}nma_user_day_glycemic_endpoints",
     "nma_bolus_classification": f"{P}nma_user_day_bolus_classification",
     "nma_bolus_counts": f"{P}nma_user_day_bolus_counts",
@@ -292,7 +290,6 @@ def run(spark, force=False):
     import export_stable_cohort  # type: ignore # noqa: E402
     import export_extreme_preset_cohort  # type: ignore # noqa: E402
     import export_dose_response_episodes  # type: ignore # noqa: E402
-    import export_nma_user_day_cbg  # type: ignore # noqa: E402
     import compute_nma_user_day_glycemic_endpoints  # type: ignore # noqa: E402
     import export_nma_user_day_bolus_classification  # type: ignore # noqa: E402
     import export_nma_user_day_bolus_counts  # type: ignore # noqa: E402
@@ -559,18 +556,11 @@ def run(spark, force=False):
     )
 
     # ── The PLN-1008 chain (Phase 6 of the job), on the same day table, loop_cbg,
-    # user_dates, user_gender, and diagnosis lookup ──────────────────────────
-    print("[integration.run_pipeline] export_nma_user_day_cbg...")
-    export_nma_user_day_cbg.run(
-        spark,
-        input_table=TABLES["loop_cbg"],
-        output_cbg_table=TABLES["nma_cbg"],
-        output_coverage_table=TABLES["nma_coverage"],
-    )
+    # user_dates, user_gender, diagnosis lookup, and autobolus-day cohort table ──
     print("[integration.run_pipeline] compute_nma_user_day_glycemic_endpoints...")
     compute_nma_user_day_glycemic_endpoints.run(
         spark,
-        input_table=TABLES["nma_cbg"],
+        input_table=TABLES["loop_cbg"],
         output_table=TABLES["nma_glycemic_endpoints"],
     )
     print("[integration.run_pipeline] export_nma_user_day_bolus_classification...")
@@ -610,7 +600,7 @@ def run(spark, force=False):
     export_nma_user_day_classification.run(
         spark,
         loop_recommendations_table=TABLES["loop_recommendations"],
-        coverage_table=TABLES["nma_coverage"],
+        ab_day_cohort_table=TABLES["ab_day_cohort"],
         bolus_counts_table=TABLES["nma_bolus_counts"],
         carbs_table=TABLES["nma_carbs"],
         output_table=TABLES["nma_classification"],

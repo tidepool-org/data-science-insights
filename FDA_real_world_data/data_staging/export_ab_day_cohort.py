@@ -61,6 +61,8 @@ from cohort_constants import (  # noqa: E402
     diagnosis_group_sql,
     is_lada_sql,
     loop_version_gate_sql,
+    age_years_sql,
+    MIN_DAILY_CBG_COUNT,
 )
 
 
@@ -68,7 +70,6 @@ CATALOG = "dev.fda_510k_rwd"
 
 # Daily CGM coverage: int() truncation mirrors MIN_CBG_COUNT's convention
 # (int(14 * 288 * 0.70) at the segment grain).
-MIN_DAILY_CBG_COUNT = int(SAMPLES_PER_DAY * MIN_CGM_COVERAGE)  # 201
 
 
 def run(
@@ -85,7 +86,7 @@ def run(
         "dx.diagnosis_type", is_lada_sql("dx.diagnosis_patients", "dx.diagnosis_seagull")
     )
     version_gate = loop_version_gate_sql("t.version_int", "t.day")
-    age_gate = age_gate_sql("ROUND(DATEDIFF(t.day, d.dob) / 365.25, 1)")
+    age_gate = age_gate_sql(age_years_sql("t.day", "d.dob"))
 
     spark.sql(f"""
     --begin-sql

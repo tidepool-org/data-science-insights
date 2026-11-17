@@ -85,7 +85,6 @@ import export_nma_user_day_analysis_ready  # noqa: E402
 import export_nma_user_day_bolus_classification  # noqa: E402
 import export_nma_user_day_bolus_counts  # noqa: E402
 import export_nma_user_day_carbs  # noqa: E402
-import export_nma_user_day_cbg  # noqa: E402
 import export_nma_user_day_classification  # noqa: E402
 import export_nma_user_day_tdd  # noqa: E402
 import compute_nma_user_day_glycemic_endpoints  # noqa: E402
@@ -206,11 +205,10 @@ def build_cohorts(spark, boxes=None):
 def build_nma(spark):
     """The PLN-1008 chain (the NMA, one report of the submission since 2026-11-03)
     on the base tables, in fda_analysis_pipeline.yml's Phase 6 order: the user-day
-    CGM slice and its endpoints, the bolus counts by the FDA verdict, carbohydrates,
-    total daily dose, age, the day classification, then the analysis-ready table,
+    endpoints off the cleaned CGM table, the bolus counts by the FDA verdict, carbohydrates,
+    total daily dose, age, the day classification (its coverage flag from the autobolus-day
+    cohort table, so the ab_days step comes first), then the analysis-ready table,
     which is the NMA cohort table and writes the CSV snapshot the local analyses read."""
-    _say("nma", "nma_user_day_cbg and nma_user_day_coverage")
-    export_nma_user_day_cbg.run(spark)
     _say("nma", "nma_user_day_glycemic_endpoints")
     compute_nma_user_day_glycemic_endpoints.run(spark)
     _say("nma", "nma_user_day_bolus_classification (the FDA verdict per user-day)")

@@ -1,4 +1,17 @@
 import argparse
+import os
+import sys
+
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _HERE = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging"
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from cohort_constants import carb_entries_sql  # noqa: E402
+# The entries come through cohort_constants.carb_entries_sql (2026-11-17): the dedup and the
+# 1 to 150 g bounds are written once, for this export and PLN-1008's.
 
 
 CATALOG = "dev.fda_510k_rwd"
@@ -10,43 +23,14 @@ def run(
     bddp_table="dev.default.bddp_sample_all_2",
     transition_segments_table=f"{CATALOG}.valid_transition_segments",
 ):
+    carb_entries = carb_entries_sql(bddp_table)
     spark.sql(f"""
     --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
 
-    WITH raw_carbs AS (
-      SELECT
-        _userId,
-        TRY_CAST(time_string AS TIMESTAMP) AS carb_timestamp,
-        TRY_CAST(
-          get_json_object(nutrition, '$.carbohydrate.net') AS DOUBLE
-        ) AS carb_grams,
-        created_timestamp
-      FROM {bddp_table}
-      WHERE type = 'food'
-        AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL
-        AND nutrition IS NOT NULL
-    ),
-
-    ranked_carbs AS (
-      SELECT
-        _userId,
-        carb_timestamp,
-        carb_grams,
-        ROW_NUMBER() OVER (
-          PARTITION BY _userId, carb_timestamp, carb_grams
-          ORDER BY created_timestamp DESC
-        ) AS rn
-      FROM raw_carbs
-      WHERE carb_grams IS NOT NULL
-    ),
-
-    carb_entries AS (
-      SELECT _userId, carb_timestamp, carb_grams
-      FROM ranked_carbs
-      WHERE rn = 1
+    WITH carb_entries AS (
+      SELECT _userId, carb_timestamp, carb_grams FROM {carb_entries}
     )
-
     SELECT
         c._userId,
         c.carb_grams,

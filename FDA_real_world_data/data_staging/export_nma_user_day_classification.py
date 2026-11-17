@@ -17,7 +17,7 @@ CE=0 is `carb_entry_count = 0` (no food record at all — even a 0-gram food ent
 meal announcement, so it counts as CE>0).
 
 Inclusion flags:
-    day_eligible  : day-level CGM coverage >= 70% (nma_user_day_coverage.is_eligible;
+    day_eligible  : day-level CGM coverage >= 70% (ab_day_cohort.is_coverage_ok, the FDA's per-day coverage flag, since 2026-11-17;
                     FALSE when the day has no CGM). Days are kept and flagged, not dropped.
     user_eligible : user contributed >= 10 eligible user-days. Computed over the
                     loop_recommendations universe here; the window/version/age cohort
@@ -26,7 +26,7 @@ Inclusion flags:
 
 Inputs:
     dev.fda_510k_rwd.loop_recommendations  (day universe; anchor — its `day` is the UTC date)
-    nma_user_day_coverage      (day eligibility from CGM coverage)
+    ab_day_cohort              (day eligibility from CGM coverage: is_coverage_ok, every Loop user's day)
     nma_user_day_bolus_counts  (per-day bolus_entry_count = user-initiated normal boluses)
     nma_user_day_carbs         (per-day carb_entry_count, carb_grams_total)
 
@@ -42,14 +42,24 @@ Maps to PLN-1008:
 """
 
 import argparse
+import os
+import sys
 
-MIN_USER_ELIGIBLE_DAYS = 10  # §7.1 user inclusion
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _HERE = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging"
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from cohort_constants import MIN_USER_ELIGIBLE_DAYS  # noqa: E402
+
 
 
 def run(
     spark,
     loop_recommendations_table="dev.fda_510k_rwd.loop_recommendations",
-    coverage_table="dev.fda_510k_rwd.nma_user_day_coverage",
+    ab_day_cohort_table="dev.fda_510k_rwd.ab_day_cohort",
     bolus_counts_table="dev.fda_510k_rwd.nma_user_day_bolus_counts",
     carbs_table="dev.fda_510k_rwd.nma_user_day_carbs",
     output_table="dev.fda_510k_rwd.nma_user_day_classification",
@@ -65,7 +75,7 @@ WITH joined AS (
     COALESCE(b.bolus_entry_count, 0) AS bolus_entry_count,
     COALESCE(c.carb_entry_count, 0) AS carb_entry_count,
     COALESCE(c.carb_grams_total, 0.0) AS carb_grams_total,
-    COALESCE(cov.is_eligible, FALSE) AS day_eligible
+    COALESCE(cov.is_coverage_ok, FALSE) AS day_eligible
   FROM {loop_recommendations_table} lr
   LEFT JOIN {bolus_counts_table} b
     ON lr._userId = b._userId
@@ -73,9 +83,9 @@ WITH joined AS (
   LEFT JOIN {carbs_table} c
     ON lr._userId = c._userId
     AND lr.day = c.local_day
-  LEFT JOIN {coverage_table} cov
+  LEFT JOIN {ab_day_cohort_table} cov
     ON lr._userId = cov._userId
-    AND lr.day = cov.local_day
+    AND lr.day = cov.day
 )
 
 SELECT
@@ -106,7 +116,7 @@ if __name__ == "__main__":
 
     _parser = argparse.ArgumentParser()
     _parser.add_argument("--loop_recommendations_table", default="dev.fda_510k_rwd.loop_recommendations")
-    _parser.add_argument("--coverage_table", default="dev.fda_510k_rwd.nma_user_day_coverage")
+    _parser.add_argument("--ab_day_cohort_table", default="dev.fda_510k_rwd.ab_day_cohort")
     _parser.add_argument("--bolus_counts_table", default="dev.fda_510k_rwd.nma_user_day_bolus_counts")
     _parser.add_argument("--carbs_table", default="dev.fda_510k_rwd.nma_user_day_carbs")
     _parser.add_argument("--output_table", default="dev.fda_510k_rwd.nma_user_day_classification")
@@ -115,7 +125,7 @@ if __name__ == "__main__":
     run(
         spark,
         _args.loop_recommendations_table,
-        _args.coverage_table,
+        _args.ab_day_cohort_table,
         _args.bolus_counts_table,
         _args.carbs_table,
         _args.output_table,

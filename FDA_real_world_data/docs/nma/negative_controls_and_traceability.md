@@ -64,7 +64,7 @@ the reviewer's PASS/FAIL sign-off.
 | **TR-2** | food + wizard-only + 0-gram entries | D10 / [docs/carb_entry_identification.md](../docs/carb_entry_identification.md) | food counted, wizard excluded ⇒ CE (`carb_entry_count`), `carb_grams_total`, CE=0 ⟺ grams=0. |
 | **TR-3** | days at BE = 0,1,2,≥2 | §7.2 / D7 | nested `is_ce0_be0` ⊆ `≤1` ⊆ `≤∞`. |
 | **TR-4** | duplicate HK+Loop records same minute | D3 / D4 / [docs/tdd_calculation.md](../docs/tdd_calculation.md) | TDD counted once (nearest-min dedup); TDD = **delivered**, not commanded. |
-| **TR-5** | days at ~69% and ~71% CGM coverage | §7.1 | below-threshold excluded (≈202/288). |
+| **TR-5** | days at ~69% and ~71% CGM coverage | §7.1 | below-threshold excluded (201 of 288 since D24, 2026-11-17). |
 | **TR-6** | corrupt-DOB; <6 yr; pediatric <18 | D6 / [docs/pediatric_split.md](../docs/pediatric_split.md) | `age`, `is_pediatric`, retention (corrupt→unknown retained; <6 excluded). |
 | **TR-7** | NMA+CE>0 user; CE>0-only user | §8.1 | pairing uses the right day sets; CE>0-only excluded from the paired contrast. |
 | **TR-8** | day not unambiguously AB/TB | §7.3 / [docs/dosing_strategy_classification.md](../docs/dosing_strategy_classification.md) | excluded from Analysis 2. |

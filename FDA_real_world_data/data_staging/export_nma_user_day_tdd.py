@@ -45,9 +45,26 @@ Maps to PLN-1008:
 """
 
 import argparse
+import os
+import sys
 
-HK_LOOP_PREDICATE = "get_json_object(origin, '$.payload.sourceRevision.source.name') = 'Loop'"
-LOOP_DIRECT_PREDICATE = "get_json_object(origin, '$.name') = 'com.loopkit.Loop'"
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _HERE = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging"
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from cohort_constants import (
+    HEALTH_SOURCE_NAME_LOOP,
+    LOOP_APP_IDENTIFIER,
+    app_identifier_sql,
+    health_source_name_sql,
+)  # noqa: E402
+
+# The two source markers, read through cohort_constants like the dose classifier's (2026-11-17).
+HK_LOOP_PREDICATE = f"{health_source_name_sql('origin')} = '{HEALTH_SOURCE_NAME_LOOP}'"
+LOOP_DIRECT_PREDICATE = f"{app_identifier_sql('origin')} = '{LOOP_APP_IDENTIFIER}'"
 
 
 def run(

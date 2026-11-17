@@ -22,6 +22,8 @@ from cohort_constants import (  # noqa: E402
     diagnosis_group_sql,
     is_lada_sql,
     jaeb_link_sql,
+    age_gate_sql,
+    age_years_sql,
 )
 
 
@@ -56,6 +58,8 @@ def run(
     diagnosis_group = diagnosis_group_sql(
         "d.diagnosis_type", is_lada_sql("d.diagnosis_patients", "d.diagnosis_seagull")
     )
+    age_at_adoption = age_years_sql("a.adoption_date", "dd.dob")
+    age_gate = age_gate_sql(age_at_adoption)
     spark.sql(f"""
     --begin-sql
     CREATE OR REPLACE TABLE {output_table} AS
@@ -273,11 +277,11 @@ def run(
       dd.dob,
       dd.diagnosis_date,
       g.gender,
-      ROUND(DATEDIFF(a.adoption_date, dd.dob) / 365.25, 1) AS age_at_adoption,
+      {age_at_adoption} AS age_at_adoption,
       ROUND(DATEDIFF(a.adoption_date, dd.diagnosis_date) / 365.25, 1) AS years_lwd_at_adoption,
       -- The age gate at adoption (cohort_constants.MIN_AGE_YEARS; unknown
       -- date of birth kept).
-      ROUND(DATEDIFF(a.adoption_date, dd.dob) / 365.25, 1) >= {MIN_AGE_YEARS} OR dd.dob IS NULL AS is_age_eligible,
+      {age_gate} AS is_age_eligible,
 
       COALESCE(dg.diagnosis_group, 'unknown') AS diagnosis_group,
       COALESCE(dg.diagnosis_group, 'unknown') IN ({primary_groups}) AS is_primary_diagnosis,

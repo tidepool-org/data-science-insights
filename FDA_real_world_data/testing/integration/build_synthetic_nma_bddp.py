@@ -181,7 +181,7 @@ def _archetype_mixed(uid="nma_user_mixed"):
 
 def _archetype_low_coverage(uid="nma_user_low_coverage"):
     """6.3 — 14 days with only 144 CBG readings (50% coverage); all days drop
-    out of `export_nma_cbg` (coverage gate ≥ 70%)."""
+    out of the analysis cohort (the autobolus-day cohort's coverage floor, 201 of 288 readings)."""
     rows = []
     for d in range(14):
         day = START_DAY + timedelta(days=d)

@@ -29,6 +29,15 @@ def test_thresholds_are_pln_1001():
     assert c.MAX_SEG2_END_DATE == "2024-07-13"
     assert c.MIN_AGE_YEARS == 6
     assert (c.CARB_ENTRY_MIN_GRAMS, c.CARB_ENTRY_MAX_GRAMS) == (1, 150)
+    # the rules shared across the plans since 2026-11-17
+    assert c.MIN_DAILY_CBG_COUNT == 201, "a day's coverage floor truncates like the window's"
+    assert (c.MAX_PLAUSIBLE_AGE_YEARS, c.PEDIATRIC_AGE_CUTOFF_YEARS, c.MIN_USER_ELIGIBLE_DAYS) == (120, 18, 10)
+    age = c.age_years_sql("t.day", "d.dob")
+    assert "DATEDIFF(t.day, d.dob)" in age and "< 0" in age and "> 120" in age and "ROUND(" in age, age
+    entries = c.carb_entries_sql("bddp")
+    assert "BETWEEN 1 AND 150" in entries and "ROW_NUMBER() OVER" in entries and "type = 'food'" in entries, entries
+    assert c.health_source_name_sql("o") == "get_json_object(o, '$.payload.sourceRevision.source.name')"
+    assert c.app_identifier_sql("o") == "get_json_object(o, '$.name')" and c.LOOP_APP_IDENTIFIER == "com.loopkit.Loop"
     print("PASS: thresholds")
 
 
