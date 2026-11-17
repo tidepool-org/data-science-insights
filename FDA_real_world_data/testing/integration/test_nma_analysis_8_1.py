@@ -35,10 +35,12 @@ for _p in (_here, _analysis_dir, _fda_root):
         sys.path.insert(0, _p)
 
 from utils.data_loading import (  # noqa: E402
+    MIN_AGE_YEARS,
     select_nma_cohort,
     prepare_nma_day_level,
     restrict_nma_comparator,
 )
+from testing.integration import build_synthetic_bddp  # noqa: E402
 
 from testing.integration import run_pipeline as _run_pipeline  # noqa: E402
 
@@ -133,11 +135,21 @@ def _assert_recovers_paired_diff_design(spark, tables, raw_pdf, tmp_dir):
     assert CE_POS_ONLY_USER not in cmp_users, "CE>0-only user should be dropped from comparator"
     assert PAIRED_USER in cmp_users, "user with CE=0 days should remain in comparator"
 
-    # ── D. §7.6 cohort split routes the pediatric user; §8.1 runs per cohort ───
+    # ── D. §7.6 cohort split routes the pediatric users; §8.1 runs per cohort ───
+    # The cohort table holds every Loop user of the shared fixture (since 2026-11-17 the FDA
+    # archetypes too, as in production), so the pediatric cohort is the PLN-1008 pediatric
+    # archetype plus every FDA archetype the fixture's ages put under 18 that the analysis
+    # cohort admits (the one under the age floor never reaches it).
     ped_users = set(select_nma_cohort(prepared, cohort="pediatric")["_userId"])
     adult_users = set(select_nma_cohort(prepared, cohort="adult")["_userId"])
-    assert ped_users == {PEDIATRIC_USER}, f"pediatric cohort should be just the pediatric user, got {ped_users}"
+    fda_under_18 = {_run_pipeline.pseudonymize_uid(u) for u, d in build_synthetic_bddp._DEMOGRAPHICS.items()
+                    if MIN_AGE_YEARS <= d["age_years"] < 18}
+    expected_pediatric = {PEDIATRIC_USER} | (fda_under_18 & set(prepared["_userId"]))
+    assert ped_users == expected_pediatric, (
+        f"pediatric cohort should be the PLN-1008 pediatric user plus the FDA archetypes under 18 that the "
+        f"cohort admits; expected {expected_pediatric}, got {ped_users}")
     assert PEDIATRIC_USER not in adult_users, "pediatric user must not appear in the adult cohort"
+    assert not (ped_users & adult_users), "no user is in both age cohorts"
     for cohort in ("pediatric", "adult"):
         odir = os.path.join(tmp_dir, cohort)
         run_cohort(cohort, odir)
