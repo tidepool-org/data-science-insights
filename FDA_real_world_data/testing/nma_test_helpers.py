@@ -223,7 +223,9 @@ def make_cbg_rows(
     mgdl_value: float = 120.0,
     version: str = DEFAULT_VERSION,
 ) -> list[dict]:
-    """CBG readings at 5-min cadence; `n_readings=288` = full coverage."""
+    """CBG readings at 5-min cadence; `n_readings=288` = full coverage. Glucose goes in
+    `value` (mmol/L), the column data_staging/export_cbg_from_loop.py reads (since the fixture
+    merge of 2026-11-17 the FDA CGM export builds loop_cbg for the NMA users too)."""
     mmol = mgdl_value * MMOL_PER_MGDL
     base = datetime(day.year, day.month, day.day, 0, 0, 0)
     return [
@@ -231,7 +233,7 @@ def make_cbg_rows(
             _userId=user_id,
             time_string=_iso(base + timedelta(minutes=5 * i)),
             type="cbg",
-            normal=mmol,
+            value=mmol,
             origin=_origin(version),
         )
         for i in range(n_readings)
@@ -265,7 +267,7 @@ def make_cbg_rows_at_target_tir(
             _userId=user_id,
             time_string=_iso(base + timedelta(minutes=5 * i)),
             type="cbg",
-            normal=mgdl_values[i] * MMOL_PER_MGDL,
+            value=mgdl_values[i] * MMOL_PER_MGDL,
             origin=_origin(version),
         )
         for i in range(288)

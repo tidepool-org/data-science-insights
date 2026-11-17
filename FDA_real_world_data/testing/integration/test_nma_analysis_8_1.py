@@ -22,14 +22,15 @@ import tempfile
 import pandas as pd
 
 # sys.path bootstrap: __file__ undefined under the run-button → Workspace fallback. Adds this
-# dir (for `import run_nma_pipeline`) and analysis/ (utils.data_loading).
+# dir, the FDA root (for the shared harness, testing.integration.run_pipeline), and analysis/ (utils.data_loading).
 try:
     _here = os.path.dirname(os.path.abspath(__file__))
 except NameError:
     _here = ("/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
              "FDA_real_world_data/testing/integration")
 _analysis_dir = os.path.normpath(os.path.join(_here, "..", "..", "analysis"))
-for _p in (_here, _analysis_dir):
+_fda_root = os.path.normpath(os.path.join(_here, "..", ".."))  # for `testing.integration`
+for _p in (_here, _analysis_dir, _fda_root):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -39,7 +40,7 @@ from utils.data_loading import (  # noqa: E402
     restrict_nma_comparator,
 )
 
-import run_nma_pipeline as _run_pipeline  # noqa: E402
+from testing.integration import run_pipeline as _run_pipeline  # noqa: E402
 
 A81_FILE = "analysis_nma_8-1_glycemic_outcomes_vs_carb_entry.py"
 # Archetype `_userId`s are pseudonymized (salted SHA-256, D16) in the analysis-ready table, so match
@@ -84,7 +85,7 @@ def _assert_recovers_paired_diff_design(spark, tables, raw_pdf, tmp_dir):
     prepared = prepare_nma_day_level(raw_pdf)  # eligible days of eligible users (numeric-coerced)
 
     def run_cohort(cohort, out_dir):
-        a81.run(spark=spark, analysis_ready_table=tables["analysis_ready"],
+        a81.run(spark=spark, analysis_ready_table=tables["nma_analysis_ready"],
                 output_dir=out_dir, cohort=cohort)
 
     # ── A. design recovered through staging (clean per-user signal) ───────────
@@ -168,13 +169,13 @@ def _assert_recovers_paired_diff_design(spark, tables, raw_pdf, tmp_dir):
 
 def main(spark=None):
     """Build the pipeline, then run the §8.1 checks against it. run_pipeline.run is idempotent
-    (builds on first run, reuses after; run run_pipeline.py to force-rebuild)."""
+    (builds on first run, reuses after; run run_pipeline.py's main to force-rebuild)."""
     _ensure_statsmodels()
     if spark is None:
         spark = _run_pipeline.get_spark()
     print("[test_nma_analysis_8_1] building / reusing the staging pipeline...")
     tables = _run_pipeline.run(spark)  # idempotent — builds → analysis-ready if not present
-    raw_pdf = spark.table(tables["analysis_ready"]).toPandas()
+    raw_pdf = spark.table(tables["nma_analysis_ready"]).toPandas()
     # The diagnosis join must resolve on the RAW _userId before hashing: a join misplaced onto the
     # hashed key would match nothing, every row would carry 'unknown' (the COALESCE default) with
     # is_primary_diagnosis false, and the loader's primary-group selection would drop the whole

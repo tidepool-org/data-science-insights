@@ -193,7 +193,7 @@ def test_known_paired_diff_tir_designed_by_segment():
     seg2 = cbg[10 * 288:]
 
     def in_range_frac(events):
-        in_range = sum(1 for r in events if 70.0 <= r["normal"] / nb.MMOL_PER_MGDL <= 180.0)
+        in_range = sum(1 for r in events if 70.0 <= r["value"] / nb.MMOL_PER_MGDL <= 180.0)
         return in_range / len(events)
 
     assert abs(in_range_frac(seg1) - 0.80) < 0.01
@@ -310,8 +310,8 @@ def test_convergence_pairs_registered():
 
 
 # ---------------------------------------------------------------------------
-# 6.11 build_synthetic_nma_bddp aggregate (no Spark — exercise _build_rows
-# and _to_bddp_row)
+# 6.11 build_synthetic_nma_bddp aggregate (no Spark — exercise build_rows
+# and to_bddp_row)
 # ---------------------------------------------------------------------------
 
 def test_archetypes_dict_user_count():
@@ -319,29 +319,29 @@ def test_archetypes_dict_user_count():
     assert set(nb.ARCHETYPES) == set(nb.DEMOGRAPHICS) == set(nb.ARCHETYPE_DAYS) == set(nb.USER_GENDER)
 
 
-def test_build_rows_sums_archetype_counts():
-    rows = nb._build_rows()
+def testbuild_rows_sums_archetype_counts():
+    rows = nb.build_rows()
     expected = sum(len(builder()) for builder in nb.ARCHETYPES.values())
     assert len(rows) == expected
 
 
-def test_build_rows_distinct_user_count():
-    rows = nb._build_rows()
+def testbuild_rows_distinct_user_count():
+    rows = nb.build_rows()
     assert len({r["_userId"] for r in rows if r["_userId"]}) == len(nb.ARCHETYPES)
 
 
-def test_to_bddp_row_has_all_bddp_columns():
-    """Round-trip a minimal row through _to_bddp_row and verify every BDDP
+def testto_bddp_row_has_all_bddp_columns():
+    """Round-trip a minimal row through to_bddp_row and verify every BDDP
     column is present (Spark's createDataFrame with explicit schema would
     fail otherwise)."""
     minimal = next(iter(nb._archetype_pure_be0()))
-    expanded = nb._to_bddp_row(minimal)
-    # _to_bddp_row expands to the FDA fixture's BDDP_COLUMNS (the NMA fixture has no columns of its own).
+    expanded = nb.to_bddp_row(minimal)
+    # to_bddp_row expands to the FDA fixture's BDDP_COLUMNS (the NMA fixture has no columns of its own).
     assert set(expanded) == set(BDDP_COLUMNS)
 
 
-def test_to_bddp_row_defaults_timezone_offset():
-    expanded = nb._to_bddp_row({"_userId": "x", "type": "cbg"})
+def testto_bddp_row_defaults_timezone_offset():
+    expanded = nb.to_bddp_row({"_userId": "x", "type": "cbg"})
     assert expanded["timezoneOffset"] == nb.TZ_OFFSET_MIN
 
 
@@ -382,10 +382,10 @@ if __name__ == "__main__":
         test_known_strategy_stratum_low_cells_have_lower_basal,
         test_convergence_pairs_registered,
         test_archetypes_dict_user_count,
-        test_build_rows_sums_archetype_counts,
-        test_build_rows_distinct_user_count,
-        test_to_bddp_row_has_all_bddp_columns,
-        test_to_bddp_row_defaults_timezone_offset,
+        testbuild_rows_sums_archetype_counts,
+        testbuild_rows_distinct_user_count,
+        testto_bddp_row_has_all_bddp_columns,
+        testto_bddp_row_defaults_timezone_offset,
         test_every_archetype_has_demographics,
         test_every_archetype_uses_consistent_userid,
     ], "test_build_synthetic_nma_bddp")

@@ -9,7 +9,7 @@ see [todo.md](todo.md) → Tests and `testing/traceability/README.md`. Code:
 
 **Why.** The existing suite is strong but covers two of the failure modes:
 *code-vs-spec* (the `testing/integration/` synthetic design-recovery runners +
-[archetypes_nma.md](../testing/integration/archetypes_nma.md)) and *independent recompute*
+[archetypes.md](../testing/integration/archetypes.md)) and *independent recompute*
 (`testing/cross_checks/` re-derives published cells from the snapshot). Two gaps remain:
 
 - **Negative controls** — confirm the analysis returns ~null where the truth is null, on the
@@ -129,6 +129,6 @@ Suggested home: `testing/negative_controls/` (snapshot-driven, no-Spark) and
 [decisions.md](decisions.md) (D3/D4 TDD, D6 age, D7 autobolus, D10 carb, D11 intake-confound,
 D12 strata, D16 pseudonymization, D17 HMA) · [schema.md](schema.md) (snapshot columns) ·
 [architecture.md](architecture.md) (pipeline DAG) ·
-[../testing/integration/archetypes_nma.md](../testing/integration/archetypes_nma.md) (positive
+[../testing/integration/archetypes.md](../testing/integration/archetypes.md) (positive
 controls) · `testing/cross_checks/` (independent recompute) · `docs/*` (per-decision deep-dives,
 linked inline above).

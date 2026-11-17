@@ -4,15 +4,17 @@
 exist, it returns the table-name dict without re-running. Pass `force=True`
 to wipe and rebuild.
 
-STALE-FIXTURE GOTCHA (bit on 2026-08-04): editing `build_synthetic_bddp.py`
-and calling `run(spark, force=True)` in an already-running notebook rebuilds
-from the CACHED module — this module binds it via `from . import
-build_synthetic_bddp` at import time, so `sys.modules` serves the old code and
-the rebuild silently reproduces the old fixture. `force=True` cannot fix this;
-it drops the tables and rewrites them from stale code. Check the row count in
-the "Wrote N BDDP rows" line — if it hasn't moved, run
-`dbutils.library.restartPython()` and re-import (or reload
-`build_synthetic_bddp` THEN `run_pipeline`, in that order).
+Run this file on Databricks (the Run button, or `run_pipeline.main(spark)` from
+a cell) to rebuild the test catalog: `main` forces the rebuild and prints the
+row and user counts of the fixture.
+
+STALE-FIXTURE GOTCHA (bit on 2026-08-04): editing a fixture module and
+rebuilding in an already-running kernel rebuilds from the CACHED module, since
+Python serves `sys.modules` the old code; `force=True` cannot fix this, it
+drops the tables and rewrites them from stale code. The row count in the
+"Wrote N BDDP rows" line is the tell: if it has not moved after a fixture
+edit, run `dbutils.library.restartPython()` in a cell and run again. The
+expected count is in the history entry of the last fixture change.
 
 DAG order (mirrors `fda_analysis_pipeline.yml`):
 
@@ -34,13 +36,35 @@ DAG order (mirrors `fda_analysis_pipeline.yml`):
          -> correction_range_history   ) -> override_guardrail_flags
          -> ab_day_cohort             /     (+ user_guardrail_groups)
             -> cbg_from_ab_days -> compute_glycemic_endpoints (ab_days)
+         -> the PLN-1008 chain (Phase 6 of the job; merged here 2026-11-17), on the
+            same day table, loop_cbg, and diagnosis lookup:
+            nma_user_day_cbg (+ coverage) -> nma_user_day_glycemic_endpoints
+            nma_user_day_bolus_classification -> nma_user_day_bolus_counts
+            nma_user_day_carbs, nma_user_day_tdd, nma_user_day_age
+            -> nma_user_day_classification -> nma_user_day_analysis_ready
+
+The fixture holds the FDA archetypes (build_synthetic_bddp) and the PLN-1008
+archetypes (build_synthetic_nma_bddp); the stale-fixture gotcha above applies
+to both modules.
 """
 
+import hashlib
 import os
+import re
 import sys
+import types
 from contextlib import contextmanager
 
-from . import build_synthetic_bddp
+try:
+    from . import build_synthetic_bddp  # imported as testing.integration.run_pipeline (the tests)
+except ImportError:  # run as a file: no package, so import the fixture by name from this directory
+    try:
+        _HERE = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        _HERE = "/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/testing/integration"
+    if _HERE not in sys.path:
+        sys.path.insert(0, _HERE)
+    import build_synthetic_bddp  # type: ignore # noqa: E402
 
 
 # Test catalog: same schema as prod (dev.fda_510k_rwd) with `test_*` prefix so
@@ -93,6 +117,18 @@ TABLES = {
     "extreme_preset_cohort": f"{P}extreme_preset_cohort",
     "dose_response_candidates": f"{P}dose_response_candidates",
     "dose_response_episodes": f"{P}dose_response_episodes",
+    # PLN-1008 (merged 2026-11-17): the NMA chain on the same fixture, day table,
+    # loop_cbg, and diagnosis lookup; the production names under the test prefix
+    "nma_cbg": f"{P}nma_user_day_cbg",
+    "nma_coverage": f"{P}nma_user_day_coverage",
+    "nma_glycemic_endpoints": f"{P}nma_user_day_glycemic_endpoints",
+    "nma_bolus_classification": f"{P}nma_user_day_bolus_classification",
+    "nma_bolus_counts": f"{P}nma_user_day_bolus_counts",
+    "nma_carbs": f"{P}nma_user_day_carbs",
+    "nma_tdd": f"{P}nma_user_day_tdd",
+    "nma_age": f"{P}nma_user_day_age",
+    "nma_classification": f"{P}nma_user_day_classification",
+    "nma_analysis_ready": f"{P}nma_user_day_analysis_ready",
 }
 
 # When all of these exist, run() short-circuits. user_diagnosis_type is included
@@ -123,6 +159,9 @@ TERMINAL_TABLES = (
     "stable_cohort",
     "extreme_preset_cohort",
     "dose_response_episodes",
+    # the PLN-1008 terminal (2026-11-17): its absence forces the rebuild that
+    # adds the NMA archetypes to the fixture
+    "nma_analysis_ready",
 )
 
 
@@ -171,6 +210,49 @@ def _drop_all(spark):
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+def pseudonymize_uid(raw):
+    """Mirror export_nma_user_day_analysis_ready's salted-SHA256 `_userId` pseudonymization
+    (NMA decision D16) so a test can find an archetype by its raw name in the hashed
+    analysis-ready table. The staging SQL emits
+    `concat('u', substr(sha2(concat(_userId, USERID_SALT), 256), 1, 16))`; this reproduces it
+    byte for byte, with USERID_SALT imported from the staging module so it tracks the real
+    salt."""
+    _ensure_staging_on_path()
+    from export_nma_user_day_analysis_ready import USERID_SALT  # type: ignore # noqa: E402
+    return "u" + hashlib.sha256((raw + USERID_SALT).encode("utf-8")).hexdigest()[:16]
+
+
+class _NotebookNoop:
+    """No-op stand-in for Databricks `dbutils`, so a notebook-preamble call like
+    `dbutils.library.restartPython()` neither NameErrors nor restarts Python when an
+    analysis module is imported rather than run as a notebook."""
+
+    def __getattr__(self, _name):
+        return _NotebookNoop()
+
+    def __call__(self, *args, **kwargs):
+        return None
+
+
+def load_analysis_module(path, modname):
+    """Import an analysis module by file path, tolerating the Databricks notebook preamble
+    some of them carry (a `%pip install` magic and `dbutils.library.restartPython()`), which
+    is valid only when the file runs as a notebook and otherwise breaks a plain import: the
+    magic is a SyntaxError, and a top-level `dbutils.` call sits before any
+    `from __future__ import`. Those lines are blanked (line numbers kept) and a no-op
+    `dbutils` injected; the import then runs against what the cluster has installed."""
+    with open(path) as fh:
+        cleaned = "\n".join(
+            "" if re.match(r"\s*([%!]|dbutils\b)", line) else line
+            for line in fh.read().splitlines()
+        )
+    mod = types.ModuleType(modname)
+    mod.__file__ = path
+    mod.__dict__["dbutils"] = _NotebookNoop()
+    exec(compile(cleaned, path, "exec"), mod.__dict__)
+    return mod
+
+
 def run(spark, force=False):
     """Build fixtures and run every staging script. Returns the TABLES dict.
 
@@ -210,6 +292,15 @@ def run(spark, force=False):
     import export_stable_cohort  # type: ignore # noqa: E402
     import export_extreme_preset_cohort  # type: ignore # noqa: E402
     import export_dose_response_episodes  # type: ignore # noqa: E402
+    import export_nma_user_day_cbg  # type: ignore # noqa: E402
+    import compute_nma_user_day_glycemic_endpoints  # type: ignore # noqa: E402
+    import export_nma_user_day_bolus_classification  # type: ignore # noqa: E402
+    import export_nma_user_day_bolus_counts  # type: ignore # noqa: E402
+    import export_nma_user_day_carbs  # type: ignore # noqa: E402
+    import export_nma_user_day_tdd  # type: ignore # noqa: E402
+    import export_nma_user_day_age  # type: ignore # noqa: E402
+    import export_nma_user_day_classification  # type: ignore # noqa: E402
+    import export_nma_user_day_analysis_ready  # type: ignore # noqa: E402
 
     # ── Step 1: fixtures ──────────────────────────────────────────────────
     print("[integration.run_pipeline] building synthetic BDDP fixture...")
@@ -467,6 +558,77 @@ def run(spark, force=False):
         loop_cbg_table=TABLES["loop_cbg"],
     )
 
+    # ── The PLN-1008 chain (Phase 6 of the job), on the same day table, loop_cbg,
+    # user_dates, user_gender, and diagnosis lookup ──────────────────────────
+    print("[integration.run_pipeline] export_nma_user_day_cbg...")
+    export_nma_user_day_cbg.run(
+        spark,
+        input_table=TABLES["loop_cbg"],
+        output_cbg_table=TABLES["nma_cbg"],
+        output_coverage_table=TABLES["nma_coverage"],
+    )
+    print("[integration.run_pipeline] compute_nma_user_day_glycemic_endpoints...")
+    compute_nma_user_day_glycemic_endpoints.run(
+        spark,
+        input_table=TABLES["nma_cbg"],
+        output_table=TABLES["nma_glycemic_endpoints"],
+    )
+    print("[integration.run_pipeline] export_nma_user_day_bolus_classification...")
+    export_nma_user_day_bolus_classification.run(
+        spark,
+        dose_table=TABLES["loop_dose_classification"],
+        anchor_table=TABLES["loop_recommendations"],
+        output_table=TABLES["nma_bolus_classification"],
+    )
+    print("[integration.run_pipeline] export_nma_user_day_bolus_counts...")
+    export_nma_user_day_bolus_counts.run(
+        spark,
+        bolus_classification_table=TABLES["nma_bolus_classification"],
+        output_table=TABLES["nma_bolus_counts"],
+    )
+    print("[integration.run_pipeline] export_nma_user_day_carbs...")
+    export_nma_user_day_carbs.run(
+        spark,
+        input_table=TABLES["bddp"],
+        loop_recommendations_table=TABLES["loop_recommendations"],
+        output_table=TABLES["nma_carbs"],
+    )
+    print("[integration.run_pipeline] export_nma_user_day_tdd...")
+    export_nma_user_day_tdd.run(
+        spark,
+        input_table=TABLES["bddp"],
+        output_table=TABLES["nma_tdd"],
+    )
+    print("[integration.run_pipeline] export_nma_user_day_age...")
+    export_nma_user_day_age.run(
+        spark,
+        loop_recommendations_table=TABLES["loop_recommendations"],
+        user_dates_table=TABLES["user_dates"],
+        output_table=TABLES["nma_age"],
+    )
+    print("[integration.run_pipeline] export_nma_user_day_classification...")
+    export_nma_user_day_classification.run(
+        spark,
+        loop_recommendations_table=TABLES["loop_recommendations"],
+        coverage_table=TABLES["nma_coverage"],
+        bolus_counts_table=TABLES["nma_bolus_counts"],
+        carbs_table=TABLES["nma_carbs"],
+        output_table=TABLES["nma_classification"],
+    )
+    print("[integration.run_pipeline] export_nma_user_day_analysis_ready...")
+    export_nma_user_day_analysis_ready.run(
+        spark,
+        loop_recommendations_table=TABLES["loop_recommendations"],
+        classification_table=TABLES["nma_classification"],
+        bolus_classification_table=TABLES["nma_bolus_classification"],
+        endpoints_table=TABLES["nma_glycemic_endpoints"],
+        tdd_table=TABLES["nma_tdd"],
+        age_table=TABLES["nma_age"],
+        user_gender_table=TABLES["user_gender"],
+        diagnosis_table=TABLES["user_diagnosis_type"],
+        output_table=TABLES["nma_analysis_ready"],
+        output_csv=False,  # no CSV into FDA_real_world_data/outputs/nma/ from a test build
+    )
     print("[integration.run_pipeline] pipeline complete")
     return TABLES
 
@@ -560,3 +722,21 @@ class RedirectingSpark:
 
     def __getattr__(self, name):
         return getattr(self._spark, name)
+
+
+def main(spark=None, force=True):
+    """The one entry point for a rebuild of the test catalog: build the fixture and run
+    every staging chain, a forced rebuild by default, then print what the tests will
+    read. Run on Databricks as a file (the Run button) or as `run_pipeline.main(spark)`
+    from a notebook cell."""
+    if spark is None:
+        spark = get_spark()
+    tables = run(spark, force=force)
+    print(f"[integration.run_pipeline] {len(tables)} tables under {P}*; "
+          f"{build_synthetic_bddp.user_count()} fixture users")
+    return tables
+
+
+# Run as a file (the Databricks Run button injects `spark` and `dbutils`); inert on import.
+if __name__ == "__main__" or "dbutils" in globals() or "spark" in globals():
+    main()

@@ -72,7 +72,13 @@ try:
         assert "int_user_23" not in d_users, (
             f"int_user_23 (insufficient followup) should be dropped; got {sorted(d_users)}"
         )
-        print("PASS: durability cohort = {21, 22}; 23 dropped by min_followup gate")
+        # The PLN-1008 archetype in the shared fixture (2026-11-17): 60 autobolus days from
+        # day one, so it adopts at once, clears the 56-day follow-up, and its final 28 days
+        # are all autobolus, which makes it a sustained adopter by design.
+        assert "nma_user_tdd_drift" in d_users, (
+            f"nma_user_tdd_drift (60 autobolus days) missing from durability table; got {sorted(d_users)}"
+        )
+        print("PASS: durability cohort = {21, 22, nma_user_tdd_drift}; 23 dropped by min_followup gate")
 
         # ── 21 sustained; 22 discontinued ────────────────────────────────
         rows_by_uid = {row["_userId"]: row for _, row in durability.iterrows()}
@@ -86,7 +92,11 @@ try:
             f"int_user_22 expected is_discontinued=True (discontinued); "
             f"got {u22['is_discontinued']} (final_autobolus_pct={u22.get('final_autobolus_pct')})"
         )
-        print("PASS: int_user_21 sustained; int_user_22 discontinued")
+        drift = rows_by_uid["nma_user_tdd_drift"]
+        assert bool(drift["is_discontinued"]) is False, (
+            f"nma_user_tdd_drift expected sustained; got is_discontinued={drift['is_discontinued']}"
+        )
+        print("PASS: int_user_21 and nma_user_tdd_drift sustained; int_user_22 discontinued")
 
         # ── Table 8.7a sanity ────────────────────────────────────────────
         table_a = result["table_8_7a"]
@@ -95,8 +105,8 @@ try:
         total_row = table_a[table_a["Outcome"] == "Total eligible users"]
         assert not total_row.empty, "table_8_7a missing `Total eligible users` row"
         n_total = int(total_row["N"].iloc[0])
-        assert n_total == 2, (
-            f"table_8_7a Total N expected 2 (int_user_21, _22); got {n_total}"
+        assert n_total == 3, (
+            f"table_8_7a Total N expected 3 (int_user_21, _22, and nma_user_tdd_drift); got {n_total}"
         )
         print(f"PASS: table_8_7a total eligible = {n_total}")
 

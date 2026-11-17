@@ -127,7 +127,10 @@ try:
         stable = pd.read_csv(os.path.join(output_dir, "table_flow_stable_autobolus.csv")).set_index("stage")
         assert stable.loc["JAEB study linkage", "all"] == 1, "int_user_19 is the one JAEB-linked stable user"
         durability = pd.read_csv(os.path.join(output_dir, "table_flow_durability.csv")).set_index("stage")
-        assert durability.loc["Age gate", "all"] == 2, "int_user_21 and 22 qualify; 23 lacks follow-up"
+        assert durability.loc["Age gate", "all"] == 3, (
+            "int_user_21 and 22 qualify, 23 lacks follow-up, and the PLN-1008 archetype nma_user_tdd_drift "
+            "(60 autobolus days from day one, so it adopts at once with the 56-day follow-up) qualifies since the "
+            "fixture merge of 2026-11-17")
         print("PASS: stable and durability flows")
 
         print("\nAll integration assertions for analysis 6-3a passed.")

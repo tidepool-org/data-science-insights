@@ -1306,11 +1306,31 @@ ARCHETYPES = {
 }
 
 
+def _nma_archetypes():
+    """The PLN-1008 archetype module (build_synthetic_nma_bddp), imported on use so
+    the two modules can read each other's constants without an import cycle."""
+    try:
+        from . import build_synthetic_nma_bddp as nma
+    except ImportError:
+        import build_synthetic_nma_bddp as nma  # type: ignore  (run or imported by bare name)
+    return nma
+
+
 def _build_bddp_rows():
+    """Every archetype's rows: the FDA users of this module, then the PLN-1008 users
+    (since 2026-11-17 one fixture serves every staging chain; in production an NMA
+    user is an FDA user)."""
     rows = []
     for user_id, builder in ARCHETYPES.items():
         rows.extend(builder())
+    nma = _nma_archetypes()
+    rows.extend(nma.to_bddp_row(r) for r in nma.build_rows())
     return rows
+
+
+def user_count():
+    """Every user of the fixture, FDA and PLN-1008 archetypes together."""
+    return len(ARCHETYPES) + len(_nma_archetypes().ARCHETYPES)
 
 
 def build(spark, bddp_table):
@@ -1322,7 +1342,7 @@ def build(spark, bddp_table):
         .option("overwriteSchema", "true")
         .saveAsTable(bddp_table)
     )
-    print(f"Wrote {len(rows):,} BDDP rows ({len(ARCHETYPES)} users) to {bddp_table}")
+    print(f"Wrote {len(rows):,} BDDP rows ({user_count()} users) to {bddp_table}")
 
 
 # ---------------------------------------------------------------------------
@@ -1380,6 +1400,12 @@ _DEMOGRAPHICS = {
 }
 
 
+# The PLN-1008 archetypes carry a date of birth only; no NMA analysis reads the
+# years living with diabetes, and the column has to be present for the FDA
+# staging that joins user_dates, so each gets this many years before SEG1_START.
+NMA_YEARS_LIVING_WITH_DIABETES = 10
+
+
 def build_user_dates(spark, table_name):
     rows = []
     for user_id, d in _DEMOGRAPHICS.items():
@@ -1390,6 +1416,9 @@ def build_user_dates(spark, table_name):
             "dob": dob,
             "diagnosis_date": diagnosis_date,
         })
+    nma_diagnosis_date = SEG1_START - timedelta(days=int(365.25 * NMA_YEARS_LIVING_WITH_DIABETES))
+    for user_id, d in _nma_archetypes().DEMOGRAPHICS.items():
+        rows.append({"userid": user_id, "dob": d["dob"], "diagnosis_date": nma_diagnosis_date})
     pdf = pd.DataFrame(rows, columns=["userid", "dob", "diagnosis_date"])
     spark.createDataFrame(pdf).write.mode("overwrite").saveAsTable(table_name)
     print(f"Wrote {len(rows)} demographic rows to {table_name}")
@@ -1397,6 +1426,7 @@ def build_user_dates(spark, table_name):
 
 def build_user_gender(spark, table_name):
     rows = [{"userid": uid, "gender": d["gender"]} for uid, d in _DEMOGRAPHICS.items()]
+    rows += [{"userid": uid, "gender": g} for uid, g in _nma_archetypes().USER_GENDER.items()]
     pdf = pd.DataFrame(rows, columns=["userid", "gender"])
     spark.createDataFrame(pdf).write.mode("overwrite").saveAsTable(table_name)
     print(f"Wrote {len(rows)} gender rows to {table_name}")

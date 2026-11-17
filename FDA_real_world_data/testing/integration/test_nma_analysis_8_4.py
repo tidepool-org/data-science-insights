@@ -39,13 +39,14 @@ except NameError:
     _here = ("/Workspace/Users/mark.connolly@tidepool.org/data-science-insights/"
              "FDA_real_world_data/testing/integration")
 _analysis_dir = os.path.normpath(os.path.join(_here, "..", "..", "analysis"))
-for _p in (_here, _analysis_dir):
+_fda_root = os.path.normpath(os.path.join(_here, "..", ".."))  # for `testing.integration`
+for _p in (_here, _analysis_dir, _fda_root):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
 from utils.data_loading import DELIVERY_STRATEGY_COLUMN, prepare_nma_day_level  # noqa: E402
 
-import run_nma_pipeline as _run_pipeline  # noqa: E402
+from testing.integration import run_pipeline as _run_pipeline  # noqa: E402
 
 A84_FILE = "analysis_nma_8-4_by_delivery_strategy_stratified.py"
 # Pseudonymized (salted SHA-256, D16) to match the hashed `_userId` in the analysis-ready table.
@@ -88,7 +89,7 @@ def _assert_strategy_outputs(spark, tables, raw_pdf, tmp_dir):
 
     # ── run §8.4 for cohort='all' into a throwaway dir ────────────────────────
     out_all = os.path.join(tmp_dir, "all")
-    a84.run(spark=spark, analysis_ready_table=tables["analysis_ready"], output_dir=out_all, cohort="all")
+    a84.run(spark=spark, analysis_ready_table=tables["nma_analysis_ready"], output_dir=out_all, cohort="all")
 
     # ── B. cross-tab (8.4a): all 5 day types × 2 strategies + the GATE INVARIANT ─
     a = pd.read_csv(os.path.join(out_all, "table_8_4a_strategy_cross_binary.csv"))
@@ -150,7 +151,7 @@ def main(spark=None):
         spark = _run_pipeline.get_spark()
     print("[test_nma_analysis_8_4] building / reusing the staging pipeline...")
     tables = _run_pipeline.run(spark)
-    raw_pdf = spark.table(tables["analysis_ready"]).toPandas()
+    raw_pdf = spark.table(tables["nma_analysis_ready"]).toPandas()
     tmp_dir = tempfile.mkdtemp(prefix="nma_a84_")
     print(f"[test_nma_analysis_8_4] running §8.4 checks (outputs → {tmp_dir})...")
     _assert_strategy_outputs(spark, tables, raw_pdf, tmp_dir)

@@ -30,7 +30,7 @@ import pandas as pd  # noqa: E402
 
 # Reuse the §8.1 constants + figure vocabulary (range colours, violin/box panel).
 _here = os.path.dirname(os.path.abspath(__file__))
-_analysis_dir = os.path.normpath(os.path.join(_here, "..", "..", "analysis"))
+_analysis_dir = os.path.normpath(os.path.join(_here, "..", "analysis"))
 if _analysis_dir not in sys.path:
     sys.path.insert(0, _analysis_dir)
 from utils.data_loading import (  # type: ignore # noqa: E402
@@ -82,7 +82,7 @@ def report_raw_columns(spark, raw_bddp_table):
     """Print which TDD-relevant columns exist on a raw BDDP table. Resolves the
     `rate`-column question for both the synthetic fixture and prod bddp_sample_all_2."""
     cols = set(spark.table(raw_bddp_table).columns)
-    print(f"[inspect_nma] columns on {raw_bddp_table}:")
+    print(f"[nma_inspect_analysis_ready] columns on {raw_bddp_table}:")
     for c in _RAW_TDD_COLUMNS:
         print(f"    {c:10s}: {'present' if c in cols else 'MISSING'}")
     return {c: (c in cols) for c in _RAW_TDD_COLUMNS}
@@ -325,5 +325,5 @@ def inspect(table_or_df, out_dir=None, spark=None, focus_user="nma_user_known_pa
         plot_tdd_ratio_hist(elig, os.path.join(out_dir, "inspect_tdd_ratio_hist.png"))
         plot_focus_user_tir(elig, os.path.join(out_dir, "inspect_focus_user_tir.png"),
                             focus_user=focus_user)
-        print(f"\n[inspect_nma] saved 4 spot-check PNGs to {out_dir}")
+        print(f"\n[nma_inspect_analysis_ready] saved 4 spot-check PNGs to {out_dir}")
     return summary

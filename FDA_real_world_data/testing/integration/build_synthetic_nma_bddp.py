@@ -1,16 +1,18 @@
 """
-Synthetic BDDP-shaped fixture for the PLN-1008 end-to-end test (Unit 6).
+The PLN-1008 archetypes of the shared synthetic BDDP fixture.
 
 Each `_userId` is a named archetype that exercises a specific cohort filter
-or analysis design (see `archetypes_nma.md`). All transition-style users
+or analysis design (see the PLN-1008 section of `archetypes.md`). All transition-style users
 start at `START_DAY` (2024-01-01) and span 14 days; analytic-design users
 span longer windows on the same calendar baseline.
 
-Public surface:
-    build_synthetic_nma_bddp(spark, output_table) — write BDDP table.
-    build_user_dates(spark, table_name)           — write DOB aux table.
-    ARCHETYPES                                    — dict[user_id, builder].
-    DEMOGRAPHICS                                  — dict[user_id, {dob, ...}].
+Since 2026-11-17 (merge plan step 3) these users are written into the one
+fixture by build_synthetic_bddp.py beside the FDA archetypes, and the one
+harness (run_pipeline.py) runs every staging chain on it. This module only
+defines the users: `build_rows()` gives their BDDP rows, `to_bddp_row()`
+expands a minimal row to the full column envelope, and DEMOGRAPHICS,
+ARCHETYPE_DAYS, and USER_GENDER are their seed facts. The FDA staging
+builds their CGM, dose, day, and diagnosis tables as it does for every user.
 """
 
 import os
@@ -39,12 +41,12 @@ from nma_test_helpers import (  # type: ignore # noqa: E402
 # both readers of `normal` cast it themselves (the dose classifier through CAST AS STRING
 # and TRY_CAST AS DOUBLE, the TDD staging through TRY_CAST AS DOUBLE), so neither override
 # is needed and the `rate` one broke the build with a duplicate column (2026-11-16).
-if _here not in sys.path:
-    sys.path.insert(0, _here)
-from build_synthetic_bddp import (  # type: ignore # noqa: E402
-    BDDP_COLUMNS,
-    BDDP_SCHEMA,
-)
+try:
+    from .build_synthetic_bddp import BDDP_COLUMNS  # when imported as part of the package
+except ImportError:
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    from build_synthetic_bddp import BDDP_COLUMNS  # type: ignore # noqa: E402  (run or imported by bare name)
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +454,7 @@ ARCHETYPES = {
 # ---------------------------------------------------------------------------
 
 
-def _to_bddp_row(row: dict) -> dict:
+def to_bddp_row(row: dict) -> dict:
     """Expand minimal `_row` dict to a full BDDP_COLUMNS dict.
 
     Unit 5's helpers emit only the fields NMA staging logic reads; Spark
@@ -466,110 +468,8 @@ def _to_bddp_row(row: dict) -> dict:
     return base
 
 
-def _build_rows() -> list[dict]:
+def build_rows() -> list[dict]:
     rows = []
     for uid, builder in ARCHETYPES.items():
         rows.extend(builder())
     return rows
-
-
-def build_synthetic_nma_bddp(spark, output_table: str) -> None:
-    """Materialize the synthetic NMA BDDP fixture as a Unity Catalog table.
-
-    Schema matches `dev.default.bddp_sample_all_2` (BDDP_SCHEMA inherited
-    from FDA's build_synthetic_bddp).
-    """
-    rows = [_to_bddp_row(r) for r in _build_rows()]
-    pdf = pd.DataFrame(rows, columns=BDDP_COLUMNS)
-    (
-        spark.createDataFrame(pdf, schema=BDDP_SCHEMA)
-        .write.mode("overwrite")
-        .option("overwriteSchema", "true")
-        .saveAsTable(output_table)
-    )
-    print(
-        f"Wrote {len(rows):,} BDDP rows ({len(ARCHETYPES)} users) to {output_table}"
-    )
-
-
-def build_user_dates(spark, table_name: str) -> None:
-    """Write the demographics aux table (`bddp_user_dates`-shaped)."""
-    rows = [
-        {"userid": uid, "dob": demo["dob"]}
-        for uid, demo in DEMOGRAPHICS.items()
-    ]
-    pdf = pd.DataFrame(rows, columns=["userid", "dob"])
-    schema = "`userid` string, `dob` date"
-    spark.createDataFrame(pdf, schema=schema).write.mode("overwrite").saveAsTable(table_name)
-    print(f"Wrote {len(rows)} demographic rows to {table_name}")
-
-
-def build_user_gender(spark, table_name: str) -> None:
-    """Write the per-user sex aux table (`dev.default.user_gender`-shaped:
-    columns `userid`, `gender`). LEFT JOINed by export_nma_user_day_analysis_ready
-    for §8.1 Sample Information."""
-    rows = [{"userid": uid, "gender": g} for uid, g in USER_GENDER.items()]
-    pdf = pd.DataFrame(rows, columns=["userid", "gender"])
-    schema = "`userid` string, `gender` string"
-    spark.createDataFrame(pdf, schema=schema).write.mode("overwrite").saveAsTable(table_name)
-    print(f"Wrote {len(rows)} gender rows to {table_name}")
-
-
-def build_user_diagnosis_type(spark, table_name: str, loop_recommendations_table: str) -> None:
-    """Write the synthetic `user_diagnosis_type` lookup — one row per synthetic Loop
-    user, resolved diagnosis = 'type1'.
-
-    Mirrors dev.fda_510k_rwd.user_diagnosis_type (FDA data_staging/
-    export_user_diagnosis_type.py): the Loop-user universe is the distinct `_userId` in
-    the day table. export_nma_user_day_analysis_ready LEFT JOINs this on the RAW `_userId`
-    (pre-hash) and derives `diagnosis_group` from its label columns; the loader selects
-    the primary groups. Marking every synthetic user type1 keeps the cohorts at their
-    pre-selection composition so the existing user-survival invariants hold; the
-    selection's exclusion path (type 2, other, unknown left out of the primary) is
-    exercised by testing/analysis/test_data_loading_nma.py.
-
-    Columns match production: `_userId, diagnosis_patients, diagnosis_seagull, is_jaeb,
-    is_lada, diagnosis_type, diagnosis_group`.
-    """
-    spark.sql(f"""
-        CREATE OR REPLACE TABLE {table_name} AS
-        SELECT DISTINCT
-            _userId,
-            'type1'              AS diagnosis_patients,
-            CAST(NULL AS STRING) AS diagnosis_seagull,
-            FALSE                AS is_jaeb,
-            FALSE                AS is_lada,
-            'type1'              AS diagnosis_type,
-            'type1'              AS diagnosis_group
-        FROM {loop_recommendations_table}
-    """)
-    n = spark.table(table_name).count()
-    print(f"Wrote {n} user_diagnosis_type row(s) to {table_name} (all type1)")
-
-
-def build_loop_cbg(spark, table_name: str) -> None:
-    """Write the synthetic `loop_cbg` cleaned-CGM table that export_nma_user_day_cbg
-    slices (columns `_userId`, `cbg_timestamp`, `cbg_mg_dl`, `is_plausible`).
-
-    NMA does not rebuild loop_cbg from BDDP (FDA's export_cbg_from_loop reads
-    glucose from the BDDP `value` column, which the NMA helpers leave null —
-    using it would yield empty CGM). Instead we derive loop_cbg directly from the
-    same archetype CGM rows the BDDP fixture already encodes (single source of
-    truth for each archetype's TIR design): take every `type='cbg'` row, convert
-    its mmol `normal` back to mg/dL, and flag plausible (all synthetic values are
-    within 38-500 mg/dL).
-    """
-    cbg_rows = [r for r in _build_rows() if r.get("type") == "cbg"]
-    rows = [
-        {
-            "_userId": r["_userId"],
-            "cbg_timestamp": datetime.strptime(r["time_string"], "%Y-%m-%dT%H:%M:%SZ"),
-            "cbg_mg_dl": float(r["normal"]) / MMOL_PER_MGDL,
-            "is_plausible": True,
-        }
-        for r in cbg_rows
-    ]
-    pdf = pd.DataFrame(rows, columns=["_userId", "cbg_timestamp", "cbg_mg_dl", "is_plausible"])
-    schema = "`_userId` string, `cbg_timestamp` timestamp, `cbg_mg_dl` double, `is_plausible` boolean"
-    spark.createDataFrame(pdf, schema=schema).write.mode("overwrite").saveAsTable(table_name)
-    print(f"Wrote {len(rows):,} loop_cbg rows to {table_name}")
