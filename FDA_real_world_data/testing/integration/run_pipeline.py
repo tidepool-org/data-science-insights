@@ -574,6 +574,7 @@ def run(spark, force=False):
         spark,
         input_table=TABLES["loop_cbg"],
         output_table=TABLES["nma_glycemic_endpoints"],
+        loop_recommendations_table=TABLES["loop_recommendations"],
     )
     progress.step("export_nma_user_day_bolus_classification", line="[integration.run_pipeline] export_nma_user_day_bolus_classification...")
     export_nma_user_day_bolus_classification.run(

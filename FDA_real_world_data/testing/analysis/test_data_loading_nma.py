@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "analysis"))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..")))
 from offline_test_helpers import run_tests  # noqa: E402
 
+from utils import data_loading  # type: ignore # noqa: E402
 from utils.data_loading import (  # type: ignore # noqa: E402
     DIAGNOSIS_GROUPS,
     assert_nma_day_predicates,
@@ -217,8 +218,56 @@ def test_windowed_matched_means_empty_arm_keeps_columns():
     assert cov["n_users_matched"] == 0
 
 
+# ---------------------------------------------------------------------------
+# load_nma_day_level — one pull per table version per process
+# ---------------------------------------------------------------------------
+
+class _FakeSpark:
+    """Counts the pulls of a table and reports a Delta version (None: no history to read)."""
+
+    def __init__(self, frame, version):
+        self._frame, self.version, self.pulls = frame, version, 0
+
+    def table(self, name):
+        spark = self
+
+        class _Table:
+            def toPandas(self):
+                spark.pulls += 1
+                return spark._frame.copy()
+        return _Table()
+
+    def sql(self, query):
+        if self.version is None:
+            raise RuntimeError("no history")
+        version = self.version
+
+        class _Result:
+            def collect(self):
+                return [{"version": version}]
+        return _Result()
+
+
+def test_load_nma_day_level_pulls_once_per_table_version():
+    data_loading.forget_nma_day_level()
+    spark = _FakeSpark(_cohort_table(), version=7)
+    first = data_loading.load_nma_day_level(spark, "t")
+    again = data_loading.load_nma_day_level(spark, "t")
+    assert spark.pulls == 1 and again is first, "the same version is pulled once"
+    assert first["_userId"].tolist() == ["a", "n"], "and it is the prepared cohort frame"
+    spark.version = 8                                   # the table was restaged
+    data_loading.load_nma_day_level(spark, "t")
+    assert spark.pulls == 2, "a new version is pulled again"
+    unversioned = _FakeSpark(_cohort_table(), version=None)
+    data_loading.load_nma_day_level(unversioned, "t")
+    data_loading.load_nma_day_level(unversioned, "t")
+    assert unversioned.pulls == 2, "with no version to read, nothing is reused"
+    data_loading.forget_nma_day_level()
+
+
 if __name__ == "__main__":
     run_tests([
+        test_load_nma_day_level_pulls_once_per_table_version,
         test_restrict_nma_comparator_zeros_non_ce0_users,
         test_restrict_nma_comparator_no_hma_column_is_ok,
         test_select_nma_cohort_adult_excludes_unknown_dob,

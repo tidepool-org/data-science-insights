@@ -8,7 +8,11 @@ import pandas as pd
 _DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(_DIR, "..")))
 from offline_test_helpers import require_statsmodels, run_tests, skip  # noqa: E402
-SNAPSHOT = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma", "nma_user_day_analysis_ready.csv"))
+sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "analysis")))
+from utils.data_loading import nma_snapshot_csv  # noqa: E402
+
+# The snapshot on disk: the gzipped one since 2026-11-17, or an earlier vintage's plain CSV.
+SNAPSHOT = nma_snapshot_csv()
 OUT = os.path.normpath(os.path.join(_DIR, "..", "..", "analysis", "outputs"))
 
 

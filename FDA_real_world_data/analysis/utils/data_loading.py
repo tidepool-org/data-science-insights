@@ -804,11 +804,16 @@ NMA_WINDOW_HALF = 45
 
 
 def nma_snapshot_csv(analysis_ready_table=NMA_ANALYSIS_READY_TABLE):
-    """Where data_staging/export_nma_user_day_analysis_ready.py writes its CSV snapshot —
-    FDA_real_world_data/outputs/nma/<table-name>.csv. Takes the bare or the catalog-qualified
-    table name."""
-    fname = analysis_ready_table.split(".")[-1] + ".csv"
-    return os.path.normpath(os.path.join(analysis_dir(), "..", "outputs", "nma", fname))
+    """The snapshot data_staging/export_nma_user_day_analysis_ready.py writes, under
+    FDA_real_world_data/outputs/nma/: <table-name>.csv.gz since 2026-11-17 (gzipped, which
+    pandas reads as it reads a plain CSV), or the plain <table-name>.csv of an earlier
+    vintage when only that is on disk. With neither, the gzipped path, where the next
+    download goes. Takes the bare or the catalog-qualified table name."""
+    stem = os.path.normpath(os.path.join(analysis_dir(), "..", "outputs", "nma", analysis_ready_table.split(".")[-1]))
+    for path in (stem + ".csv.gz", stem + ".csv"):
+        if os.path.exists(path):
+            return path
+    return stem + ".csv.gz"
 
 
 def nma_day_predicates(frame):
@@ -843,9 +848,40 @@ def prepare_nma_day_level(frame, label=NMA_ANALYSIS_READY_TABLE):
     return _admit(frame, assert_nma_day_predicates, "in_analysis_cohort", None, label, "user-day(s)")
 
 
+# The prepared frame of each table version already pulled in this process. The five analyses
+# run three cohorts each and every cohort run asks for the same rows, so without it one
+# driver run pulled the whole cohort table from Spark fifteen times (2026-11-17).
+_NMA_DAY_LEVEL_PULLS = {}
+
+
+def _delta_version(spark, table):
+    """The table's latest Delta version, or None when it cannot be read (a test double, a
+    table that is not Delta). A restaged table has a new version, so it is pulled again."""
+    try:
+        return spark.sql(f"DESCRIBE HISTORY {table} LIMIT 1").collect()[0]["version"]
+    except Exception:  # noqa: BLE001  (no history means no reuse, never a failed load)
+        return None
+
+
+def forget_nma_day_level():
+    """Drop every kept pull (the tests, and a caller that wants a fresh read)."""
+    _NMA_DAY_LEVEL_PULLS.clear()
+
+
 def load_nma_day_level(spark, analysis_ready_table=f"{CATALOG}.{NMA_ANALYSIS_READY_TABLE}"):
-    """The analysis cohort's rows, with arm flags + endpoints."""
-    return prepare_nma_day_level(spark.table(analysis_ready_table).toPandas(), label=analysis_ready_table)
+    """The analysis cohort's rows, with arm flags + endpoints. One pull per table version per
+    process: a second call for the same version returns the same frame, which callers must not
+    change in place (select_nma_cohort, the step every analysis takes next, returns a copy)."""
+    version = _delta_version(spark, analysis_ready_table)
+    key = (analysis_ready_table, version)
+    if version is not None and key in _NMA_DAY_LEVEL_PULLS:
+        print(f"  {analysis_ready_table}: reusing the pull of version {version} made earlier in this run")
+        return _NMA_DAY_LEVEL_PULLS[key]
+    frame = prepare_nma_day_level(spark.table(analysis_ready_table).toPandas(), label=analysis_ready_table)
+    if version is not None:
+        _NMA_DAY_LEVEL_PULLS.clear()          # one table version at a time: an older pull is of no use
+        _NMA_DAY_LEVEL_PULLS[key] = frame
+    return frame
 
 
 def select_nma_cohort(frame, cohort="all", diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS):

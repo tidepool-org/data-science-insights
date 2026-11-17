@@ -411,6 +411,7 @@ resources:
         - task_key: Compute_NMA_User_Day_Glycemic_Endpoints
           depends_on:
             - task_key: Export_CBG_From_Loop
+            - task_key: Export_Loop_Recommendations
           spark_python_task:
             python_file: /Workspace/Users/mark.connolly@tidepool.org/data-science-insights/FDA_real_world_data/data_staging/compute_nma_user_day_glycemic_endpoints.py
           environment_key: Default

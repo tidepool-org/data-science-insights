@@ -34,7 +34,6 @@ from scipy import stats
 
 # ── Locate the snapshot and the analysis/ package (its `utils` modules import as siblings). ──
 _DIR = os.path.dirname(os.path.abspath(__file__))
-SNAPSHOT = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma", "nma_user_day_analysis_ready.csv"))
 MEMO_DIR = os.path.normpath(os.path.join(_DIR, "..", "..", "outputs", "nma", "negative_controls"))
 MEMO_CSV = os.path.join(MEMO_DIR, "nc_summary.csv")
 _ANALYSIS = os.path.normpath(os.path.join(_DIR, "..", "..", "analysis"))
@@ -43,6 +42,9 @@ _ANALYSIS = os.path.normpath(os.path.join(_DIR, "..", "..", "analysis"))
 if _ANALYSIS not in sys.path:
     sys.path.insert(0, _ANALYSIS)
 from utils import data_loading, statistics  # noqa: E402
+
+# The snapshot on disk: the gzipped one since 2026-11-17, or an earlier vintage's plain CSV.
+SNAPSHOT = data_loading.nma_snapshot_csv()
 nma_stats = statistics
 
 # Reuse the project's single source of truth for arms + endpoints.

@@ -524,7 +524,7 @@ One row per table the current staging writes. "Read by" lists the staging script
 | `nma_user_day_bolus_classification` | `export_user_day_bolus_classification` | `bddp_sample_all_2`, `loop_recommendations` | `export_user_day_bolus_counts`, `export_user_day_analysis_ready` |
 | `nma_bolus_classification` | `export_bolus_classification` | `bddp_sample_all_2`, `loop_recommendations` | nothing in staging; two exploratory scripts |
 | `nma_user_day_bolus_counts` | `export_user_day_bolus_counts` | `nma_user_day_bolus_classification` | `export_user_day_classification` |
-| `nma_user_day_glycemic_endpoints` | `compute_nma_user_day_glycemic_endpoints` | `loop_cbg` | `export_user_day_analysis_ready` |
+| `nma_user_day_glycemic_endpoints` | `compute_nma_user_day_glycemic_endpoints` | `loop_cbg`, `loop_recommendations` (the days to compute) | `export_user_day_analysis_ready` |
 | `nma_user_day_tdd` | `export_user_day_tdd` | `bddp_sample_all_2` | `export_user_day_analysis_ready` |
 | `nma_user_day_classification` | `export_nma_user_day_classification` | `loop_recommendations`, `nma_user_day_bolus_counts`, `nma_user_day_carbs`, `ab_day_cohort` (`is_coverage_ok`) | `export_user_day_analysis_ready` |
 | `nma_user_day_analysis_ready` | `export_user_day_analysis_ready` | the `nma_*` tables above, `loop_recommendations`, `user_diagnosis_type`, `user_gender` | the CSV snapshot, the parity check |

@@ -58,10 +58,10 @@ Outputs:
         One row per (user, local_day) of the universe — criteria and predicates,
         classification flags, endpoints, TDD + ratio, delivery strategy, Loop
         version, age + sex + diagnosis group (`_userId` pseudonymized).
-    <outputs>/nma_user_day_analysis_ready.csv
+    <outputs>/nma_user_day_analysis_ready.csv.gz
         A single-file CSV snapshot of the same table (pandas dump from the driver). The
         estimated CSV size is always printed first; the file is then written to
-        outputs/nma/<table-name>.csv by default (override with --output_csv, or pass --no_csv).
+        outputs/nma/<table-name>.csv.gz by default (override with --output_csv, or pass --no_csv).
 
 Maps to PLN-1008:
     §7.1 Cohort and day inclusion (as columns).
@@ -108,6 +108,11 @@ STRATEGY_TEMP_BASAL = "temp_basal_only"
 # secret) — it removes the raw identifier but is not cryptographically secret; move it to a
 # Databricks secret scope if irreversibility against a known-id dictionary is required.
 USERID_SALT = "pln1008-nma-v1"
+
+# The snapshot the local analyses read is a gzipped CSV (2026-11-17): pandas reads it as it
+# reads a plain one, and it is several times smaller, which the Workspace's transfer limit needs.
+SNAPSHOT_SUFFIX = ".csv.gz"
+WORKSPACE_MAX_FILE_BYTES = 500 * 1024 * 1024
 
 
 def _default_outputs_dir():
@@ -300,16 +305,32 @@ LEFT JOIN user_tdd_ref ref
 
     # CSV snapshot. Always report how large the single-file CSV would be first (a driver-
     # side pandas dump can be large), then write it: output_csv=None -> default
-    # outputs/nma/<table-name>.csv; a string -> that path; output_csv=False -> report size only,
+    # outputs/nma/<table-name>.csv.gz; a string -> that path; output_csv=False -> report size only,
     # don't write.
     _report_csv_size(spark, output_table)
     if output_csv is False:
         return
     if output_csv is None:
-        output_csv = os.path.join(_default_outputs_dir(), output_table.split(".")[-1] + ".csv")
-    os.makedirs(os.path.dirname(output_csv), exist_ok=True)
-    spark.table(output_table).toPandas().to_csv(output_csv, index=False)
-    print(f"wrote {output_csv}")
+        output_csv = os.path.join(_default_outputs_dir(), output_table.split(".")[-1] + SNAPSHOT_SUFFIX)
+    _write_snapshot(spark.table(output_table).toPandas(), output_csv)
+
+
+def _write_snapshot(frame, path):
+    """Write the snapshot, gzipped when the path ends in .gz, and say how large it is.
+
+    The plain CSV of the cohort table was written without trouble on 2026-11-17 but could not
+    be brought down: the Workspace's file transfer refuses a file over
+    WORKSPACE_MAX_FILE_BYTES, and the table keeps every user-day of the day universe since
+    decision D23 (1.0 GB as a CSV). Gzipped it is several times smaller; a file still over
+    the limit is written and the message says it cannot be downloaded as it is."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    frame.to_csv(path, index=False, compression="gzip" if path.endswith(".gz") else None)
+    size = os.path.getsize(path)
+    print(f"wrote {path} ({_human_bytes(size)}, {len(frame):,} rows)")
+    if size > WORKSPACE_MAX_FILE_BYTES:
+        print(f"  that is over the Workspace's transfer limit of {_human_bytes(WORKSPACE_MAX_FILE_BYTES)}: "
+              f"it cannot be downloaded as one file")
+    return path
 
 
 if __name__ == "__main__":
@@ -326,7 +347,7 @@ if __name__ == "__main__":
     _parser.add_argument("--user_gender_table", default="dev.default.user_gender")
     _parser.add_argument("--diagnosis_table", default="dev.fda_510k_rwd.user_diagnosis_type")
     _parser.add_argument("--output_table", default="dev.fda_510k_rwd.nma_user_day_analysis_ready")
-    _parser.add_argument("--output_csv", default=None, help="CSV path (default: outputs/nma/<table>.csv)")
+    _parser.add_argument("--output_csv", default=None, help="snapshot path (default: outputs/nma/<table>.csv.gz; a .gz path is gzipped)")
     _parser.add_argument("--no_csv", action="store_true", help="print the CSV size only; skip the write")
     _args, _ = _parser.parse_known_args()
 

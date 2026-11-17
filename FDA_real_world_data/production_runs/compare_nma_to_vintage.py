@@ -26,10 +26,15 @@ Locally (no Spark) it prints the same buckets for the CSV snapshot only.
 
 import argparse
 import os
+import sys
 
 import pandas as pd
 
-LOCAL_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "outputs", "nma", "nma_user_day_analysis_ready.csv")
+sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "analysis")))
+from utils.data_loading import nma_snapshot_csv  # noqa: E402
+
+# The snapshot on disk: the gzipped one since 2026-11-17, or an earlier vintage's plain CSV.
+LOCAL_CSV = nma_snapshot_csv()
 ANALYSIS_READY_TABLE = "dev.fda_510k_rwd.nma_user_day_analysis_ready"
 VINTAGE_TABLE = "dev.fda_510k_rwd.nma_user_day_analysis_ready_vintage_2026_10_29"
 

@@ -9,13 +9,16 @@ __init__.py), so we put their `data_staging/` dir on sys.path and import by bare
 module name — the same mechanism FDA's own run_pipeline.py uses.
 
 Endpoints are computed over plausible readings only (`WHERE is_plausible`) for every
-day with CGM, read straight from the FDA's cleaned CGM table with the day as the date of
-the reading (since 2026-11-17; the NMA's own day slice of that table is gone). Day
+day of the day universe (`loop_recommendations`, a day with at least one automated dose)
+that has CGM, read straight from the FDA's cleaned CGM table with the day as the date of
+the reading (since 2026-11-17; the NMA's own day slice of that table is gone, and days
+outside the day universe, which the cohort table never read, are no longer computed). Day
 eligibility (the coverage floor) is the autobolus-day cohort table's flag, applied at the
 classification step.
 
 Inputs:
-    dev.fda_510k_rwd.loop_cbg   (_userId, cbg_timestamp, cbg_mg_dl, is_plausible)
+    dev.fda_510k_rwd.loop_cbg               (_userId, cbg_timestamp, cbg_mg_dl, is_plausible)
+    dev.fda_510k_rwd.loop_recommendations   (_userId, day: the day universe)
 
 Outputs:
     nma_user_day_glycemic_endpoints
@@ -51,12 +54,19 @@ def run(
     spark,
     input_table="dev.fda_510k_rwd.loop_cbg",
     output_table="dev.fda_510k_rwd.nma_user_day_glycemic_endpoints",
+    loop_recommendations_table="dev.fda_510k_rwd.loop_recommendations",
 ):
     _ensure_fda_staging_on_path()
     from compute_glycemic_endpoints import compute_glycemic_endpoints  # type: ignore # noqa: E402
     from pyspark.sql import functions as F  # type: ignore # noqa: E402
+    # Only the days of the day universe (the FDA day table): the cleaned CGM table holds every
+    # reading of every Loop user, and the cohort table joins the endpoints onto the day universe,
+    # so an endpoint row for any other day was computed and never read (MC, 2026-11-17).
+    universe_days = (spark.table(loop_recommendations_table)
+                     .select("_userId", F.col("day").alias("local_day")).distinct())
     cbg_df = (spark.table(input_table).where("is_plausible")
-              .withColumn("local_day", F.to_date("cbg_timestamp")))
+              .withColumn("local_day", F.to_date("cbg_timestamp"))
+              .join(universe_days, ["_userId", "local_day"], "left_semi"))
     endpoints = compute_glycemic_endpoints(
         spark, cbg_df, group_cols=["_userId", "local_day"]
     )
@@ -69,6 +79,7 @@ if __name__ == "__main__":
     _parser = argparse.ArgumentParser()
     _parser.add_argument("--input_table", default="dev.fda_510k_rwd.loop_cbg")
     _parser.add_argument("--output_table", default="dev.fda_510k_rwd.nma_user_day_glycemic_endpoints")
+    _parser.add_argument("--loop_recommendations_table", default="dev.fda_510k_rwd.loop_recommendations")
     _args, _ = _parser.parse_known_args()
 
-    run(spark, _args.input_table, _args.output_table)
+    run(spark, _args.input_table, _args.output_table, _args.loop_recommendations_table)

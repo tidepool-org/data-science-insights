@@ -11,7 +11,7 @@ snapshot** that the analyses read. Catalog: `dev.fda_510k_rwd`. Prune entries th
 | `dev.fda_510k_rwd.loop_dose_classification` (FDA) | **One row per logical bolus or basal** with the FDA verdict `is_automated` (the union of every rule) and `has_normal_subtype`. Since 2026-11-05 (D23) the source of every manual-versus-automatic count. |
 | `dev.fda_510k_rwd.loop_recommendations` (FDA) | **The valid-day universe** — one row per classified user-day (a dose a rule recognised) with `is_autobolus_day` / `is_temp_basal_day`, the automated counts, the per-rule bolus counts, and the Loop version (NULL when none parses). Anchor for carbs, classification, analysis-ready; the delivery strategy is its flags. |
 | `dev.fda_510k_rwd.user_diagnosis_type` (FDA) | Per-user resolved diagnosis and `diagnosis_group`; joined on the raw id before the alias. |
-| `dev.fda_510k_rwd.loop_cbg` (FDA) | Cleaned 5-min CGM, already cohort-gated. Read directly by `compute_nma_user_day_glycemic_endpoints` with the reading's date as the day (D24). |
+| `dev.fda_510k_rwd.loop_cbg` (FDA) | Cleaned 5-min CGM, already cohort-gated. Read directly by `compute_nma_user_day_glycemic_endpoints` with the reading's date as the day (D24), for the days of the day universe only (2026-11-17). |
 | `dev.fda_510k_rwd.ab_day_cohort` (FDA) | Every Loop user's day with the FDA gates as flags; the NMA reads its `is_coverage_ok` (201 of 288 plausible readings) as `day_eligible` (D24). |
 | `dev.default.bddp_sample_all_2` | Raw BDDP — `food` / `wizard` (carbs), `bolus` / `basal` (incl. HealthKit metadata), DOB. |
 | `dev.default.bddp_user_dates` | DOB → age. |
