@@ -76,13 +76,11 @@ Fast figure iteration: add --figures-only, or --figs <tag> (e.g. `--figs 8_4a`).
 12_4a/b/c. Do a full run first so the table CSVs exist.
 """
 
-# %pip install statsmodels
 # dbutils.library.restartPython()
 
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import os
 import shutil
 import sys
@@ -230,9 +228,6 @@ def fit_strategy_interaction(pdf, arms, nma_stats, *, reference, split):
     rather than raising. n_users / n_days surfaced regardless."""
     order = _order(split)
     cells = [(st, s) for st in order for s in STRAT_NAMES]
-    has_sm = importlib.util.find_spec("statsmodels") is not None
-    if not has_sm:
-        print("  §8.4 LMM skipped: statsmodels not installed — interaction columns will be NaN.")
     rows = []
     for arm_flag, arm_label in arms:
         gated = _arm_strategy_frame(pdf, arm_flag, reference=reference, split=split)
@@ -245,7 +240,7 @@ def fit_strategy_interaction(pdf, arms, nma_stats, *, reference, split):
                         and cells_ok and sl[col].nunique() >= 2)
             rec = _empty_interaction_rec(arm_label, col, ep_label,
                                          int(sl["_userId"].nunique()), int(len(sl)))
-            if has_sm and fittable:
+            if fittable:
                 try:
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
@@ -270,7 +265,7 @@ def fit_strategy_interaction(pdf, arms, nma_stats, *, reference, split):
                     })
                 except Exception as e:  # noqa: BLE001 — degenerate cells shouldn't abort the table
                     print(f"  §8.4 LMM failed for {arm_label} / {col}: {e}")
-            elif has_sm and not fittable:
+            elif not fittable:
                 print(f"  §8.4 LMM skipped (degenerate cell) for {arm_label} / {col}")
             rows.append(rec)
     out = pd.DataFrame(rows)
@@ -335,7 +330,6 @@ def table_carb_entry_by_strategy(per_frac, per_rate, df_g, nma_stats):
     ≥1 carb entry, and carb entries/day. Method A (paired_within_user, equal-user-weight, diff = TB −
     AB) primary; a supportive day-level LMM (`metric ~ delivery_strategy + (1|user)`; coef = TB − AB)
     alongside. Positive ⇒ more carb logging on TB days. ⚠️ same-day entanglement — descriptive only."""
-    has_sm = importlib.util.find_spec("statsmodels") is not None
     rows = []
     for metric, outcome_col, tab in [("frac_days_ce_gt0", "ce_gt0", per_frac),
                                      ("carb_entries_per_day", CARB_COUNT_COL, per_rate)]:
@@ -351,7 +345,7 @@ def table_carb_entry_by_strategy(per_frac, per_rate, df_g, nma_stats):
             "lmm_coef_tb_minus_ab": np.nan, "lmm_ci_lo": np.nan, "lmm_ci_hi": np.nan,
             "lmm_p": np.nan, "lmm_converged": False,
         }
-        if has_sm and df_g[DELIVERY_STRATEGY_COLUMN].nunique() == 2 and df_g[outcome_col].nunique() >= 2:
+        if df_g[DELIVERY_STRATEGY_COLUMN].nunique() == 2 and df_g[outcome_col].nunique() >= 2:
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")

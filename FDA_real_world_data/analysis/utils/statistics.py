@@ -1,7 +1,8 @@
 """
 Shared statistical functions for the FDA 510(k) real-world-data analyses: the paired
 statistics of PLN-1001, the non-inferiority and Welch contrasts of the RFAI work, and, since
-2026-11-17, the cluster bootstrap and the mixed models of PLN-1008.
+2026-11-17, the cluster bootstrap and the mixed models of PLN-1008 (a random intercept per
+user, fitted from per-user sums; no statsmodels).
 """
 
 import numpy as np
@@ -375,11 +376,125 @@ def paired_within_user(
 
 
 # ---------------------------------------------------------------------------
-# Mixed models (statsmodels MixedLM, imported inside each function so this
-# module loads on a cluster without statsmodels): the arm contrast of PLN-1008
-# §8.1 Analysis 1B, the day-type × delivery-strategy interaction of §8.2, and
-# the TDD-stratum model of §8.3
+# Mixed models with one random intercept per user, fitted by REML from per-user
+# sums (2026-11-17; NMA decision D27): the arm contrast of PLN-1008 §8.1 Analysis
+# 1B, the day-type × delivery-strategy interaction of §8.2, the TDD-stratum
+# model of §8.3, and the carbohydrate slope of the supplement.
+#
+# For y = X b + u_user + e the likelihood needs, per user, only the number of
+# days and the sums X'1 and 1'y, beside the totals X'X, X'y, and y'y. With
+# lam = var(u) / var(e), the inverse covariance of a user's days is
+# (I - lam / (1 + n lam) 11') / var(e), so the REML criterion profiles down to a
+# function of lam alone, minimised here on a line. That is the same estimate
+# statsmodels' MixedLM reaches by iterating over the day rows (the tests pin
+# the agreement, and the cross-checks recompute the published coefficients with
+# statsmodels from the snapshot), at a small fraction of the time and with no
+# package a cluster may lack.
 # ---------------------------------------------------------------------------
+
+Z_95 = 1.959963984540054          # the normal quantile of a two-sided 95% interval
+_LOG_LAMBDA_BOUNDS = (-25.0, 12.0)  # the search range of log(var(u) / var(e))
+
+
+def _factor_levels(column: pd.Series) -> list:
+    """A factor's levels in coding order: a categorical's own order (levels with no day left
+    out), otherwise sorted. The first is the reference."""
+    if isinstance(column.dtype, pd.CategoricalDtype):
+        present = set(column.dropna().unique())
+        return [level for level in column.cat.categories if level in present]
+    return sorted(column.dropna().unique().tolist())
+
+
+def _design(frame: pd.DataFrame, factors, covariates, interaction: bool, levels: Optional[dict] = None):
+    """The fixed-effects design with treatment coding, named as patsy names it: Intercept,
+    `factor[T.level]` for every level after the reference, `a[T.x]:b[T.y]` for the interaction
+    of two factors, and each covariate under its own name. Returns (design, levels)."""
+    levels = levels if levels is not None else {f: _factor_levels(frame[f]) for f in factors}
+    columns = {"Intercept": np.ones(len(frame))}
+    indicators = {}
+    for factor in factors:
+        values = frame[factor].astype(object).to_numpy()
+        indicators[factor] = {}
+        for level in levels[factor][1:]:
+            name = f"{factor}[T.{level}]"
+            indicators[factor][name] = (values == level).astype(float)
+            columns[name] = indicators[factor][name]
+    if interaction:
+        first, second = factors
+        for name_a, column_a in indicators[first].items():
+            for name_b, column_b in indicators[second].items():
+                columns[f"{name_a}:{name_b}"] = column_a * column_b
+    for covariate in covariates:
+        columns[covariate] = pd.to_numeric(frame[covariate], errors="coerce").to_numpy(float)
+    return pd.DataFrame(columns, index=frame.index), levels
+
+
+def fit_random_intercept(day_level: pd.DataFrame, outcome: str, factors=(), covariates=(),
+                         interaction: bool = False, user_col: str = "_userId") -> Dict:
+    """REML fit of `outcome ~ factors (+ their interaction) + covariates + (1 | user)`.
+
+    Returns the fixed effects (`params`), their standard errors (`bse`), the 95% Wald interval
+    (`ci_lo`, `ci_hi`), and the two-sided normal p-values (`pvalues`), each a Series by term
+    name; the residual variance (`scale`) and the between-user variance (`user_variance`); the
+    factor levels used (`levels`); and the counts. Rows with a missing outcome, factor, or
+    covariate are left out. A design with a level or a cell that has no day is rank deficient
+    and raises, as does a fit with no degrees of freedom."""
+    from scipy import optimize
+
+    factors, covariates = list(factors), list(covariates)
+    frame = day_level.dropna(subset=[outcome, user_col] + factors + covariates)
+    design, levels = _design(frame, factors, covariates, interaction)
+    names = list(design.columns)
+    X = design.to_numpy(float)
+    y = pd.to_numeric(frame[outcome], errors="coerce").to_numpy(float)
+    codes, _ = pd.factorize(frame[user_col].to_numpy())
+    n_rows, n_terms = X.shape
+    n_users = int(codes.max()) + 1 if n_rows else 0
+    if n_rows <= n_terms:
+        raise ValueError(f"{n_rows} day(s) for {n_terms} fixed effect(s): nothing left to estimate the variance from")
+    xtx = X.T @ X
+    if np.linalg.matrix_rank(xtx) < n_terms:
+        raise ValueError(f"the design is rank deficient (a level or a cell with no day): terms {names}")
+
+    days = np.bincount(codes, minlength=n_users).astype(float)                       # n_i
+    x_sums = np.column_stack([np.bincount(codes, weights=X[:, j], minlength=n_users)   # X_i' 1
+                              for j in range(n_terms)])
+    y_sums = np.bincount(codes, weights=y, minlength=n_users)                        # 1' y_i
+    xty, yty = X.T @ y, float(y @ y)
+
+    def solve(lam):
+        shrink = lam / (1.0 + days * lam)
+        a = xtx - (x_sums * shrink[:, None]).T @ x_sums
+        b = xty - x_sums.T @ (shrink * y_sums)
+        beta = np.linalg.solve(a, b)
+        rss = yty - float(np.sum(shrink * y_sums * y_sums)) - float(b @ beta)
+        return a, beta, rss
+
+    def criterion(log_lam):          # minus twice the REML log-likelihood, up to a constant
+        lam = np.exp(log_lam)
+        a, _, rss = solve(lam)
+        if rss <= 0:
+            return np.inf
+        return ((n_rows - n_terms) * np.log(rss / (n_rows - n_terms))
+                + float(np.sum(np.log1p(days * lam))) + np.linalg.slogdet(a)[1])
+
+    best = optimize.minimize_scalar(criterion, bounds=_LOG_LAMBDA_BOUNDS, method="bounded",
+                                    options={"xatol": 1e-10})
+    # at the lower end of the range the between-user variance is nil: take exactly zero
+    lam = 0.0 if criterion(_LOG_LAMBDA_BOUNDS[0]) <= best.fun else float(np.exp(best.x))
+    a, beta, rss = solve(lam)
+    scale = rss / (n_rows - n_terms)
+    bse = np.sqrt(np.diag(scale * np.linalg.inv(a)))
+    params = pd.Series(beta, index=names)
+    errors = pd.Series(bse, index=names)
+    return {
+        "params": params, "bse": errors,
+        "ci_lo": params - Z_95 * errors, "ci_hi": params + Z_95 * errors,
+        "pvalues": pd.Series(2.0 * stats.norm.sf(np.abs(beta / bse)), index=names),
+        "scale": float(scale), "user_variance": float(lam * scale), "levels": levels,
+        "n_users": n_users, "n_days": int(n_rows),
+    }
+
 
 def lmm_arm_contrast(
     day_level: pd.DataFrame,
@@ -388,21 +503,14 @@ def lmm_arm_contrast(
     user_col: str = "_userId",
 ) -> dict:
     """Linear mixed model: outcome ~ arm + (1 | user) — PLN-1008 §8.1 Method B."""
-    from statsmodels.regression.mixed_linear_model import MixedLM
-
-    formula = f"{outcome} ~ {arm_col}"
-    model = MixedLM.from_formula(formula, groups=day_level[user_col], data=day_level)
-    result = model.fit(reml=True, method="lbfgs")
-
-    arm_terms = [name for name in result.fe_params.index if name != "Intercept"]
+    fit = fit_random_intercept(day_level, outcome, factors=[arm_col], user_col=user_col)
+    arm_terms = [name for name in fit["params"].index if name != "Intercept"]
     arm_name = arm_terms[0]
-
-    ci_df = result.conf_int()
     return {
-        "coef": float(result.fe_params[arm_name]),
-        "ci_lo": float(ci_df.loc[arm_name, 0]),
-        "ci_hi": float(ci_df.loc[arm_name, 1]),
-        "pvalue": float(result.pvalues[arm_name]),
+        "coef": float(fit["params"][arm_name]),
+        "ci_lo": float(fit["ci_lo"][arm_name]),
+        "ci_hi": float(fit["ci_hi"][arm_name]),
+        "pvalue": float(fit["pvalues"][arm_name]),
         "n_users": int(day_level[user_col].nunique()),
         "n_days": int(len(day_level)),
         "term": arm_name,
@@ -417,16 +525,9 @@ def lmm_day_strategy_interaction(
     user_col: str = "_userId",
 ) -> dict:
     """Joint LMM with day_type × delivery_strategy interaction — PLN-1008 §8.2."""
-    from statsmodels.regression.mixed_linear_model import MixedLM
-
-    formula = f"{outcome} ~ {day_type_col} * {strategy_col}"
-    model = MixedLM.from_formula(formula, groups=day_level[user_col], data=day_level)
-    result = model.fit(reml=True, method="lbfgs")
-
-    params = result.fe_params
-    ci_df = result.conf_int()
-    pvals = result.pvalues
-
+    fit = fit_random_intercept(day_level, outcome, factors=[day_type_col, strategy_col],
+                               interaction=True, user_col=user_col)
+    params = fit["params"]
     day_terms = [n for n in params.index if n.startswith(day_type_col) and ":" not in n]
     strat_terms = [n for n in params.index if n.startswith(strategy_col) and ":" not in n]
     inter_terms = [n for n in params.index if ":" in n]
@@ -435,16 +536,15 @@ def lmm_day_strategy_interaction(
     main_strat = strat_terms[0]
     inter = inter_terms[0]
 
-    # Marginal cell means: predict at each unique (day_type, strategy) combination.
+    # Marginal cell means: the fixed-effects prediction at each (day_type, strategy) combination.
     day_levels = sorted(day_level[day_type_col].dropna().unique().tolist())
     strat_levels = sorted(day_level[strategy_col].dropna().unique().tolist())
     cell_grid = pd.DataFrame(
         [(d, s) for d in day_levels for s in strat_levels],
         columns=[day_type_col, strategy_col],
     )
-    cell_grid[outcome] = 0.0
-    cell_grid[user_col] = day_level[user_col].iloc[0]
-    cell_grid["_pred"] = result.predict(cell_grid)
+    grid_design, _ = _design(cell_grid, [day_type_col, strategy_col], [], True, levels=fit["levels"])
+    cell_grid["_pred"] = grid_design[list(params.index)].to_numpy(float) @ params.to_numpy(float)
 
     marginal_cells = {}
     for (d, s), pred in zip(zip(cell_grid[day_type_col], cell_grid[strategy_col]),
@@ -456,14 +556,14 @@ def lmm_day_strategy_interaction(
 
     return {
         "main_day_coef": float(params[main_day]),
-        "main_day_ci": (float(ci_df.loc[main_day, 0]), float(ci_df.loc[main_day, 1])),
-        "main_day_p": float(pvals[main_day]),
+        "main_day_ci": (float(fit["ci_lo"][main_day]), float(fit["ci_hi"][main_day])),
+        "main_day_p": float(fit["pvalues"][main_day]),
         "main_strategy_coef": float(params[main_strat]),
-        "main_strategy_ci": (float(ci_df.loc[main_strat, 0]), float(ci_df.loc[main_strat, 1])),
-        "main_strategy_p": float(pvals[main_strat]),
+        "main_strategy_ci": (float(fit["ci_lo"][main_strat]), float(fit["ci_hi"][main_strat])),
+        "main_strategy_p": float(fit["pvalues"][main_strat]),
         "interaction_coef": float(params[inter]),
-        "interaction_ci": (float(ci_df.loc[inter, 0]), float(ci_df.loc[inter, 1])),
-        "interaction_p": float(pvals[inter]),
+        "interaction_ci": (float(fit["ci_lo"][inter]), float(fit["ci_hi"][inter])),
+        "interaction_p": float(fit["pvalues"][inter]),
         "marginal_cells": marginal_cells,
         "n_users": int(day_level[user_col].nunique()),
         "n_days": int(len(day_level)),
@@ -480,22 +580,15 @@ def lmm_tdd_stratum(
 
     Reference = "High"; coefficient is Low − High.
     """
-    from statsmodels.regression.mixed_linear_model import MixedLM
-
     df = day_level.copy()
     df[stratum_col] = pd.Categorical(df[stratum_col], categories=["High", "Low"])
-
-    formula = f"{outcome} ~ {stratum_col}"
-    model = MixedLM.from_formula(formula, groups=df[user_col], data=df)
-    result = model.fit(reml=True, method="lbfgs")
-
-    term = [n for n in result.fe_params.index if n != "Intercept"][0]
-    ci_df = result.conf_int()
+    fit = fit_random_intercept(df, outcome, factors=[stratum_col], user_col=user_col)
+    term = [n for n in fit["params"].index if n != "Intercept"][0]
     return {
-        "coef": float(result.fe_params[term]),
-        "ci_lo": float(ci_df.loc[term, 0]),
-        "ci_hi": float(ci_df.loc[term, 1]),
-        "pvalue": float(result.pvalues[term]),
+        "coef": float(fit["params"][term]),
+        "ci_lo": float(fit["ci_lo"][term]),
+        "ci_hi": float(fit["ci_hi"][term]),
+        "pvalue": float(fit["pvalues"][term]),
         "n_users": int(df[user_col].nunique()),
         "n_days": int(len(df)),
         "term": term,

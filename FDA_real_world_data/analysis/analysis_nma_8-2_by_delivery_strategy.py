@@ -46,11 +46,9 @@ Outputs (analysis/outputs/nma/analysis_8_2/<cohort>/):
     figure_8_2d_stacked_bars.png    (mean time in glycemic ranges per cell, all 3 classifications × 6 cells)
 """
 
-# %pip install statsmodels
 # dbutils.library.restartPython()
 
 import argparse
-import importlib.util
 import os
 import shutil
 import sys
@@ -210,10 +208,6 @@ def fit_interaction_models(frames, nma_stats, treatments=CLASSIFICATIONS, treatm
     and both delivery strategies are present, all four cells have >=2 contributing users, and
     the outcome is non-constant. Sparse autobolus_on days make some cells degenerate; those
     are flagged converged=False rather than aborting the table."""
-    has_statsmodels = importlib.util.find_spec("statsmodels") is not None
-    if not has_statsmodels:
-        print("  §8.2 LMM skipped: statsmodels not installed — interaction columns will be "
-              "NaN. Install with `%pip install statsmodels` (or use an ML runtime).")
     strat_names = [s for s, _ in DELIVERY_STRATEGIES]
     day_types = [treatment_label, COMPARATOR_LABEL]
     cells = [(d, s) for d in day_types for s in strat_names]
@@ -243,7 +237,7 @@ def fit_interaction_models(frames, nma_stats, treatments=CLASSIFICATIONS, treatm
                 "n_users": int(sl["_userId"].nunique()), "n_days": int(len(sl)),
                 "marginal_cells": None,
             }
-            if has_statsmodels and fittable:
+            if fittable:
                 try:
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
@@ -269,7 +263,7 @@ def fit_interaction_models(frames, nma_stats, treatments=CLASSIFICATIONS, treatm
                     })
                 except Exception as e:  # noqa: BLE001 — degenerate cells shouldn't abort the table
                     print(f"  §8.2 LMM failed for {cls_label} / {col}: {e}")
-            elif has_statsmodels and not fittable:
+            else:
                 print(f"  §8.2 LMM skipped (degenerate cell) for {cls_label} / {col}")
             records.append(rec)
     return records

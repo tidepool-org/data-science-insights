@@ -2,7 +2,7 @@
 `test_nma_analysis_8_3.main(spark)`).
 
 Named like the FDA integration tests, which the FDA runner runs as files. Mirrors test_nma_analysis_8_1.py: `main()` gets a Spark session,
-ensures statsmodels (so the day-level LMM populates), runs the staging pipeline
+runs the staging pipeline
 (run_pipeline.run — idempotent), then runs the §8.3 within-user TDD-stratum checks against the
 analysis-ready table. Throwaway §8.3 outputs land in a tempdir — the real outputs/nma/analysis_8_3/
 are never touched. Prints `§8.3 INTEGRATION TEST PASSED` or raises on failure.
@@ -43,22 +43,6 @@ from testing.integration import run_pipeline as _run_pipeline  # noqa: E402
 A83_FILE = "analysis_nma_8-3_tdd_stratified.py"
 # Pseudonymized (salted SHA-256, D16) to match the hashed `_userId` in the analysis-ready table.
 TDD_USER = _run_pipeline.pseudonymize_uid("nma_user_known_low_high_tdd")
-
-
-def _ensure_statsmodels():
-    """§8.3's day-level LMM (Table 8.3c) needs statsmodels — ensure it (mirrors run_test_8_1)."""
-    if importlib.util.find_spec("statsmodels") is not None:
-        return
-    print("[test_nma_analysis_8_3] statsmodels not found — pip installing on the driver...")
-    import subprocess
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "statsmodels"])
-        importlib.invalidate_caches()
-    except Exception as e:  # noqa: BLE001
-        print(f"[test_nma_analysis_8_3] pip install failed: {e}")
-    if importlib.util.find_spec("statsmodels") is None:
-        print("[test_nma_analysis_8_3] WARNING: statsmodels still unavailable — Table 8.3c LMM "
-              "will be NaN. Install statsmodels as a CLUSTER LIBRARY and re-run.")
 
 
 def _load_analysis_8_3():
@@ -135,7 +119,6 @@ def _assert_recovers_low_high_design(spark, tables, raw_pdf, tmp_dir):
 
 def main(spark=None):
     """Build the pipeline, then run the §8.3 checks against it. run_pipeline.run is idempotent."""
-    _ensure_statsmodels()
     if spark is None:
         spark = _run_pipeline.get_spark()
     print("[test_nma_analysis_8_3] building / reusing the staging pipeline...")

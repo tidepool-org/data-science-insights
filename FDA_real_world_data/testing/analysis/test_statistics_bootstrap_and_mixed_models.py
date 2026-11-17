@@ -2,8 +2,8 @@
 Tests for the cluster bootstrap, the paired contrast on per-user means, and the mixed models
 of `analysis/utils/statistics.py` (folded in from the NMA statistics module on 2026-11-17).
 
-Pure-Python tests. LMM tests call `require_statsmodels()` (a skip) so
-they skip cleanly until statsmodels is installed in the env.
+Pure-Python tests. The mixed models are fitted by utils.statistics from per-user sums, so
+nothing here needs statsmodels; test_statistics_mixed_model_equivalence.py pins the fit to it.
 """
 
 import os
@@ -16,7 +16,7 @@ import math
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "analysis")))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..")))
-from offline_test_helpers import raises, require_statsmodels, run_tests  # noqa: E402
+from offline_test_helpers import raises, run_tests  # noqa: E402
 
 from utils.statistics import (  # type: ignore # noqa: E402
     cluster_bootstrap_ci,
@@ -128,7 +128,6 @@ def _make_arm_dataset(n_users: int, n_days_per_user: int, true_arm_effect: float
 
 
 def test_lmm_arm_contrast_recovers_truth():
-    require_statsmodels()
     df = _make_arm_dataset(n_users=20, n_days_per_user=40, true_arm_effect=-5.0, seed=20260520)
     result = lmm_arm_contrast(df, outcome="y", arm_col="arm")
     assert abs(result["coef"] - (-5.0)) < 1.0
@@ -179,7 +178,6 @@ def _make_interaction_dataset(true_interaction: float, seed: int = 0):
 
 
 def test_lmm_day_strategy_interaction_recovers_truth():
-    require_statsmodels()
     df = _make_interaction_dataset(true_interaction=3.0, seed=20260520)
     result = lmm_day_strategy_interaction(df, outcome="y")
     assert abs(result["interaction_coef"] - 3.0) < 1.0
@@ -189,7 +187,6 @@ def test_lmm_day_strategy_interaction_recovers_truth():
 
 
 def test_lmm_day_strategy_interaction_marginal_cells_returned():
-    require_statsmodels()
     df = _make_interaction_dataset(true_interaction=3.0, seed=20260520)
     result = lmm_day_strategy_interaction(df, outcome="y")
     cells = result["marginal_cells"]
@@ -217,7 +214,6 @@ def _make_tdd_dataset(true_low_minus_high: float, seed: int = 0):
 
 
 def test_lmm_tdd_stratum_recovers_low_minus_high_contrast():
-    require_statsmodels()
     df = _make_tdd_dataset(true_low_minus_high=15.0, seed=20260520)
     result = lmm_tdd_stratum(df, outcome="y")
     assert abs(result["coef"] - 15.0) < 1.0
@@ -226,7 +222,6 @@ def test_lmm_tdd_stratum_recovers_low_minus_high_contrast():
 
 def test_lmm_tdd_stratum_reference_is_high():
     """Sign convention: coefficient is Low − High, so positive coef ⇒ Low > High."""
-    require_statsmodels()
     df = _make_tdd_dataset(true_low_minus_high=10.0, seed=20260520)
     result = lmm_tdd_stratum(df, outcome="y")
     assert result["coef"] > 0
@@ -247,7 +242,6 @@ def test_lmm_tdd_stratum_reference_is_high():
 
 def test_lmm_arm_contrast_raises_on_single_arm_level():
     """A frame with only one arm value has no arm contrast term → raises."""
-    require_statsmodels()
     df = pd.DataFrame({
         "_userId": ["u0", "u0", "u1", "u1", "u2", "u2"],
         "arm": ["A"] * 6,
@@ -258,7 +252,6 @@ def test_lmm_arm_contrast_raises_on_single_arm_level():
 
 def test_lmm_day_strategy_interaction_raises_on_collapsed_cell():
     """Only one (day_type, strategy) cell present → no interaction term → raises."""
-    require_statsmodels()
     df = pd.DataFrame({
         "_userId": ["u0", "u0", "u1", "u1", "u2", "u2"],
         "day_type": ["NMA"] * 6,
@@ -270,7 +263,6 @@ def test_lmm_day_strategy_interaction_raises_on_collapsed_cell():
 
 def test_lmm_tdd_stratum_raises_on_single_stratum():
     """Only one stratum present → no Low−High contrast term → raises."""
-    require_statsmodels()
     df = pd.DataFrame({
         "_userId": ["u0", "u0", "u1", "u1", "u2", "u2"],
         "tdd_stratum": ["Low"] * 6,

@@ -790,7 +790,7 @@ SUPPLEMENT_ARMS = FIGURE_ARMS + [(HIGH_MA_FLAG, HIGH_MA_LABEL)]
 
 # §7.3 delivery strategies: (column value, short label), in DISPLAY order (TB before AB, per MJC) —
 # this drives the §8.2 figure cell/line/x-axis order and the table row order. The LMM reference is
-# AB (autobolus_on), set alphabetically by statsmodels regardless of this list order, so coefficients
+# AB (autobolus_on), the first level alphabetically (treatment coding) whatever this list's order, so coefficients
 # are unaffected by the ordering. Any other / null strategy is "ambiguous" and excluded (the staging
 # CASE currently emits only these two values). Shared by §8.2 + §8.3 (cross-tab) — single source.
 DELIVERY_STRATEGIES = [("temp_basal_only", "TB"), ("autobolus_on", "AB")]

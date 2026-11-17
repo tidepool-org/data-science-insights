@@ -2,7 +2,7 @@
 `test_nma_analysis_8_4.main(spark)`).
 
 Named like the FDA integration tests, which the FDA runner runs as files. Mirrors test_nma_analysis_8_1.py: `main()` gets a Spark session,
-ensures statsmodels (so the interaction LMM populates), runs the staging pipeline
+runs the staging pipeline
 (run_pipeline.run — idempotent), then runs the §8.4 checks against the analysis-ready table.
 Throwaway §8.4 outputs land in a tempdir — the real outputs/nma/analysis_8_4/ are never touched.
 Prints `§8.4 INTEGRATION TEST PASSED` or raises on failure.
@@ -55,22 +55,6 @@ INTERACTION_USER = _run_pipeline.pseudonymize_uid("nma_user_known_interaction")
 STRATS = ("autobolus_on", "temp_basal_only")
 EXPECTED_ARMS = {"CE=0/BE=0", "CE=0/BE<=1", "CE=0/BE<=inf", "CE>0", "CE>=3/BE>=3"}
 CARB_METRICS = {"frac_days_ce_gt0", "carb_entries_per_day"}
-
-
-def _ensure_statsmodels():
-    """§8.4's interaction LMM (Table 8.4b) needs statsmodels — ensure it (mirrors run_test_8_1)."""
-    if importlib.util.find_spec("statsmodels") is not None:
-        return
-    print("[test_nma_analysis_8_4] statsmodels not found — pip installing on the driver...")
-    import subprocess
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "statsmodels"])
-        importlib.invalidate_caches()
-    except Exception as e:  # noqa: BLE001
-        print(f"[test_nma_analysis_8_4] pip install failed: {e}")
-    if importlib.util.find_spec("statsmodels") is None:
-        print("[test_nma_analysis_8_4] WARNING: statsmodels still unavailable — Table 8.4b "
-              "interaction will be NaN. Install statsmodels as a CLUSTER LIBRARY and re-run.")
 
 
 def _load_analysis_8_4():
@@ -146,7 +130,6 @@ def _assert_strategy_outputs(spark, tables, raw_pdf, tmp_dir):
 
 def main(spark=None):
     """Build the pipeline, then run the §8.4 checks against it. run_pipeline.run is idempotent."""
-    _ensure_statsmodels()
     if spark is None:
         spark = _run_pipeline.get_spark()
     print("[test_nma_analysis_8_4] building / reusing the staging pipeline...")

@@ -196,25 +196,16 @@ def table_s2_dose_response(pdf, a81):
 def carb_slope_lmm(pdf, outcome="tir"):
     """Within-user slope of `outcome` per 10 g announced carbs across CE>0 days:
     outcome ~ carb10 + (1|user). Negative slope = more announced carbs → lower TIR."""
-    try:
-        from statsmodels.regression.mixed_linear_model import MixedLM
-    except ImportError:
-        return None
     ce = pdf[pdf[COMPARATOR_FLAG] == True].dropna(subset=[outcome, "carb_grams_total"]).copy()  # noqa: E712
     if ce["_userId"].nunique() < 2 or ce[outcome].nunique() < 2:
         return None
     ce["carb10"] = ce["carb_grams_total"] / 10.0
-    import warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        res = MixedLM.from_formula(f"{outcome} ~ carb10", groups=ce["_userId"], data=ce).fit(
-            reml=True, method="lbfgs")
-    ci = res.conf_int()
+    fit = statistics.fit_random_intercept(ce, outcome, covariates=["carb10"])
     return {
         "outcome": outcome,
-        "slope_per_10g": float(res.fe_params["carb10"]),
-        "ci_lo": float(ci.loc["carb10", 0]), "ci_hi": float(ci.loc["carb10", 1]),
-        "pvalue": float(res.pvalues["carb10"]),
+        "slope_per_10g": float(fit["params"]["carb10"]),
+        "ci_lo": float(fit["ci_lo"]["carb10"]), "ci_hi": float(fit["ci_hi"]["carb10"]),
+        "pvalue": float(fit["pvalues"]["carb10"]),
         "n_users": int(ce["_userId"].nunique()), "n_days": int(len(ce)),
     }
 

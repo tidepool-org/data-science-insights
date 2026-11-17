@@ -52,11 +52,9 @@ entry point):
     analysis/outputs/nma/analysis_8_1/table_8_1_sample_information.csv  (adult/pediatric/all columns)
 """
 
-# %pip install statsmodels
 # dbutils.library.restartPython()
 
 import argparse
-import importlib.util
 import os
 import shutil
 import sys
@@ -228,15 +226,8 @@ def create_table_8_1b(pdf, nma_stats, classifications=CLASSIFICATIONS):
     median paired non-parametric companion. Degenerate / non-converging fits yield a
     NaN-coef row flagged converged=False rather than raising.
 
-    Method B needs statsmodels (lazy-imported by the LMM helper). If it is not installed
-    (e.g. a non-ML Databricks runtime), the LMM columns are left NaN and only the
-    non-parametric companion is reported — checked once here so we don't emit one failure
-    line per cell. Install with `%pip install statsmodels` to populate the LMM contrast."""
-    has_statsmodels = importlib.util.find_spec("statsmodels") is not None
-    if not has_statsmodels:
-        print("  Method B (LMM) skipped: statsmodels not installed — Table 8.1b LMM "
-              "columns will be NaN; non-parametric companion still computed. "
-              "Install with `%pip install statsmodels` (or use an ML runtime).")
+    Method B is fitted by utils.statistics (a random intercept per user, REML from per-user
+    sums; no package beyond numpy and scipy), so it runs wherever the analysis runs."""
     rows = []
     for nma_flag, cls_label in classifications:
         for col, ep_label in NMA_ENDPOINTS:
@@ -271,7 +262,7 @@ def create_table_8_1b(pdf, nma_stats, classifications=CLASSIFICATIONS):
             n_users_nma = sl.loc[sl["arm"] == "NMA", "_userId"].nunique()
             n_users_cmp = sl.loc[sl["arm"] == "CE>0", "_userId"].nunique()
             fittable = n_users_nma >= 2 and n_users_cmp >= 2 and sl[col].nunique() >= 2
-            if has_statsmodels and fittable:
+            if fittable:
                 try:
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
@@ -284,7 +275,7 @@ def create_table_8_1b(pdf, nma_stats, classifications=CLASSIFICATIONS):
                     })
                 except Exception as e:  # noqa: BLE001 — degenerate slices shouldn't abort the table
                     print(f"  LMM failed for {cls_label} / {col}: {e}")
-            elif has_statsmodels and not fittable:
+            else:
                 print(f"  LMM skipped (degenerate) for {cls_label} / {col} "
                       f"(users NMA={n_users_nma}, CE>0={n_users_cmp})")
             rows.append(row)

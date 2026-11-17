@@ -92,7 +92,6 @@ to render only matching figures (e.g. `--figs 8_3g --cohort all` ≈ 9 s vs a mu
 Tags: 8_3a/b/c/d/e/f/g/i/j, 12_3a/c/g/h/i. Do a full run first so the table CSVs exist.
 """
 
-# %pip install statsmodels
 # dbutils.library.restartPython()
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 `test_nma_analysis_8_2.main(spark)`).
 
 Named like the FDA integration tests, which the FDA runner runs as files. Mirrors test_nma_analysis_8_1.py: `main()` gets a Spark session,
-ensures statsmodels (so the interaction LMM populates), runs the staging pipeline
+runs the staging pipeline
 (run_pipeline.run — idempotent), then runs the §8.2 checks against the analysis-ready table.
 Throwaway §8.2 outputs land in a tempdir — the real outputs/nma/analysis_8_2/ are never touched.
 Prints `§8.2 INTEGRATION TEST PASSED` or raises on failure.
@@ -54,25 +54,6 @@ A82_FILE = "analysis_nma_8-2_by_delivery_strategy.py"
 INTERACTION_USER = _run_pipeline.pseudonymize_uid("nma_user_known_interaction")
 HEADLINE_CLS = "CE=0/BE<=inf"   # the broadest arm carries the clean 4-cell design (see docstring)
 STRATS = ("autobolus_on", "temp_basal_only")
-
-
-def _ensure_statsmodels():
-    """The §8.2 interaction LMM (Table 8.2b) needs statsmodels. The §8.2 file's `%pip install
-    statsmodels` only runs when THAT file is executed as a notebook — this harness imports it
-    (preamble stripped), so statsmodels must be ensured here. No-op if already present (e.g.
-    installed as a cluster library); otherwise a best-effort driver pip install."""
-    if importlib.util.find_spec("statsmodels") is not None:
-        return
-    print("[test_nma_analysis_8_2] statsmodels not found — pip installing on the driver...")
-    import subprocess
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "statsmodels"])
-        importlib.invalidate_caches()
-    except Exception as e:  # noqa: BLE001
-        print(f"[test_nma_analysis_8_2] pip install failed: {e}")
-    if importlib.util.find_spec("statsmodels") is None:
-        print("[test_nma_analysis_8_2] WARNING: statsmodels still unavailable — Table 8.2b "
-              "interaction will be NaN. Install statsmodels as a CLUSTER LIBRARY and re-run.")
 
 
 def _load_analysis_8_2():
@@ -179,7 +160,6 @@ def _assert_recovers_interaction_design(spark, tables, raw_pdf, tmp_dir):
 
 def main(spark=None):
     """Build the pipeline, then run the §8.2 checks against it. run_pipeline.run is idempotent."""
-    _ensure_statsmodels()
     if spark is None:
         spark = _run_pipeline.get_spark()
     print("[test_nma_analysis_8_2] building / reusing the staging pipeline...")

@@ -1,7 +1,7 @@
 """
 Unit tests for `analysis/utils/strata.py` — the D12 within-user TDD-stratification
 toolkit shared by §8.3 and §8.4. Pure pandas for the strata builders (local layer);
-the LMM-table guard tests call `require_statsmodels()` (a skip).
+the LMM-table guard tests run everywhere (the fit needs no statsmodels).
 
 The load-bearing piece is the same-user-set gate (D12 fix): across-user stratum
 means must share a single user set, so n_users is equal across strata.
@@ -15,7 +15,7 @@ import pandas as pd
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "analysis")))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..")))
-from offline_test_helpers import require_statsmodels, run_tests  # noqa: E402
+from offline_test_helpers import run_tests  # noqa: E402
 
 from utils import statistics  # type: ignore # noqa: E402
 from utils.data_loading import NMA_ENDPOINTS  # type: ignore # noqa: E402
@@ -130,7 +130,6 @@ def test_table_8_3c_lmm_degenerate_emits_not_converged_row():
 
 def test_table_8_3c_lmm_converges_with_two_users_per_stratum():
     """Happy path: ≥2 users in each stratum → converged=True, coef = Low − High > 0."""
-    require_statsmodels()
     nma_stats = statistics
     rows = []
     for u in ["u1", "u2", "u3"]:
