@@ -26,7 +26,15 @@ RERUN_FAILED=1, or flip RERUN_FAILED below). Every run records its failed
 tests' relative paths in the driver's temp dir
 (fda_run_all_tests_last_failures.txt), and --failed selects exactly those
 files. The record is of the last run, whatever its selection. A cluster
-restart clears the temp dir, in which case --failed says so and runs nothing.
+restart clears the temp dir, in which case --failed runs the --only selection
+when one is given and otherwise says so and runs nothing.
+
+Before the first test the runner forgets every project module the kernel has
+cached (any module whose file is under FDA_real_world_data), so a run picks up
+the code as synced even in a kernel that imported an earlier copy; a stale
+kernel otherwise serves old modules to every test (seen 2026-11-17).
+
+testing/rerun_failed_tests.py is the Run-button form of --failed.
 
 Run on Databricks.
 """
@@ -94,6 +102,20 @@ def emit(s="", end="\n"):
     print(s, end=end, flush=True)
 
 
+
+def _forget_project_modules():
+    """Drop every cached module whose file lives under the project root, so the
+    tests import the code as it is on disk rather than as the kernel first saw it."""
+    root = os.path.dirname(test_dir)
+    stale = [name for name, module in list(sys.modules.items())
+             if (getattr(module, "__file__", None) or "").startswith(root)]
+    for name in stale:
+        del sys.modules[name]
+    if stale:
+        emit(f"{DIM}forgot {len(stale)} cached project module(s) so the run reads the current code{RESET}")
+
+
+_forget_project_modules()
 test_files = sorted(glob.glob(os.path.join(test_dir, "**", "test_*.py"), recursive=True))
 
 if ONLY:
@@ -106,10 +128,14 @@ if ONLY:
         emit(f"{RED}{BOLD}No tests match.{RESET}")
         sys.exit(1)
 
+if RERUN_FAILED and not os.path.exists(LAST_FAILURES_FILE) and ONLY:
+    emit(f"{DIM}--failed: no record of a previous run at {LAST_FAILURES_FILE} (a cluster restart "
+         f"clears it); running the --only selection instead{RESET}")
+    RERUN_FAILED = False
 if RERUN_FAILED:
     if not os.path.exists(LAST_FAILURES_FILE):
         emit(f"{RED}{BOLD}--failed: no record of a previous run at {LAST_FAILURES_FILE} "
-             f"(a cluster restart clears it). Run the suite once first.{RESET}")
+             f"(a cluster restart clears it). Run the suite once first, or pass --only.{RESET}")
         sys.exit(1)
     with open(LAST_FAILURES_FILE) as fh:
         recorded = [os.path.normpath(ln.strip()) for ln in fh if ln.strip()]
