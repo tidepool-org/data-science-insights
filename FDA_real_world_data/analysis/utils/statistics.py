@@ -1,11 +1,13 @@
 """
-Shared statistical functions for FDA 510(k) RWD analysis scripts.
+Shared statistical functions for the FDA 510(k) real-world-data analyses: the paired
+statistics of PLN-1001, the non-inferiority and Welch contrasts of the RFAI work, and, since
+2026-11-17, the cluster bootstrap and the mixed models of PLN-1008.
 """
 
 import numpy as np
 import pandas as pd
 from scipy import stats
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 # Optional imports for post-hoc tests
 try:
@@ -282,3 +284,219 @@ def welch_difference_ci(a: pd.Series, b: pd.Series, alpha: float = 0.05) -> Dict
     return {"n_a": n_a, "n_b": n_b, "diff": diff, "se": float(se), "df": float(df),
             "ci_low": float(diff - t_crit * se), "ci_high": float(diff + t_crit * se),
             "t_stat": float(t_stat), "p_value": float(p_value)}
+
+
+# ---------------------------------------------------------------------------
+# Cluster bootstrap and the paired contrast on per-user means (PLN-1008 §8.1;
+# folded in from the NMA statistics module on 2026-11-17, merge plan step 3)
+# ---------------------------------------------------------------------------
+
+def cluster_bootstrap_ci(
+    per_user_values: pd.Series,
+    n_boot: int = 1000,
+    ci: float = 0.95,
+    statistic: Callable = np.median,
+    seed: int = 20260520,
+) -> tuple[float, float]:
+    """Cluster bootstrap: resample users with replacement.
+
+    Args:
+        per_user_values: One value per user (e.g., per-user paired difference).
+        n_boot: Number of bootstrap resamples (PLN-1008 §8.1 calls for 1,000).
+        ci: Confidence level (default 0.95).
+        statistic: Statistic to compute on each resample (median or mean).
+        seed: RNG seed for reproducibility.
+
+    Returns:
+        (lower, upper) percentile-method confidence interval.
+    """
+    rng = np.random.default_rng(seed)
+    values = pd.Series(per_user_values).dropna().to_numpy()
+    n = len(values)
+    if n == 0:
+        return (np.nan, np.nan)
+    boot_stats = np.empty(n_boot)
+    for i in range(n_boot):
+        sample = rng.choice(values, size=n, replace=True)
+        boot_stats[i] = statistic(sample)
+    alpha = 1.0 - ci
+    lo = float(np.quantile(boot_stats, alpha / 2.0))
+    hi = float(np.quantile(boot_stats, 1.0 - alpha / 2.0))
+    return (lo, hi)
+
+
+def paired_within_user(
+    per_user_arm_a: pd.Series,
+    per_user_arm_b: pd.Series,
+) -> dict:
+    """Paired contrast on per-user arm means.
+
+    diff = arm_a − arm_b (PLN-1008 §8.1 sign convention: NMA − CE>0).
+
+    Wraps `compute_paired_statistics` above and adds the cluster-bootstrap median CI
+    required by PLN-1008 §8.1.
+    """
+    # FDA helper computes diff = seg2 - seg1 → pass seg1=arm_b, seg2=arm_a.
+    fda = compute_paired_statistics(per_user_arm_b, per_user_arm_a)
+
+    valid = per_user_arm_a.notna() & per_user_arm_b.notna()
+    arm_a, arm_b = per_user_arm_a[valid], per_user_arm_b[valid]
+    diff = (arm_a - arm_b).reset_index(drop=True)
+
+    median_lo, median_hi = cluster_bootstrap_ci(diff, statistic=np.median)
+    mean_lo, mean_hi = cluster_bootstrap_ci(diff, statistic=np.mean)
+
+    # Test statistics (FDA helper returns only the p-values). Same guards it uses:
+    # paired t needs >=3 pairs; Wilcoxon also needs >=2 distinct difference values.
+    t_stat = np.nan
+    if len(diff) >= 3:
+        t_stat = float(stats.ttest_rel(arm_a, arm_b).statistic)
+    wilcoxon_stat = np.nan
+    if len(diff) >= 3 and diff.nunique() >= 2:
+        try:
+            wilcoxon_stat = float(stats.wilcoxon(arm_a, arm_b).statistic)
+        except ValueError:
+            pass
+
+    return {
+        "mean_diff": fda["diff_mean"],
+        "mean_diff_ci_lo": mean_lo,
+        "mean_diff_ci_hi": mean_hi,
+        "median_diff": fda["diff_median"],
+        "median_diff_ci_lo": median_lo,
+        "median_diff_ci_hi": median_hi,
+        "t_stat": t_stat,
+        "t_p": fda["p_ttest"],
+        "wilcoxon_stat": wilcoxon_stat,
+        "wilcoxon_p": fda["p_wsrt"],
+        "shapiro_p": fda["normality_p"],
+        "n_pairs": fda["n_pairs"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Mixed models (statsmodels MixedLM, imported inside each function so this
+# module loads on a cluster without statsmodels): the arm contrast of PLN-1008
+# §8.1 Analysis 1B, the day-type × delivery-strategy interaction of §8.2, and
+# the TDD-stratum model of §8.3
+# ---------------------------------------------------------------------------
+
+def lmm_arm_contrast(
+    day_level: pd.DataFrame,
+    outcome: str,
+    arm_col: str = "arm",
+    user_col: str = "_userId",
+) -> dict:
+    """Linear mixed model: outcome ~ arm + (1 | user) — PLN-1008 §8.1 Method B."""
+    from statsmodels.regression.mixed_linear_model import MixedLM
+
+    formula = f"{outcome} ~ {arm_col}"
+    model = MixedLM.from_formula(formula, groups=day_level[user_col], data=day_level)
+    result = model.fit(reml=True, method="lbfgs")
+
+    arm_terms = [name for name in result.fe_params.index if name != "Intercept"]
+    arm_name = arm_terms[0]
+
+    ci_df = result.conf_int()
+    return {
+        "coef": float(result.fe_params[arm_name]),
+        "ci_lo": float(ci_df.loc[arm_name, 0]),
+        "ci_hi": float(ci_df.loc[arm_name, 1]),
+        "pvalue": float(result.pvalues[arm_name]),
+        "n_users": int(day_level[user_col].nunique()),
+        "n_days": int(len(day_level)),
+        "term": arm_name,
+    }
+
+
+def lmm_day_strategy_interaction(
+    day_level: pd.DataFrame,
+    outcome: str,
+    day_type_col: str = "day_type",
+    strategy_col: str = "delivery_strategy",
+    user_col: str = "_userId",
+) -> dict:
+    """Joint LMM with day_type × delivery_strategy interaction — PLN-1008 §8.2."""
+    from statsmodels.regression.mixed_linear_model import MixedLM
+
+    formula = f"{outcome} ~ {day_type_col} * {strategy_col}"
+    model = MixedLM.from_formula(formula, groups=day_level[user_col], data=day_level)
+    result = model.fit(reml=True, method="lbfgs")
+
+    params = result.fe_params
+    ci_df = result.conf_int()
+    pvals = result.pvalues
+
+    day_terms = [n for n in params.index if n.startswith(day_type_col) and ":" not in n]
+    strat_terms = [n for n in params.index if n.startswith(strategy_col) and ":" not in n]
+    inter_terms = [n for n in params.index if ":" in n]
+
+    main_day = day_terms[0]
+    main_strat = strat_terms[0]
+    inter = inter_terms[0]
+
+    # Marginal cell means: predict at each unique (day_type, strategy) combination.
+    day_levels = sorted(day_level[day_type_col].dropna().unique().tolist())
+    strat_levels = sorted(day_level[strategy_col].dropna().unique().tolist())
+    cell_grid = pd.DataFrame(
+        [(d, s) for d in day_levels for s in strat_levels],
+        columns=[day_type_col, strategy_col],
+    )
+    cell_grid[outcome] = 0.0
+    cell_grid[user_col] = day_level[user_col].iloc[0]
+    cell_grid["_pred"] = result.predict(cell_grid)
+
+    marginal_cells = {}
+    for (d, s), pred in zip(zip(cell_grid[day_type_col], cell_grid[strategy_col]),
+                             cell_grid["_pred"]):
+        n_days_cell = int(
+            ((day_level[day_type_col] == d) & (day_level[strategy_col] == s)).sum()
+        )
+        marginal_cells[(d, s)] = {"mean": float(pred), "n_days": n_days_cell}
+
+    return {
+        "main_day_coef": float(params[main_day]),
+        "main_day_ci": (float(ci_df.loc[main_day, 0]), float(ci_df.loc[main_day, 1])),
+        "main_day_p": float(pvals[main_day]),
+        "main_strategy_coef": float(params[main_strat]),
+        "main_strategy_ci": (float(ci_df.loc[main_strat, 0]), float(ci_df.loc[main_strat, 1])),
+        "main_strategy_p": float(pvals[main_strat]),
+        "interaction_coef": float(params[inter]),
+        "interaction_ci": (float(ci_df.loc[inter, 0]), float(ci_df.loc[inter, 1])),
+        "interaction_p": float(pvals[inter]),
+        "marginal_cells": marginal_cells,
+        "n_users": int(day_level[user_col].nunique()),
+        "n_days": int(len(day_level)),
+    }
+
+
+def lmm_tdd_stratum(
+    day_level: pd.DataFrame,
+    outcome: str,
+    stratum_col: str = "tdd_stratum",
+    user_col: str = "_userId",
+) -> dict:
+    """LMM on CE=0 days: outcome ~ tdd_stratum + (1|user) — PLN-1008 §8.3.
+
+    Reference = "High"; coefficient is Low − High.
+    """
+    from statsmodels.regression.mixed_linear_model import MixedLM
+
+    df = day_level.copy()
+    df[stratum_col] = pd.Categorical(df[stratum_col], categories=["High", "Low"])
+
+    formula = f"{outcome} ~ {stratum_col}"
+    model = MixedLM.from_formula(formula, groups=df[user_col], data=df)
+    result = model.fit(reml=True, method="lbfgs")
+
+    term = [n for n in result.fe_params.index if n != "Intercept"][0]
+    ci_df = result.conf_int()
+    return {
+        "coef": float(result.fe_params[term]),
+        "ci_lo": float(ci_df.loc[term, 0]),
+        "ci_hi": float(ci_df.loc[term, 1]),
+        "pvalue": float(result.pvalues[term]),
+        "n_users": int(df[user_col].nunique()),
+        "n_days": int(len(df)),
+        "term": term,
+    }

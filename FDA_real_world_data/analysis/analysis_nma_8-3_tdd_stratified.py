@@ -120,7 +120,7 @@ except NameError:
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils import nma_statistics  # noqa: E402
+from utils import statistics  # noqa: E402
 from utils.data_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
@@ -698,7 +698,7 @@ def run(
     skipping the rest — so iterating on one figure avoids re-rendering the others (notably the
     8.3e/12.3h scatters). Implies figures_only (you're tweaking a figure)."""
     figures_only = figures_only or figs_filter is not None  # filtering figures ⇒ skip the tables
-    nma_stats = nma_statistics
+    nma_stats = statistics
     here = analysis_dir()
     if output_dir is None:
         output_dir = os.path.join(here, "outputs", "nma", "analysis_8_3", cohort)

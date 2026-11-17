@@ -42,8 +42,8 @@ _ANALYSIS = os.path.normpath(os.path.join(_DIR, "..", "..", "analysis"))
 
 if _ANALYSIS not in sys.path:
     sys.path.insert(0, _ANALYSIS)
-from utils import data_loading, nma_statistics  # noqa: E402
-nma_stats = nma_statistics
+from utils import data_loading, statistics  # noqa: E402
+nma_stats = statistics
 
 # Reuse the project's single source of truth for arms + endpoints.
 CLASSIFICATIONS = data_loading.CLASSIFICATIONS          # 3 nested NMA arms: (flag, label)

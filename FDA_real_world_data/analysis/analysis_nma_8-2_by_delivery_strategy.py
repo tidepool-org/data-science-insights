@@ -18,7 +18,7 @@ alongside.
 
 Mirrors §8.1's per-cohort run()/main() + output-clearing; shares the analysis-ready loader,
 §7.6 cohort filter, CE>0 comparator restriction, and endpoint/classification constants via
-utils/data_loading, and the interaction LMM via utils/nma_statistics.lmm_day_strategy_interaction.
+utils/data_loading, and the interaction LMM via utils/statistics.lmm_day_strategy_interaction.
 
 Note: autobolus_on days are sparse (~2% of user-days), so within the stringent classifications
 some NMA × autobolus_on cells are too small to fit; those (classification, endpoint) cells are
@@ -75,7 +75,7 @@ except NameError:
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils import nma_statistics  # noqa: E402
+from utils import statistics  # noqa: E402
 from utils.data_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
@@ -542,7 +542,7 @@ def run(
     fit, which figure 8.2c needs — so it is computed only when tables run OR 8.2c is being rendered
     (tweaking 8.2a/8.2d alone skips it)."""
     figures_only = figures_only or figs_filter is not None  # filtering figures ⇒ skip the tables
-    nma_stats = nma_statistics
+    nma_stats = statistics
     here = analysis_dir()
     if output_dir is None:
         output_dir = os.path.join(here, "outputs", "nma", "analysis_8_2", cohort)

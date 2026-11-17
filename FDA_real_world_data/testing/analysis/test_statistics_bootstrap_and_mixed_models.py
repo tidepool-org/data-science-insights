@@ -1,5 +1,6 @@
 """
-Tests for `analysis/utils/nma_statistics.py` — Unit 4.
+Tests for the cluster bootstrap, the paired contrast on per-user means, and the mixed models
+of `analysis/utils/statistics.py` (folded in from the NMA statistics module on 2026-11-17).
 
 Pure-Python tests. LMM tests call `require_statsmodels()` (a skip) so
 they skip cleanly until statsmodels is installed in the env.
@@ -17,7 +18,7 @@ sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "analysis"))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..")))
 from offline_test_helpers import raises, require_statsmodels, run_tests  # noqa: E402
 
-from utils.nma_statistics import (  # type: ignore # noqa: E402
+from utils.statistics import (  # type: ignore # noqa: E402
     cluster_bootstrap_ci,
     lmm_arm_contrast,
     lmm_day_strategy_interaction,
@@ -297,4 +298,4 @@ if __name__ == "__main__":
         test_lmm_arm_contrast_raises_on_single_arm_level,
         test_lmm_day_strategy_interaction_raises_on_collapsed_cell,
         test_lmm_tdd_stratum_raises_on_single_stratum,
-    ], "test_nma_statistics")
+    ], "test_statistics_bootstrap_and_mixed_models")

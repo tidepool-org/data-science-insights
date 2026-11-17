@@ -4,7 +4,7 @@
 Extracted verbatim from analysis_8-3 so both analyses consume ONE definition of the D12 rework —
 the same-user-set-gated within-user TDD rank machinery (`_rank_strata` + `_same_user_set_gate`) plus
 the across-user / within-user / day-level-LMM base tables. Pure pandas / numpy (no matplotlib); the
-LMM table takes the loaded `nma_statistics` module as a parameter, so this module imports cleanly.
+LMM table takes the loaded `utils.statistics` module as a parameter, so this module imports cleanly.
 
 Sign convention throughout: within-user contrasts are **Low − High** (lmm_tdd_stratum ref = High).
 """

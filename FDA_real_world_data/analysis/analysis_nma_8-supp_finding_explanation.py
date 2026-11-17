@@ -52,7 +52,7 @@ except NameError:
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils import nma_statistics  # noqa: E402
+from utils import statistics  # noqa: E402
 from utils.data_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
@@ -342,7 +342,7 @@ def run(
     csv_path=None,
 ):
     """Run the supplement for one age cohort → outputs/nma/analysis_8_supp/<cohort>/."""
-    nma_stats = nma_statistics
+    nma_stats = statistics
     a81 = _load_a81()
     here = analysis_dir()
     if output_dir is None:

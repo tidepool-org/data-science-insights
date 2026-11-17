@@ -81,8 +81,7 @@ except NameError:
 if _ANALYSIS_DIR not in sys.path:
     sys.path.insert(0, _ANALYSIS_DIR)
 
-from utils import nma_statistics  # noqa: E402
-from utils import statistics as fda_statistics  # noqa: E402
+from utils import statistics  # noqa: E402
 from utils.data_loading import (  # noqa: E402
     CLASSIFICATIONS,
     COMPARATOR_FLAG,
@@ -856,8 +855,8 @@ def run(
     full run first so the tables exist. figs_filter (a substring, e.g. "8_1b") renders only matching
     figure builders (tags: 8_1a/b/c, 12_1a/b/c) and implies figures_only."""
     figures_only = figures_only or figs_filter is not None  # filtering figures ⇒ skip the tables
-    fda_stats = fda_statistics
-    nma_stats = nma_statistics
+    fda_stats = statistics
+    nma_stats = statistics
     here = analysis_dir()
     if output_dir is None:
         output_dir = os.path.join(here, "outputs", "nma", "analysis_8_1", cohort)
