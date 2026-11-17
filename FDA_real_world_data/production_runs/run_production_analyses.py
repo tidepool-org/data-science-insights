@@ -12,6 +12,9 @@ Runs, in this order, each analysis owning and wiping its output folder:
   once, after the PLN-1001 analyses (2026-11-05)
     ir-2, ir-3   IR-1002 on the autobolus-day population
     ir-6, ir-6b  the extreme-preset outcomes and the dose response
+  once, last (2026-11-17), on the production nma_user_day_analysis_ready table
+    nma-7-1      the PLN-1008 cohort flow
+    nma-8-1 to nma-8-4, nma-8-supp   the PLN-1008 analyses, each its three cohorts
 
 and writes outputs/run_manifest.json: the run time, the Spark version, the
 hash of the code tree it ran from (production_runs/tree_manifest.py; the
@@ -25,6 +28,7 @@ Run (Databricks Run button):
   production_runs/run_production_analyses.py --boxes all           # the primary and both window variants
   production_runs/run_production_analyses.py --boxes prod --coverages prod
   production_runs/run_production_analyses.py --analyses 6-3a,8-1   # a subset
+  production_runs/run_production_analyses.py --analyses nma-7-1,nma-8-1,nma-8-2,nma-8-3,nma-8-4,nma-8-supp
 """
 
 import argparse
@@ -76,8 +80,20 @@ INTERACTIVE_REVIEW_ANALYSES = [
     ("ir-6", "analysis_ir-6_extreme_preset_outcomes.py"),
     ("ir-6b", "analysis_ir-6b_dose_response.py"),
 ]
+# The PLN-1008 analyses (2026-11-17, merge plan step 3), last, each once on the
+# production nma_user_day_analysis_ready table through its `main(spark)`, the
+# entry point every PLN-1008 analysis has: 7-1's flow, then 8-1 to 8-4 and the
+# supplement, each running its three cohorts (adult, pediatric, all).
+NMA_ANALYSES = [
+    ("nma-7-1", "analysis_nma_7-1_cohort_flow.py"),
+    ("nma-8-1", "analysis_nma_8-1_glycemic_outcomes_vs_carb_entry.py"),
+    ("nma-8-2", "analysis_nma_8-2_by_delivery_strategy.py"),
+    ("nma-8-3", "analysis_nma_8-3_tdd_stratified.py"),
+    ("nma-8-4", "analysis_nma_8-4_by_delivery_strategy_stratified.py"),
+    ("nma-8-supp", "analysis_nma_8-supp_finding_explanation.py"),
+]
 ANALYSIS_NAMES = ([name for name, _ in TRANSITION_ANALYSES] + [DURABILITY_ANALYSIS[0], STABLE_ANALYSIS[0]]
-                  + [name for name, _ in INTERACTIVE_REVIEW_ANALYSES])
+                  + [name for name, _ in INTERACTIVE_REVIEW_ANALYSES] + [name for name, _ in NMA_ANALYSES])
 
 # The window builds and the coverage builds, by suffix (run_all_boxes.py and
 # run_all_coverages.py name them); the default window build is the primary
@@ -150,6 +166,14 @@ def run(spark, boxes=None, coverages=None, analyses=None, load=load_analysis, ma
         print(f"[production analyses] {name} on the production tables")
         print("=" * 72)
         load(filename).run_in_databricks(spark)
+        runs.append({"analysis": name, "build": ""})
+    for name, filename in NMA_ANALYSES:
+        if name not in analyses:
+            continue
+        print("=" * 72)
+        print(f"[production analyses] {name} on the production analysis-ready table")
+        print("=" * 72)
+        load(filename).main(spark)
         runs.append({"analysis": name, "build": ""})
 
     manifest = {

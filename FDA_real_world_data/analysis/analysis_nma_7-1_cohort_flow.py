@@ -142,18 +142,25 @@ def write_csv(frame, output_dir, name):
     print(f"  Saved: {path}")
 
 
-def run(csv_path=None, issued_csv=None, output_dir=OUTPUT_DIR):
+def run(csv_path=None, issued_csv=None, output_dir=OUTPUT_DIR, spark=None,
+        analysis_ready_table=ANALYSIS_READY_TABLE):
+    """The PLN-1008 cohort flow from the whole cohort table: on Databricks (`spark` given) the
+    table itself, locally the CSV snapshot (`csv_path`, by default where the staging writes it)."""
     flow = cohort_flow
-    if csv_path is None:
-        csv_path = nma_snapshot_csv(ANALYSIS_READY_TABLE)
     shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)
     print("Analysis 7.1: the PLN-1008 cohort flow")
     print("=" * 60)
-    print(f"\n1. Reading the cohort table: {csv_path}")
-    pdf = pd.read_csv(csv_path)
+    if spark is not None:
+        print(f"\n1. Reading the cohort table: {analysis_ready_table}")
+        pdf = spark.table(analysis_ready_table).toPandas()
+    else:
+        if csv_path is None:
+            csv_path = nma_snapshot_csv(analysis_ready_table)
+        print(f"\n1. Reading the cohort table: {csv_path}")
+        pdf = pd.read_csv(csv_path)
     assert_nma_day_predicates(pdf)
     current = flow.count_flow(pdf, stages(flow), unit="user_days")
     flow.assert_monotone(current)
@@ -183,10 +190,24 @@ def run(csv_path=None, issued_csv=None, output_dir=OUTPUT_DIR):
     return {"current": current, "issued": issued}
 
 
+def main(spark=None, analysis_ready_table=ANALYSIS_READY_TABLE, csv_path=None, issued_csv=None,
+         output_dir=OUTPUT_DIR):
+    """The entry point the analysis driver calls (`main(spark)`), as every PLN-1008 analysis has."""
+    return run(csv_path=csv_path, issued_csv=issued_csv, output_dir=output_dir, spark=spark,
+               analysis_ready_table=analysis_ready_table)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--analysis_ready_table", default=ANALYSIS_READY_TABLE)
     parser.add_argument("--csv_path", default=None, help="the analysis-ready snapshot (default outputs/nma/<table>.csv)")
     parser.add_argument("--issued_csv", default=None, help="the issued vintage's snapshot, for the side-by-side column")
     parser.add_argument("--output_dir", default=OUTPUT_DIR)
-    args = parser.parse_args()
-    run(csv_path=args.csv_path, issued_csv=args.issued_csv, output_dir=args.output_dir)
+    args, _ = parser.parse_known_args()
+    # Databricks injects a `spark` global; a local run has none and reads the snapshot.
+    try:
+        _spark = spark  # type: ignore[name-defined]  # noqa: F821
+    except NameError:
+        _spark = None
+    main(_spark, analysis_ready_table=args.analysis_ready_table, csv_path=args.csv_path,
+         issued_csv=args.issued_csv, output_dir=args.output_dir)

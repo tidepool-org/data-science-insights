@@ -33,6 +33,9 @@ def make_loader(calls):
         def run_in_databricks(self, spark, **kwargs):
             calls.append((self.filename, kwargs))
 
+        def main(self, spark, **kwargs):  # the PLN-1008 analyses' entry point
+            calls.append((self.filename, {"entry": "main", **kwargs}))
+
     def load(filename):
         return Module(filename)
     return load
@@ -46,15 +49,20 @@ def test_default_run_order_and_manifest():
         files = [f for f, _ in calls]
         transition = [f for _, f in driver.TRANSITION_ANALYSES]
         interactive = [f for _, f in driver.INTERACTIVE_REVIEW_ANALYSES]
+        nma = [f for _, f in driver.NMA_ANALYSES]
         assert files == (transition + [driver.DURABILITY_ANALYSIS[1]] * 3 + [driver.STABLE_ANALYSIS[1]]
-                         + interactive), files
+                         + interactive + nma), files
         assert files[0].startswith("analysis_6-3a"), "the flow tables come first"
         assert all(k == {"suffix": ""} for f, k in calls[:len(transition)]), "the primary build only by default"
         durability = [k for f, k in calls if f == driver.DURABILITY_ANALYSIS[1]]
         assert durability == [{"suffix": s, "table_suffix": s} for s in ("", "_cov070", "_cov090")], durability
         assert calls[len(transition) + 3] == (driver.STABLE_ANALYSIS[1], {}), "8-6 takes no build"
-        assert all(k == {} for f, k in calls[-len(interactive):]), "the interactive-review analyses take no build"
+        interactive_calls = calls[len(transition) + 4:len(transition) + 4 + len(interactive)]
+        assert all(k == {} for f, k in interactive_calls), "the interactive-review analyses take no build"
         assert [f[:15] for f in interactive] == ["analysis_ir-2_g", "analysis_ir-3_p", "analysis_ir-6_e", "analysis_ir-6b_"]
+        assert all(f.startswith("analysis_nma_") and k == {"entry": "main"} for f, k in calls[-len(nma):]), (
+            "the PLN-1008 analyses run last, each through main(spark)")
+        assert [n for n, _ in driver.NMA_ANALYSES][0] == "nma-7-1", "the PLN-1008 flow comes first in its group"
         with open(manifest_path) as handle:
             on_disk = json.load(handle)
         assert on_disk["tree_sha256"] == manifest["tree_sha256"] and len(on_disk["tree_sha256"]) == 64
