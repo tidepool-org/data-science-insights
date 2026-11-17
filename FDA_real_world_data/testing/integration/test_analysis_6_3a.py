@@ -26,7 +26,7 @@ except NameError:
 sys.path.insert(0, os.path.join(_here, "..", ".."))
 sys.path.insert(0, os.path.join(_here, "..", "..", "analysis"))
 
-from testing.integration import run_pipeline  # noqa: E402
+from testing.integration import build_synthetic_nma_bddp, run_pipeline  # noqa: E402
 
 import importlib.util  # noqa: E402
 
@@ -85,7 +85,11 @@ try:
         n_loop = spark.table(run_pipeline.TABLES["loop_recommendations"]).select("_userId").distinct().count()
         assert by_stage["BDDP sample"] == n_bddp
         assert by_stage["Loop automated dosing observed"] == n_loop
-        assert by_stage["Candidate 28-day window"] == n_loop, "every archetype spans 28 days"
+        # Every FDA archetype spans 28 days; the PLN-1008 archetypes that span fewer (since
+        # the fixture merge of 2026-11-17) are the ones the candidate-window stage drops.
+        short_span = sorted(u for u, d in build_synthetic_nma_bddp.ARCHETYPE_DAYS.items() if d < 28)
+        assert by_stage["Candidate 28-day window"] == n_loop - len(short_span), (
+            f"every FDA archetype spans 28 days; the PLN-1008 archetypes under 28 days are {short_span}")
         seg_ids = {r["_userId"] for r in spark.table(run_pipeline.TABLES["valid_transition_segments"])
                    .select("_userId").distinct().collect()}
         assert "int_user_25" not in seg_ids, "int_user_25 must fail 12 of 14 days of the right kind"

@@ -7,8 +7,11 @@ Over the synthetic BDDP fixture, the two plugin-only Loop 3.2 archetypes:
   and the user has a transition segment;
 - int_user_42, automated boluses throughout: every day an autobolus day, no
   segment.
-And for every other archetype, each automated dose is recognised by the
-decision-match rule, as the fixture builds them.
+And for every other FDA archetype, each automated dose is recognised by the
+decision-match rule, as the fixture builds them; the PLN-1008 archetypes
+(nma_user_*, in the shared fixture since 2026-11-17) carry Apple Health's
+automatically-issued key from a source named Loop and no dosing decision, so
+their automated doses are recognised by health_flag_named_loop alone.
 
 Run on Databricks.
 """
@@ -46,10 +49,15 @@ with run_pipeline.session(spark):
     assert "int_user_42" not in set(segments["_userId"]), "int_user_42 must have no segment"
     print("PASS: a Loop 3.2 user on automated boluses throughout forms no window")
 
-    others = doses[~doses["_userId"].isin(["int_user_41", "int_user_42"]) & (doses["is_automated"] == 1)]
-    assert len(others) > 0 and others["decision_match"].eq(1).all(), \
-        "every other archetype's automated dose comes from a Loop decision"
+    automated = doses[~doses["_userId"].isin(["int_user_41", "int_user_42"]) & (doses["is_automated"] == 1)]
+    fda = automated[automated["_userId"].str.startswith("int_user_")]
+    assert len(fda) > 0 and fda["decision_match"].eq(1).all(), \
+        "every other FDA archetype's automated dose comes from a Loop decision"
+    nma = automated[automated["_userId"].str.startswith("nma_user_")]
+    assert len(nma) > 0 and nma["health_flag_named_loop"].eq(1).all() and nma["decision_match"].eq(0).all(), \
+        "every PLN-1008 archetype's automated dose carries the Apple Health key from a source named Loop and no decision"
+    assert len(fda) + len(nma) == len(automated), "every automated dose belongs to an FDA or a PLN-1008 archetype"
     assert doses["routes"].isin(["plugin", "other"]).all(), sorted(doses["routes"].unique())
-    print("PASS: every other archetype's automated doses are recognised by the decision match")
+    print("PASS: the FDA archetypes' automated doses are recognised by the decision match, the PLN-1008 ones by the Apple Health key")
 
 print("\nAll integration assertions for the dose classifier passed.")
