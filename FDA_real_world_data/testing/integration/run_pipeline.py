@@ -196,6 +196,17 @@ def _ensure_staging_on_path():
         sys.path.insert(0, staging_dir)
 
 
+def _new_progress(steps):
+    """The rebuild's timing (production_runs/run_progress.py): each staging script is announced
+    with the run's status and its duration, and the rebuild ends with the table of durations."""
+    production_runs = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(build_synthetic_bddp.__file__)),
+                                                    "..", "..", "production_runs"))
+    if production_runs not in sys.path:
+        sys.path.insert(0, production_runs)
+    import run_progress  # type: ignore # noqa: E402
+    return run_progress.RunProgress("integration_harness", total=steps)
+
+
 def _all_terminal_tables_exist(spark):
     for key in TERMINAL_TABLES:
         if not spark.catalog.tableExists(TABLES[key]):
@@ -300,33 +311,34 @@ def run(spark, force=False):
     import export_nma_user_day_analysis_ready  # type: ignore # noqa: E402
 
     # ── Step 1: fixtures ──────────────────────────────────────────────────
-    print("[integration.run_pipeline] building synthetic BDDP fixture...")
+    progress = _new_progress(steps=38)
+    progress.step("building synthetic BDDP fixture", line="[integration.run_pipeline] building synthetic BDDP fixture...")
     build_synthetic_bddp.build(spark, TABLES["bddp"])
     build_synthetic_bddp.build_user_dates(spark, TABLES["user_dates"])
     build_synthetic_bddp.build_user_gender(spark, TABLES["user_gender"])
     build_synthetic_bddp.build_jaeb_link(spark, TABLES["jaeb_link"])
 
     # ── Step 2: phase 1 base tables ───────────────────────────────────────
-    print("[integration.run_pipeline] export_loop_dose_classification...")
+    progress.step("export_loop_dose_classification", line="[integration.run_pipeline] export_loop_dose_classification...")
     export_loop_dose_classification.run(
         spark,
         input_table=TABLES["bddp"],
         output_table=TABLES["loop_dose_classification"],
     )
-    print("[integration.run_pipeline] export_loop_recommendations...")
+    progress.step("export_loop_recommendations", line="[integration.run_pipeline] export_loop_recommendations...")
     export_loop_recommendations.run(
         spark,
         input_table=TABLES["bddp"],
         dose_table=TABLES["loop_dose_classification"],
         output_table=TABLES["loop_recommendations"],
     )
-    print("[integration.run_pipeline] build_user_diagnosis_type...")
+    progress.step("build_user_diagnosis_type", line="[integration.run_pipeline] build_user_diagnosis_type...")
     build_synthetic_bddp.build_user_diagnosis_type(
         spark,
         TABLES["user_diagnosis_type"],
         TABLES["loop_recommendations"],
     )
-    print("[integration.run_pipeline] export_cbg_from_loop...")
+    progress.step("export_cbg_from_loop", line="[integration.run_pipeline] export_cbg_from_loop...")
     export_cbg_from_loop.run(
         spark,
         input_table=TABLES["bddp"],
@@ -335,7 +347,7 @@ def run(spark, force=False):
     )
 
     # ── Step 3: segment extraction ────────────────────────────────────────
-    print("[integration.run_pipeline] export_valid_transition_segments...")
+    progress.step("export_valid_transition_segments", line="[integration.run_pipeline] export_valid_transition_segments...")
     export_valid_transition_segments.run(
         spark,
         output_table=TABLES["valid_transition_segments"],
@@ -343,7 +355,7 @@ def run(spark, force=False):
         user_dates_table=TABLES["user_dates"],
         user_gender_table=TABLES["user_gender"],
     )
-    print("[integration.run_pipeline] export_stable_autobolus_segments...")
+    progress.step("export_stable_autobolus_segments", line="[integration.run_pipeline] export_stable_autobolus_segments...")
     export_stable_autobolus_segments.run(
         spark,
         output_table=TABLES["stable_autobolus_segments"],
@@ -351,7 +363,7 @@ def run(spark, force=False):
         user_dates_table=TABLES["user_dates"],
         user_gender_table=TABLES["user_gender"],
     )
-    print("[integration.run_pipeline] export_autobolus_durability...")
+    progress.step("export_autobolus_durability", line="[integration.run_pipeline] export_autobolus_durability...")
     export_autobolus_durability.run(
         spark,
         output_table=TABLES["autobolus_durability"],
@@ -362,7 +374,7 @@ def run(spark, force=False):
         jaeb_table=TABLES["jaeb_link"],
         bddp_table=TABLES["bddp"],
     )
-    print("[integration.run_pipeline] export_autobolus_event_times...")
+    progress.step("export_autobolus_event_times", line="[integration.run_pipeline] export_autobolus_event_times...")
     export_autobolus_event_times.run(
         spark,
         output_table=TABLES["autobolus_event_times"],
@@ -371,28 +383,28 @@ def run(spark, force=False):
     )
 
     # ── Step 4: segment-filtered CBG and glycemic endpoints ───────────────
-    print("[integration.run_pipeline] export_cbg_from_transitions...")
+    progress.step("export_cbg_from_transitions", line="[integration.run_pipeline] export_cbg_from_transitions...")
     export_cbg_from_transitions.run(
         spark,
         output_table=TABLES["valid_transition_cbg"],
         loop_cbg_table=TABLES["loop_cbg"],
         transition_segments_table=TABLES["valid_transition_segments"],
     )
-    print("[integration.run_pipeline] export_cbg_from_stable...")
+    progress.step("export_cbg_from_stable", line="[integration.run_pipeline] export_cbg_from_stable...")
     export_cbg_from_stable.run(
         spark,
         output_table=TABLES["stable_autobolus_cbg"],
         loop_cbg_table=TABLES["loop_cbg"],
         stable_segments_table=TABLES["stable_autobolus_segments"],
     )
-    print("[integration.run_pipeline] compute_glycemic_endpoints (transition)...")
+    progress.step("compute_glycemic_endpoints (transition)", line="[integration.run_pipeline] compute_glycemic_endpoints (transition)...")
     compute_glycemic_endpoints.run(
         spark,
         mode="transition",
         input_table=TABLES["valid_transition_cbg"],
         output_table=TABLES["glycemic_endpoints_transition"],
     )
-    print("[integration.run_pipeline] compute_glycemic_endpoints (stable)...")
+    progress.step("compute_glycemic_endpoints (stable)", line="[integration.run_pipeline] compute_glycemic_endpoints (stable)...")
     compute_glycemic_endpoints.run(
         spark,
         mode="stable",
@@ -401,14 +413,14 @@ def run(spark, force=False):
     )
 
     # ── Step 5: carbs + overrides + override CBG/endpoints ────────────────
-    print("[integration.run_pipeline] export_carbohydrates_from_transitions...")
+    progress.step("export_carbohydrates_from_transitions", line="[integration.run_pipeline] export_carbohydrates_from_transitions...")
     export_carbohydrates_from_transitions.run(
         spark,
         output_table=TABLES["valid_transition_carbs"],
         bddp_table=TABLES["bddp"],
         transition_segments_table=TABLES["valid_transition_segments"],
     )
-    print("[integration.run_pipeline] export_overrides_from_transitions...")
+    progress.step("export_overrides_from_transitions", line="[integration.run_pipeline] export_overrides_from_transitions...")
     export_overrides_from_transitions.run(
         spark,
         output_table=TABLES["overrides_by_segment"],
@@ -416,14 +428,14 @@ def run(spark, force=False):
         transition_segments_table=TABLES["valid_transition_segments"],
         loop_cbg_table=TABLES["loop_cbg"],
     )
-    print("[integration.run_pipeline] export_cbg_from_overrides...")
+    progress.step("export_cbg_from_overrides", line="[integration.run_pipeline] export_cbg_from_overrides...")
     export_cbg_from_overrides.run(
         spark,
         output_table=TABLES["valid_override_cbg"],
         overrides_table=TABLES["overrides_by_segment"],
         loop_cbg_table=TABLES["loop_cbg"],
     )
-    print("[integration.run_pipeline] compute_glycemic_endpoints (override)...")
+    progress.step("compute_glycemic_endpoints (override)", line="[integration.run_pipeline] compute_glycemic_endpoints (override)...")
     compute_glycemic_endpoints.run(
         spark,
         mode="override",
@@ -432,7 +444,7 @@ def run(spark, force=False):
     )
 
     # ── Step 6: guardrails ────────────────────────────────────────────────
-    print("[integration.run_pipeline] export_segments_within_guardrails (transition)...")
+    progress.step("export_segments_within_guardrails (transition)", line="[integration.run_pipeline] export_segments_within_guardrails (transition)...")
     export_segments_within_guardrails.run(
         spark,
         mode="transition",
@@ -440,7 +452,7 @@ def run(spark, force=False):
         segments_table=TABLES["valid_transition_segments"],
         output_table=TABLES["valid_transition_guardrails"],
     )
-    print("[integration.run_pipeline] export_segments_within_guardrails (stable)...")
+    progress.step("export_segments_within_guardrails (stable)", line="[integration.run_pipeline] export_segments_within_guardrails (stable)...")
     export_segments_within_guardrails.run(
         spark,
         mode="stable",
@@ -450,7 +462,7 @@ def run(spark, force=False):
     )
 
     # ── Step 6b: the cohort tables (execution plan Step 3) ────────────────
-    print("[integration.run_pipeline] export_transition_cohort...")
+    progress.step("export_transition_cohort", line="[integration.run_pipeline] export_transition_cohort...")
     export_transition_cohort.run(
         spark,
         output_table=TABLES["transition_cohort"],
@@ -460,14 +472,14 @@ def run(spark, force=False):
         carbs_table=TABLES["valid_transition_carbs"],
         diagnosis_table=TABLES["user_diagnosis_type"],
     )
-    print("[integration.run_pipeline] export_transition_activation_cohort...")
+    progress.step("export_transition_activation_cohort", line="[integration.run_pipeline] export_transition_activation_cohort...")
     export_transition_activation_cohort.run(
         spark,
         output_table=TABLES["transition_activation_cohort"],
         overrides_table=TABLES["overrides_by_segment"],
         cohort_table=TABLES["transition_cohort"],
     )
-    print("[integration.run_pipeline] export_stable_cohort...")
+    progress.step("export_stable_cohort", line="[integration.run_pipeline] export_stable_cohort...")
     export_stable_cohort.run(
         spark,
         output_table=TABLES["stable_cohort"],
@@ -482,20 +494,20 @@ def run(spark, force=False):
     # ── Step 7: IR-1002 dataset-wide guardrail pipeline ───────────────────
     # Independent of the transition/stable subtrees: needs only the phase-1
     # base tables (loop_recommendations, loop_cbg, user_diagnosis_type).
-    print("[integration.run_pipeline] export_overrides_all...")
+    progress.step("export_overrides_all", line="[integration.run_pipeline] export_overrides_all...")
     export_overrides_all.run(
         spark,
         output_table=TABLES["overrides_all"],
         bddp_table=TABLES["bddp"],
         loop_recommendations_table=TABLES["loop_recommendations"],
     )
-    print("[integration.run_pipeline] export_correction_range_history...")
+    progress.step("export_correction_range_history", line="[integration.run_pipeline] export_correction_range_history...")
     export_correction_range_history.run(
         spark,
         output_table=TABLES["correction_range_history"],
         bddp_table=TABLES["bddp"],
     )
-    print("[integration.run_pipeline] export_ab_day_cohort...")
+    progress.step("export_ab_day_cohort", line="[integration.run_pipeline] export_ab_day_cohort...")
     export_ab_day_cohort.run(
         spark,
         output_table=TABLES["ab_day_cohort"],
@@ -504,7 +516,7 @@ def run(spark, force=False):
         user_dates_table=TABLES["user_dates"],
         diagnosis_table=TABLES["user_diagnosis_type"],
     )
-    print("[integration.run_pipeline] export_override_guardrail_flags...")
+    progress.step("export_override_guardrail_flags", line="[integration.run_pipeline] export_override_guardrail_flags...")
     export_override_guardrail_flags.run(
         spark,
         flags_table=TABLES["override_guardrail_flags"],
@@ -516,14 +528,14 @@ def run(spark, force=False):
         # local-clock intersection; without this it would read production BDDP.
         bddp_table=TABLES["bddp"],
     )
-    print("[integration.run_pipeline] export_cbg_from_ab_days...")
+    progress.step("export_cbg_from_ab_days", line="[integration.run_pipeline] export_cbg_from_ab_days...")
     export_cbg_from_ab_days.run(
         spark,
         output_table=TABLES["ab_day_cbg"],
         loop_cbg_table=TABLES["loop_cbg"],
         ab_day_cohort_table=TABLES["ab_day_cohort"],
     )
-    print("[integration.run_pipeline] compute_glycemic_endpoints (ab_days)...")
+    progress.step("compute_glycemic_endpoints (ab_days)", line="[integration.run_pipeline] compute_glycemic_endpoints (ab_days)...")
     compute_glycemic_endpoints.run(
         spark,
         mode="ab_days",
@@ -532,7 +544,7 @@ def run(spark, force=False):
     )
 
     # ── Step 8: the interactive-review cohort tables (2026-11-05) ─────────
-    print("[integration.run_pipeline] export_extreme_preset_cohort...")
+    progress.step("export_extreme_preset_cohort", line="[integration.run_pipeline] export_extreme_preset_cohort...")
     export_extreme_preset_cohort.run(
         spark,
         activations_table=TABLES["extreme_preset_activations"],
@@ -542,7 +554,7 @@ def run(spark, force=False):
         segments_table=TABLES["valid_transition_segments"],
         endpoints_table=TABLES["glycemic_endpoints_transition"],
     )
-    print("[integration.run_pipeline] export_dose_response_episodes...")
+    progress.step("export_dose_response_episodes", line="[integration.run_pipeline] export_dose_response_episodes...")
     export_dose_response_episodes.run(
         spark,
         candidates_table=TABLES["dose_response_candidates"],
@@ -557,46 +569,46 @@ def run(spark, force=False):
 
     # ── The PLN-1008 chain (Phase 6 of the job), on the same day table, loop_cbg,
     # user_dates, user_gender, diagnosis lookup, and autobolus-day cohort table ──
-    print("[integration.run_pipeline] compute_nma_user_day_glycemic_endpoints...")
+    progress.step("compute_nma_user_day_glycemic_endpoints", line="[integration.run_pipeline] compute_nma_user_day_glycemic_endpoints...")
     compute_nma_user_day_glycemic_endpoints.run(
         spark,
         input_table=TABLES["loop_cbg"],
         output_table=TABLES["nma_glycemic_endpoints"],
     )
-    print("[integration.run_pipeline] export_nma_user_day_bolus_classification...")
+    progress.step("export_nma_user_day_bolus_classification", line="[integration.run_pipeline] export_nma_user_day_bolus_classification...")
     export_nma_user_day_bolus_classification.run(
         spark,
         dose_table=TABLES["loop_dose_classification"],
         anchor_table=TABLES["loop_recommendations"],
         output_table=TABLES["nma_bolus_classification"],
     )
-    print("[integration.run_pipeline] export_nma_user_day_bolus_counts...")
+    progress.step("export_nma_user_day_bolus_counts", line="[integration.run_pipeline] export_nma_user_day_bolus_counts...")
     export_nma_user_day_bolus_counts.run(
         spark,
         bolus_classification_table=TABLES["nma_bolus_classification"],
         output_table=TABLES["nma_bolus_counts"],
     )
-    print("[integration.run_pipeline] export_nma_user_day_carbs...")
+    progress.step("export_nma_user_day_carbs", line="[integration.run_pipeline] export_nma_user_day_carbs...")
     export_nma_user_day_carbs.run(
         spark,
         input_table=TABLES["bddp"],
         loop_recommendations_table=TABLES["loop_recommendations"],
         output_table=TABLES["nma_carbs"],
     )
-    print("[integration.run_pipeline] export_nma_user_day_tdd...")
+    progress.step("export_nma_user_day_tdd", line="[integration.run_pipeline] export_nma_user_day_tdd...")
     export_nma_user_day_tdd.run(
         spark,
         input_table=TABLES["bddp"],
         output_table=TABLES["nma_tdd"],
     )
-    print("[integration.run_pipeline] export_nma_user_day_age...")
+    progress.step("export_nma_user_day_age", line="[integration.run_pipeline] export_nma_user_day_age...")
     export_nma_user_day_age.run(
         spark,
         loop_recommendations_table=TABLES["loop_recommendations"],
         user_dates_table=TABLES["user_dates"],
         output_table=TABLES["nma_age"],
     )
-    print("[integration.run_pipeline] export_nma_user_day_classification...")
+    progress.step("export_nma_user_day_classification", line="[integration.run_pipeline] export_nma_user_day_classification...")
     export_nma_user_day_classification.run(
         spark,
         loop_recommendations_table=TABLES["loop_recommendations"],
@@ -605,7 +617,7 @@ def run(spark, force=False):
         carbs_table=TABLES["nma_carbs"],
         output_table=TABLES["nma_classification"],
     )
-    print("[integration.run_pipeline] export_nma_user_day_analysis_ready...")
+    progress.step("export_nma_user_day_analysis_ready", line="[integration.run_pipeline] export_nma_user_day_analysis_ready...")
     export_nma_user_day_analysis_ready.run(
         spark,
         loop_recommendations_table=TABLES["loop_recommendations"],
@@ -619,6 +631,7 @@ def run(spark, force=False):
         output_table=TABLES["nma_analysis_ready"],
         output_csv=False,  # no CSV into FDA_real_world_data/outputs/nma/ from a test build
     )
+    progress.finish()
     print("[integration.run_pipeline] pipeline complete")
     return TABLES
 

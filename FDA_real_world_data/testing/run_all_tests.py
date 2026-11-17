@@ -36,6 +36,14 @@ kernel otherwise serves old modules to every test (seen 2026-11-17).
 
 testing/rerun_failed_tests.py is the Run-button form of --failed.
 
+Each bar carries the run's progress: the test's number of the total, the time
+elapsed, and an estimate of the time left, from the durations of the last run
+of the same selection and from the mean so far when there is none
+(production_runs/run_progress.py). The run ends with its total time beside the
+previous run's and its five slowest tests, and appends every test's time to
+outputs/run_times/run_times.csv, the record over time that
+production_runs/show_run_times.py summarises.
+
 Run on Databricks.
 """
 
@@ -161,6 +169,14 @@ for f in test_files:
     metas.append((f, group, os.path.basename(f)[:-3], rel))  # name strips ".py"
     group_total[group] = group_total.get(group, 0) + 1
 
+# The run's timing: a status on every bar, the slowest tests at the end, and the durations
+# recorded for the next run's estimate. Imported after the cached project modules are forgotten.
+sys.path.insert(0, os.path.join(os.path.dirname(test_dir), "production_runs"))
+from run_progress import RunProgress, format_duration  # noqa: E402
+
+progress = RunProgress("test_suite:" + (",".join(ONLY) if ONLY else "all") + (":failed" if RERUN_FAILED else ""),
+                       total=len(metas), emit=emit)
+
 # Run each test and render its bar immediately. results: (group, name, ok, elapsed, error)
 results = []
 current_group = None
@@ -175,6 +191,7 @@ for test_file, group, name, rel in metas:
     if not VERBOSE and IS_TTY:
         emit(f"  {DIM}{BAR} {name}  running…{RESET}", end="")
 
+    progress.step(rel, announce=False)
     start = time.time()
     if VERBOSE:
         emit(f"  {DIM}── {name} ──{RESET}")
@@ -194,9 +211,10 @@ for test_file, group, name, rel in metas:
             ok, error = False, f"{type(e).__name__}: {e}"
         output = buf.getvalue()
     elapsed = time.time() - start
+    progress.end_step(ok)
 
     color = GREEN if ok else RED
-    bar_line = f"  {color}{BAR}{RESET} {name}  {DIM}{elapsed:.1f}s{RESET}"
+    bar_line = f"  {color}{BAR}{RESET} {name}  {DIM}{elapsed:.1f}s   [{progress.status()}]{RESET}"
     if not VERBOSE and IS_TTY:
         emit("\r\033[K" + bar_line)  # carriage-return + clear-to-eol overwrites "running…"
     else:
@@ -214,6 +232,14 @@ n_fail = len(results) - n_pass
 emit(f"\n{GREEN}{'█' * n_pass}{RED}{'█' * n_fail}{RESET}")
 tally_color = GREEN if n_fail == 0 else RED
 emit(f"{tally_color}{BOLD}{n_pass} passed, {n_fail} failed, {len(results)} total{RESET}")
+
+# --- The run's time, and where it went ---
+timing = progress.finish(announce=False)
+previous = timing["previous_total_seconds"]
+emit(f"{DIM}{format_duration(timing['total_seconds'])} in all"
+     + ("" if previous is None else f" (the previous run: {format_duration(previous)})") + "; slowest: "
+     + ", ".join(f"{os.path.basename(test)[:-3]} {format_duration(seconds)}" for test, seconds in timing["slowest"][:5])
+     + f"{RESET}")
 
 # --- Record this run's failures for --failed (an empty file when green) ---
 with open(LAST_FAILURES_FILE, "w") as fh:

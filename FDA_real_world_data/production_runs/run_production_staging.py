@@ -99,6 +99,7 @@ import export_transition_activation_cohort  # noqa: E402
 import export_transition_cohort  # noqa: E402
 import export_user_diagnosis_type  # noqa: E402
 import run_all_boxes  # noqa: E402
+import run_progress  # noqa: E402
 import run_all_coverages  # noqa: E402
 
 # CLI spelling for the production (empty-suffix) build in --boxes / --coverages.
@@ -133,8 +134,17 @@ def issued_table_names(suffix):
     return names
 
 
+# The run's timing (run_progress.py): set by run() for the length of a run, so each table a
+# step announces carries the run's status and prints its duration when it is built.
+_PROGRESS = None
+
+
 def _say(step, what):
-    print(f"[production staging | {step}] {what}")
+    line = f"[production staging | {step}] {what}"
+    if _PROGRESS is None:
+        print(line)
+    else:
+        _PROGRESS.step(f"{step} | {what}", line=line)
 
 
 def build_base(spark):
@@ -285,6 +295,8 @@ def run(spark, steps=None, boxes=None, coverages=None):
         if unknown:
             raise ValueError(f"unknown step(s) {unknown}; known: {known}")
     selected = [(name, build) for name, build in STEPS if steps is None or name in steps]
+    global _PROGRESS
+    _PROGRESS = run_progress.RunProgress("production_staging:" + ",".join(name for name, _ in selected))
     for i, (name, build) in enumerate(selected, 1):
         print("=" * 72)
         print(f"[production staging {i}/{len(selected)}] {name}")
@@ -298,6 +310,8 @@ def run(spark, steps=None, boxes=None, coverages=None):
     print("=" * 72)
     print(f"[production staging] complete: {', '.join(name for name, _ in selected)}")
     print("=" * 72)
+    _PROGRESS.finish()
+    _PROGRESS = None
 
 
 def _suffixes(text):

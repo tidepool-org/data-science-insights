@@ -8,6 +8,7 @@ and that an unknown step is refused.
 """
 
 import os
+import tempfile
 import sys
 
 try:
@@ -18,6 +19,10 @@ except NameError:
 sys.path.insert(0, os.path.join(_here, "..", "..", "production_runs"))
 
 import run_production_staging as driver  # noqa: E402
+
+# The stub runs take no time; send their durations to a throwaway file, away from the record of
+# real runs (outputs/run_times/run_times.csv) that the estimates and the summary read.
+driver.run_progress.HISTORY_PATH = os.path.join(tempfile.mkdtemp(), "run_times.csv")
 
 # (module attribute on the driver, the run() argument that names what is built)
 STAGING_RUNS = [

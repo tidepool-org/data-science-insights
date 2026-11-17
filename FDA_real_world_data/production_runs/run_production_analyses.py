@@ -19,7 +19,8 @@ Runs, in this order, each analysis owning and wiping its output folder:
 and writes outputs/run_manifest.json: the run time, the Spark version, the
 hash of the code tree it ran from (production_runs/tree_manifest.py; the
 local check is production_runs/verify_run_manifest.py), and the builds and
-analyses run. Every analysis reads the cohort tables through
+analyses run, each with the seconds it took (run_progress.py prints the run's
+status at each analysis and the table of durations at the end). Every analysis reads the cohort tables through
 analysis/utils/data_loading.py, which asserts their predicates, and 6-3a
 asserts Table 6.3a's final stage against the loader's cohort (Gate C).
 
@@ -55,6 +56,7 @@ for path in (_HERE, _ANALYSIS_DIR):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+import run_progress  # noqa: E402
 import tree_manifest  # noqa: E402
 
 # The analysis files by short name, in run order. A transition analysis
@@ -142,45 +144,51 @@ def run(spark, boxes=None, coverages=None, analyses=None, load=load_analysis, ma
 
     started = dt.datetime.now(dt.timezone.utc)
     runs = []
+    planned = (len(boxes) * sum(1 for name, _ in TRANSITION_ANALYSES if name in analyses)
+               + (len(coverages) if DURABILITY_ANALYSIS[0] in analyses else 0)
+               + (1 if STABLE_ANALYSIS[0] in analyses else 0)
+               + sum(1 for name, _ in INTERACTIVE_REVIEW_ANALYSES + NMA_ANALYSES if name in analyses))
+    progress = run_progress.RunProgress("production_analyses:" + ",".join(analyses), total=planned)
     for suffix in boxes:
         for name, filename in TRANSITION_ANALYSES:
             if name not in analyses:
                 continue
             print("=" * 72)
-            print(f"[production analyses] {name} on window build {suffix or PROD_TOKEN}")
+            progress.step(f"[production analyses] {name} on window build {suffix or PROD_TOKEN}")
             print("=" * 72)
             load(filename).run_in_databricks(spark, suffix=suffix)
-            runs.append({"analysis": name, "build": suffix})
+            runs.append({"analysis": name, "build": suffix, "seconds": round(progress.end_step(), 1)})
     if DURABILITY_ANALYSIS[0] in analyses:
         for suffix in coverages:
             print("=" * 72)
-            print(f"[production analyses] 8-7 on coverage build {suffix or PROD_TOKEN}")
+            progress.step(f"[production analyses] 8-7 on coverage build {suffix or PROD_TOKEN}")
             print("=" * 72)
             load(DURABILITY_ANALYSIS[1]).run_in_databricks(spark, suffix=suffix, table_suffix=suffix)
-            runs.append({"analysis": "8-7", "build": suffix})
+            runs.append({"analysis": "8-7", "build": suffix, "seconds": round(progress.end_step(), 1)})
     if STABLE_ANALYSIS[0] in analyses:
         print("=" * 72)
-        print("[production analyses] 8-6 export for the JAEB hand-off")
+        progress.step("[production analyses] 8-6 export for the JAEB hand-off")
         print("=" * 72)
         load(STABLE_ANALYSIS[1]).run_in_databricks(spark)
-        runs.append({"analysis": "8-6", "build": ""})
+        runs.append({"analysis": "8-6", "build": "", "seconds": round(progress.end_step(), 1)})
     for name, filename in INTERACTIVE_REVIEW_ANALYSES:
         if name not in analyses:
             continue
         print("=" * 72)
-        print(f"[production analyses] {name} on the production tables")
+        progress.step(f"[production analyses] {name} on the production tables")
         print("=" * 72)
         load(filename).run_in_databricks(spark)
-        runs.append({"analysis": name, "build": ""})
+        runs.append({"analysis": name, "build": "", "seconds": round(progress.end_step(), 1)})
     for name, filename in NMA_ANALYSES:
         if name not in analyses:
             continue
         print("=" * 72)
-        print(f"[production analyses] {name} on the production analysis-ready table")
+        progress.step(f"[production analyses] {name} on the production analysis-ready table")
         print("=" * 72)
         load(filename).main(spark)
-        runs.append({"analysis": name, "build": ""})
+        runs.append({"analysis": name, "build": "", "seconds": round(progress.end_step(), 1)})
 
+    progress.finish()
     manifest = {
         "run_started_utc": started.isoformat(timespec="seconds"),
         "run_finished_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
