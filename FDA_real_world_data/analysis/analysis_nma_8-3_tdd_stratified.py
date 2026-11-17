@@ -138,14 +138,13 @@ from utils.data_loading import (  # noqa: E402
     prepare_nma_day_level,
     restrict_nma_comparator,
 )
+from utils.figures import connect_band_boundaries, mean_bands_by_user, stacked_bar_with_callouts  # noqa: E402
 from utils.nma_plotting import (  # noqa: E402
     DAY_TYPE_ORDER,
     GRAY,
     GRIDS,
     HIGH_MA_COLOR,
     LEGEND_FS,
-    RANGE_COLORS,
-    STACKED_BAR_PCT_DECIMALS,
     SUPTITLE_FS,
     TITLE_FS,
     day_type_colors,
@@ -221,56 +220,23 @@ def figure_8_3c_stacked(strata_8_3a):
     """Mean % time in glycemic ranges by TDD stratum, for all 5 day types (the 3 nested CE=0
     classifications + CE>0 + CE>=3/BE>=3 HMA), each split Low/High → **10 stacked bars**. Mean-
     reference (R = tdd/mean) binary strata, matching Table 8.3a / figure 8.3a (which `strata_8_3a`
-    carries, in SUPPLEMENT_ARMS order). A light separator divides each day type's Low|High pair."""
-    def ranges(frame):
-        f = frame.copy()
-        f["<54"] = f["tbr_very_low"]; f["54-70"] = f["tbr"] - f["tbr_very_low"]
-        f["70-180"] = f["tir"]; f["180-250"] = f["tar"] - f["tar_very_high"]; f[">250"] = f["tar_very_high"]
-        keys = list(RANGE_COLORS)
-        um = f.groupby("_userId")[keys].mean()
-        return {k: (um[k].mean() if len(um) else 0.0) for k in keys}, int(len(um))
-
+    carries, in SUPPLEMENT_ARMS order). A light separator divides each day type's Low|High pair.
+    Drawn through the shared stacked-bar drawer (utils.figures), with its dashed connectors across
+    each pair showing how every band shifts Low to High."""
     groups = [(f"{label}\n{st}", df[df["tdd_stratum"] == st])
               for label, df in strata_8_3a.items() for st in ("Low", "High")]
     fig, ax = plt.subplots(figsize=(15, 7))
-    x = np.arange(len(groups))
-    ns = []
-    means = {k: [] for k in RANGE_COLORS}
-    for _, frame in groups:
-        m, nu = ranges(frame)
-        ns.append(nu)
-        for k in RANGE_COLORS:
-            means[k].append(m[k])
-    order = list(RANGE_COLORS)
-    seg = np.array([means[k] for k in order])               # (n_ranges, n_groups)
-    tops = np.cumsum(seg, axis=0)                            # cumulative top of each segment
-    bots = np.vstack([np.zeros(len(groups)), tops[:-1]])     # bottom of each segment
-    W = 0.8
-    for ki, (k, color) in enumerate(RANGE_COLORS.items()):
-        ax.bar(x, seg[ki], bottom=bots[ki], width=W, label=k, color=color, edgecolor="white")
-    # Labeled percentages — simple black text centred in each segment (matching §8.1): skip the
-    # smallest <54 band, offset the thin 54-70 band upward with a thin leader, label the rest centred.
-    for gi in range(len(groups)):
-        for ki, k in enumerate(order):
-            v = seg[ki, gi]
-            cen = bots[ki, gi] + v / 2.0
-            if k == "<54":
-                continue
-            if k == "54-70":
-                ax.annotate(f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", xy=(gi, cen), xytext=(0, 16), textcoords="offset points",
-                            ha="center", va="bottom", fontsize=10,
-                            arrowprops=dict(arrowstyle="-", lw=0.6, color="gray"))
-            else:
-                ax.text(gi, cen, f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="center", va="center", fontsize=10)
-    # Dashed connectors across each day type's Low|High pair, one per internal segment boundary —
-    # show how each range shifts Low→High (the gap between the paired bars).
-    for j in range(0, len(groups), 2):
-        for b in range(len(order) - 1):
-            ax.plot([j + W / 2, j + 1 - W / 2], [tops[b, j], tops[b, j + 1]],
-                    ls="--", color="0.4", lw=1.0, zorder=4)
+    width = 0.8
+    ns, tops = [], []
+    for gi, (_, frame) in enumerate(groups):
+        means, n_users = mean_bands_by_user(frame)
+        ns.append(n_users)
+        tops.append(stacked_bar_with_callouts(ax, gi, means, width, legend=(gi == 0)))
+    for j in range(0, len(groups), 2):  # each day type's Low|High pair
+        connect_band_boundaries(ax, j, j + 1, tops[j], tops[j + 1], width)
     for sep in range(2, len(groups), 2):  # divide each day type's Low|High pair
         ax.axvline(sep - 0.5, color="0.85", lw=1, zorder=0)
-    ax.set_xticks(x)
+    ax.set_xticks(range(len(groups)))
     ax.set_xticklabels([f"{glabel}\n(n={nu})" for (glabel, _), nu in zip(groups, ns)], fontsize=9)
     ax.set_ylim(0, 105); ax.set_ylabel("Mean time in range (%)")
     ax.set_xlim(-0.6, len(groups) - 0.4)

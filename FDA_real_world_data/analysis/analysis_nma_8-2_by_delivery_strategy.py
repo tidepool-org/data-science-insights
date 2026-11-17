@@ -92,13 +92,11 @@ from utils.data_loading import (  # noqa: E402
     prepare_nma_day_level,
     restrict_nma_comparator,
 )
+from utils.figures import mean_bands_by_user, stacked_bar_with_callouts  # noqa: E402
 from utils.nma_plotting import (  # noqa: E402
     DAY_TYPE_ORDER,
     GRIDS,
     LEGEND_FS,
-    RANGE_COLORS,
-    RANGE_COLS,
-    STACKED_BAR_PCT_DECIMALS,
     SUPTITLE_FS,
     TICK_FS,
     TITLE_FS,
@@ -120,7 +118,7 @@ BOOTSTRAP_SEED = 20260520
 # Colours: the violins (8.2a) + interaction lines (8.2c) colour each day type by the PANEL ENDPOINT's
 # glycemic-range band (day_type_colors(col)) — the 3 nested NMA/CE=0 arms a dark→light ramp of that
 # band, CE>0 grey, CE>=3/BE>=3 bronze — so the hue reinforces which metric a panel shows (the arm hue
-# now varies per endpoint). The stacked bars (8.2d) keep RANGE_COLORS (by glycemic range). All shared
+# now varies per endpoint). The stacked bars (8.2d) draw through utils.figures (the band colours by glycemic range). All shared
 # via utils.nma_plotting.
 VIOLIN_ALPHA = 0.72   # day-type fill alpha (the distinct day-type colours separate the day types)
 # In 8.2a the AB/TB pair of a day type sits adjacent (same day-type colour), so the strategy is cued
@@ -462,49 +460,21 @@ def make_figure_8_2d(display_frames):
     classification, so its two cells repeat across subplots — shown for parallel comparison."""
     fig, axes = plt.subplots(1, len(CLASSIFICATIONS),
                              figsize=(7.5 * len(CLASSIFICATIONS), 7), squeeze=False, sharey=True)
-    range_keys = [rc for rc, _ in RANGE_COLS]
     day_type_labels = [d for d, _ in DISPLAY_CELLS]
+    width = 0.8
 
     for ax, (nma_flag, cls_label) in zip(axes[0], CLASSIFICATIONS):
-        frame = display_frames[cls_label].copy()
-        frame["r_lt54"] = frame["tbr_very_low"]
-        frame["r_54_70"] = frame["tbr"] - frame["tbr_very_low"]
-        frame["r_70_180"] = frame["tir"]
-        frame["r_180_250"] = frame["tar"] - frame["tar_very_high"]
-        frame["r_gt250"] = frame["tar_very_high"]
-
+        frame = display_frames[cls_label]
         bar_labels, user_ns = [], []
-        means = {rc: [] for rc in range_keys}
+        # one bar per strategy × day type, through the shared stacked-bar drawer (utils.figures)
         for s_name, s_short in DELIVERY_STRATEGIES:
             for d in day_type_labels:
                 cell = frame[(frame[DELIVERY_STRATEGY_COLUMN] == s_name) & (frame[DAY_TYPE_COL] == d)]
-                um = cell.groupby("_userId")[range_keys].mean()
+                means, n_users = mean_bands_by_user(cell)
+                stacked_bar_with_callouts(ax, len(bar_labels), means, width, legend=(not bar_labels))
                 bar_labels.append(f"{s_short}\n{d}")
-                user_ns.append(len(um))
-                for rc in range_keys:
-                    means[rc].append(um[rc].mean() if len(um) else 0.0)
-
-        x = np.arange(len(bar_labels))
-        bottom = np.zeros(len(bar_labels))
-        for rc, rlabel in RANGE_COLS:
-            vals = np.array(means[rc])
-            ax.bar(x, vals, bottom=bottom, color=RANGE_COLORS[rlabel], edgecolor="white",
-                   label=rlabel)
-            # Per-segment % labels, matching the §8.1 / §8.3 stacked bars: skip the
-            # smallest (<54) band, offset the thin 54-70 band upward with a leader.
-            centers = bottom + vals / 2.0
-            for xi, (v, cen) in enumerate(zip(vals, centers)):
-                if rlabel == "<54":
-                    continue
-                if rlabel == "54-70":
-                    ax.annotate(f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", xy=(xi, cen), xytext=(0, 16),
-                                textcoords="offset points", ha="center", va="bottom", fontsize=11,
-                                arrowprops=dict(arrowstyle="-", lw=0.6, color="gray"))
-                else:
-                    ax.text(xi, cen, f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="center",
-                            va="center", fontsize=11)
-            bottom += vals
-        ax.set_xticks(x)
+                user_ns.append(n_users)
+        ax.set_xticks(range(len(bar_labels)))
         ax.set_xticklabels(bar_labels, fontsize=TICK_FS)
         ax.set_ylim(0, 108)
         ax.set_title(cls_label, fontsize=TITLE_FS)

@@ -550,7 +550,7 @@ Each item names where the same thing is computed more than once, or a table that
 6. **The age gate** (6 years) is a loader constant, is restated inline in analysis 8-6 against the stable segments, and is hard-coded in the durability staging's `is_age_eligible`.
 7. **Demographics for 8-5** are taken from any segment row of the user, not from the selected window; the cohort table carries the selected window's age, gender, and years with diabetes once.
 8. **Carbohydrate plausibility bounds** (1 to 150 g per entry) are literals in analysis 8-8; the carb-availability criterion belongs on the transition cohort table with the bounds as named constants.
-9. **The stacked range bar** was drawn by nine functions across 8-1, IR-2, IR-6, 8-7, the RFAI outcomes, IR-6B, and three NMA analyses; `analysis/utils/figures.py` now draws it, and 8-1 uses it. The others move when next refreshed.
+9. **The stacked range bar** was drawn by nine functions across 8-1, IR-2, IR-6, 8-7, the RFAI outcomes, IR-6B, and three NMA analyses; `analysis/utils/figures.py` now draws it; 8-1 uses it, and the three NMA analyses since 2026-11-17 (merge plan step 3). The others move when next refreshed.
 10. **The diagnosis-group rule** (type 1, type 1 with LADA label, LADA, type 2, other, unknown) is a SQL CASE in the exploratory files and a Python twin in the loader, pinned by a test; the lookup table itself does not carry the group.
 
 **Orphan or unused tables**

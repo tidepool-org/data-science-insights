@@ -6,6 +6,9 @@ One place for the look so 8.1 / 8.2 / 8.3 render identically:
 - the shared-bin overlaid-histogram panel (bars align; solid mean line + dashed zero),
 - the two semantic 2×2 metric grids (target+safety vs hyperglycemia+overall) covering all 8 endpoints.
 
+The stacked glycemic-range bars are not here: they draw through utils/figures.py, the one drawer
+every analysis of the submission uses (since 2026-11-17 for the PLN-1008 figures).
+
 Treatment data (NMA / CE=0) carries the endpoint colour; the CE>0 comparator is rendered grey.
 """
 from __future__ import annotations
@@ -45,15 +48,8 @@ GRAY = "#9e9e9e"
 HIGH_MA_COLOR = "#9c6b30"
 HIGH_MA_ALPHA = 0.70
 
-# Standard AGP/Tidepool glycemic-range band colours (stacked bars).
-RANGE_COLORS = {"<54": "#E03830", "54-70": "#FF6D5C", "70-180": "#5AC692",
-                "180-250": "#AA85DE", ">250": "#7046CC"}
-# Disjoint ranges (cumulative-endpoint derived) for stacked bars: (column, label).
-RANGE_COLS = [("r_lt54", "<54"), ("r_54_70", "54-70"), ("r_70_180", "70-180"),
-              ("r_180_250", "180-250"), ("r_gt250", ">250")]
-
-# Decimal places on stacked-bar segment % labels (figs 8.1a / 12.1a / 8.3c / 8.2d).
-STACKED_BAR_PCT_DECIMALS = 1
+# The stacked range bars (figures 8.1a, 12.1a, 8.2d, 8.3c) draw through utils.figures since
+# 2026-11-17: the band colours, the label format, and the band derivation live there.
 
 # Each endpoint coloured by its glycemic range; the 3 non-range metrics get the Tidepool brand.
 ENDPOINT_COLORS = {

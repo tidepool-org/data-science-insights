@@ -101,14 +101,12 @@ from utils.data_loading import (  # noqa: E402
     restrict_nma_comparator,
     windowed_matched_means,
 )
+from utils.figures import disjoint_bands, mean_bands_by_user, stacked_bar_with_callouts  # noqa: E402
 from utils.nma_plotting import (  # noqa: E402
     DAY_TYPE_ORDER,
     GRAY,
     GRIDS,
     HIGH_MA_COLOR,
-    RANGE_COLORS,
-    RANGE_COLS,
-    STACKED_BAR_PCT_DECIMALS,
     SUPTITLE_FS,
     day_type_colors,
     endpoint_color,
@@ -495,47 +493,20 @@ def create_nma_day_frequency(pdf):
 def make_stacked_bar(pdf):
     """Figure 8.1a: stacked bar of mean % time in each glycemic range (<54, 54-70, 70-180,
     180-250, >250) across the four arms. Per-user mean within arm, then averaged across
-    users (equal weighting, consistent with Method A); per-bar user/day counts annotated."""
-    df = pdf.copy()
-    df["r_lt54"] = df["tbr_very_low"]
-    df["r_54_70"] = df["tbr"] - df["tbr_very_low"]
-    df["r_70_180"] = df["tir"]
-    df["r_180_250"] = df["tar"] - df["tar_very_high"]
-    df["r_gt250"] = df["tar_very_high"]
-
-    range_keys = [rc for rc, _ in RANGE_COLS]
+    users (equal weighting, consistent with Method A); per-bar user/day counts annotated.
+    Drawn through the shared stacked-bar drawer (utils.figures), the house conventions."""
+    width = 0.8
     arm_labels, user_ns, day_ns = [], [], []
-    means = {rc: [] for rc in range_keys}
-    for flag, arm_label in SUPPLEMENT_ARMS:
-        sub = df[df[flag] == True]  # noqa: E712
-        arm_labels.append(arm_label)
-        day_ns.append(len(sub))
-        user_means = sub.groupby("_userId")[range_keys].mean()
-        user_ns.append(len(user_means))
-        for rc in range_keys:
-            means[rc].append(user_means[rc].mean() if len(user_means) else 0.0)
-
     fig, ax = plt.subplots(figsize=(10.5, 7))
-    x = np.arange(len(SUPPLEMENT_ARMS))
-    bottom = np.zeros(len(SUPPLEMENT_ARMS))
-    for rc, rlabel in RANGE_COLS:
-        vals = np.array(means[rc])
-        ax.bar(x, vals, bottom=bottom, label=rlabel, color=RANGE_COLORS[rlabel], edgecolor="white")
-        centers = bottom + vals / 2.0
-        for xi, (v, cen) in enumerate(zip(vals, centers)):
-            if rlabel == "<54":
-                continue  # smallest range — skip the label
-            if rlabel == "54-70":
-                # second-lowest range is thin and crowds the bottom: offset the label
-                # upward with a thin leader line.
-                ax.annotate(f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", xy=(xi, cen), xytext=(0, 16),
-                            textcoords="offset points", ha="center", va="bottom", fontsize=13,
-                            arrowprops=dict(arrowstyle="-", lw=0.6, color="gray"))
-            else:
-                ax.text(xi, cen, f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="center", va="center", fontsize=13)
-        bottom += vals
+    for xi, (flag, arm_label) in enumerate(SUPPLEMENT_ARMS):
+        sub = pdf[pdf[flag] == True]  # noqa: E712
+        means, n_users = mean_bands_by_user(sub)
+        stacked_bar_with_callouts(ax, xi, means, width, legend=(xi == 0))
+        arm_labels.append(arm_label)
+        user_ns.append(n_users)
+        day_ns.append(len(sub))
 
-    ax.set_xticks(x)
+    ax.set_xticks(range(len(SUPPLEMENT_ARMS)))
     ax.set_xticklabels(arm_labels)
     ax.set_ylabel("Mean time in range (%)")
     ax.set_ylim(0, 108)
@@ -785,43 +756,19 @@ def make_windowed_stacked_bar(pdf):
             src, sfx = win_hi, "__nma"
         else:
             src, sfx = win[arm_label], "__nma"
-        g = lambda ep: src[f"{ep}{sfx}"]  # noqa: E731
-        return pd.DataFrame({
-            "r_lt54": g("tbr_very_low"),
-            "r_54_70": g("tbr") - g("tbr_very_low"),
-            "r_70_180": g("tir"),
-            "r_180_250": g("tar") - g("tar_very_high"),
-            "r_gt250": g("tar_very_high"),
-        }).dropna()
+        # one row per matched user: the windowed means of the cumulative endpoints
+        return pd.DataFrame({ep: src[f"{ep}{sfx}"] for ep, _ in NMA_ENDPOINTS}).dropna()
 
-    range_keys = [rc for rc, _ in RANGE_COLS]
+    width = 0.8
     arm_labels, user_ns = [], []
-    means = {rc: [] for rc in range_keys}
-    for _flag, arm_label in SUPPLEMENT_ARMS:
-        r = ranges_for(arm_label)
-        arm_labels.append(arm_label)
-        user_ns.append(len(r))
-        for rc in range_keys:
-            means[rc].append(r[rc].mean() if len(r) else 0.0)
-
     fig, ax = plt.subplots(figsize=(10.5, 7))
-    x = np.arange(len(SUPPLEMENT_ARMS))
-    bottom = np.zeros(len(SUPPLEMENT_ARMS))
-    for rc, rlabel in RANGE_COLS:
-        vals = np.array(means[rc])
-        ax.bar(x, vals, bottom=bottom, label=rlabel, color=RANGE_COLORS[rlabel], edgecolor="white")
-        centers = bottom + vals / 2.0
-        for xi, (v, cen) in enumerate(zip(vals, centers)):
-            if rlabel == "<54":
-                continue
-            if rlabel == "54-70":
-                ax.annotate(f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", xy=(xi, cen), xytext=(0, 16), textcoords="offset points",
-                            ha="center", va="bottom", fontsize=13,
-                            arrowprops=dict(arrowstyle="-", lw=0.6, color="gray"))
-            else:
-                ax.text(xi, cen, f"{v:.{STACKED_BAR_PCT_DECIMALS}f}%", ha="center", va="center", fontsize=13)
-        bottom += vals
-    ax.set_xticks(x); ax.set_xticklabels(arm_labels)
+    for xi, (_flag, arm_label) in enumerate(SUPPLEMENT_ARMS):
+        per_user = disjoint_bands(ranges_for(arm_label))       # each row a user, so the mean is equal-user
+        means = {band: (float(per_user[band].mean()) if len(per_user) else 0.0) for band in per_user.columns}
+        stacked_bar_with_callouts(ax, xi, means, width, legend=(xi == 0))
+        arm_labels.append(arm_label)
+        user_ns.append(len(per_user))
+    ax.set_xticks(range(len(SUPPLEMENT_ARMS))); ax.set_xticklabels(arm_labels)
     ax.set_ylabel("Mean time in range (%)"); ax.set_ylim(0, 108)
     ax.legend(title="Glucose (mg/dL)", bbox_to_anchor=(1.01, 1), loc="upper left")
     for xi, u in enumerate(user_ns):
