@@ -394,6 +394,13 @@ def paired_within_user(
 
 Z_95 = 1.959963984540054          # the normal quantile of a two-sided 95% interval
 _LOG_LAMBDA_BOUNDS = (-25.0, 12.0)  # the search range of log(var(u) / var(e))
+# A search that ends within this distance of the lower end has found no between-user
+# variance, and the fit reports exactly zero: a ratio var(u) / var(e) under exp(-24), about
+# 4e-11. Next to the lower end the criterion changes by less than its own rounding error, so
+# comparing the criterion at the end with the search's best is decided by rounding and gave
+# zero on one machine and exp(-25) times the residual variance on another (the Databricks
+# suite, 2026-11-18). The distance of the stopping point from the end does not depend on it.
+_LOG_LAMBDA_BOUNDARY_MARGIN = 1.0
 
 
 def _factor_levels(column: pd.Series) -> list:
@@ -481,7 +488,9 @@ def fit_random_intercept(day_level: pd.DataFrame, outcome: str, factors=(), cova
     best = optimize.minimize_scalar(criterion, bounds=_LOG_LAMBDA_BOUNDS, method="bounded",
                                     options={"xatol": 1e-10})
     # at the lower end of the range the between-user variance is nil: take exactly zero
-    lam = 0.0 if criterion(_LOG_LAMBDA_BOUNDS[0]) <= best.fun else float(np.exp(best.x))
+    lower_end = _LOG_LAMBDA_BOUNDS[0]
+    at_lower_end = best.x <= lower_end + _LOG_LAMBDA_BOUNDARY_MARGIN or criterion(lower_end) <= best.fun
+    lam = 0.0 if at_lower_end else float(np.exp(best.x))
     a, beta, rss = solve(lam)
     scale = rss / (n_rows - n_terms)
     bse = np.sqrt(np.diag(scale * np.linalg.inv(a)))

@@ -23,11 +23,11 @@ for several); execution stays serial either way:
 
 To rerun only what failed last time, pass  --failed  (or set env var
 RERUN_FAILED=1, or flip RERUN_FAILED below). Every run records its failed
-tests' relative paths in the driver's temp dir
-(fda_run_all_tests_last_failures.txt), and --failed selects exactly those
-files. The record is of the last run, whatever its selection. A cluster
-restart clears the temp dir, in which case --failed runs the --only selection
-when one is given and otherwise says so and runs nothing.
+tests' relative paths in outputs/run_times/fda_run_all_tests_last_failures.txt
+(beside the run times; the driver's temp folder only when outputs/ cannot be
+written), and --failed selects exactly those files. The record is of the last
+run, whatever its selection. With no record, --failed runs the --only
+selection when one is given and otherwise says so and runs nothing.
 
 Before the first test the runner forgets every project module the kernel has
 cached (any module whose file is under FDA_real_world_data), so a run picks up
@@ -79,13 +79,41 @@ def _parse_only():
 
 ONLY = _parse_only()
 
-# Rerun only the tests that failed last time. Every run writes its failures' relative paths to
-# LAST_FAILURES_FILE in the driver's temp dir (an empty file when the run was green); --failed
-# selects exactly those files. A cluster restart clears the temp dir, and the run then says so.
+# Rerun only the tests that failed last time. Every run writes its failures' relative paths to a
+# record (an empty file when the run was green); --failed selects exactly those files. The record
+# sits beside the run times under outputs/run_times/ (git-ignored; the Workspace copy on
+# Databricks), because a fresh tab is a fresh session with its own temp folder and never saw a
+# record kept there (2026-11-18). The temp folder is the fallback when outputs/ cannot be written.
 RERUN_FAILED = False
 RERUN_FAILED = RERUN_FAILED or os.environ.get("RERUN_FAILED", "") not in ("", "0", "false", "False")
 RERUN_FAILED = RERUN_FAILED or "--failed" in sys.argv[1:]
-LAST_FAILURES_FILE = os.path.join(tempfile.gettempdir(), "fda_run_all_tests_last_failures.txt")
+LAST_FAILURES_NAME = "fda_run_all_tests_last_failures.txt"
+LAST_FAILURES_CANDIDATES = [
+    os.path.join(os.path.dirname(test_dir), "outputs", "run_times", LAST_FAILURES_NAME),
+    os.path.join(tempfile.gettempdir(), LAST_FAILURES_NAME),
+]
+
+
+def _latest_failures_record():
+    """The most recently written record among the places one may be, or None."""
+    present = [path for path in LAST_FAILURES_CANDIDATES if os.path.exists(path)]
+    return max(present, key=os.path.getmtime) if present else None
+
+
+def _write_failures_record(lines):
+    """Write the record to the first place that takes it; the path written, or None."""
+    for path in LAST_FAILURES_CANDIDATES:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as handle:
+                handle.write("".join(lines))
+            return path
+        except OSError:
+            continue
+    return None
+
+
+LAST_FAILURES_FILE = _latest_failures_record()
 
 # ANSI styling (rendered in Databricks notebook output / terminals).
 GREEN, RED, DIM, BOLD, RESET = "\033[92m", "\033[91m", "\033[2m", "\033[1m", "\033[0m"
@@ -136,14 +164,14 @@ if ONLY:
         emit(f"{RED}{BOLD}No tests match.{RESET}")
         sys.exit(1)
 
-if RERUN_FAILED and not os.path.exists(LAST_FAILURES_FILE) and ONLY:
-    emit(f"{DIM}--failed: no record of a previous run at {LAST_FAILURES_FILE} (a cluster restart "
-         f"clears it); running the --only selection instead{RESET}")
+if RERUN_FAILED and LAST_FAILURES_FILE is None and ONLY:
+    emit(f"{DIM}--failed: no record of a previous run at {LAST_FAILURES_CANDIDATES[0]}; "
+         f"running the --only selection instead{RESET}")
     RERUN_FAILED = False
 if RERUN_FAILED:
-    if not os.path.exists(LAST_FAILURES_FILE):
-        emit(f"{RED}{BOLD}--failed: no record of a previous run at {LAST_FAILURES_FILE} "
-             f"(a cluster restart clears it). Run the suite once first, or pass --only.{RESET}")
+    if LAST_FAILURES_FILE is None:
+        emit(f"{RED}{BOLD}--failed: no record of a previous run at {LAST_FAILURES_CANDIDATES[0]}. "
+             f"Run the suite once first, or pass --only.{RESET}")
         sys.exit(1)
     with open(LAST_FAILURES_FILE) as fh:
         recorded = [os.path.normpath(ln.strip()) for ln in fh if ln.strip()]
@@ -242,8 +270,8 @@ emit(f"{DIM}{format_duration(timing['total_seconds'])} in all"
      + f"{RESET}")
 
 # --- Record this run's failures for --failed (an empty file when green) ---
-with open(LAST_FAILURES_FILE, "w") as fh:
-    fh.write("".join(f"{rel}\n" for group, name, ok, elapsed, error, rel in results if not ok))
+_recorded_at = _write_failures_record(f"{rel}\n" for group, name, ok, elapsed, error, rel in results if not ok)
+emit(f"{DIM}failures recorded in {_recorded_at}{RESET}" if _recorded_at else f"{RED}the failures could not be recorded{RESET}")
 
 # --- Final recap: which tests failed ---
 if n_fail:

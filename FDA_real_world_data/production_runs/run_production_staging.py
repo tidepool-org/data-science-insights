@@ -267,11 +267,15 @@ STEPS = [
 DEFAULT_BOXES = [""]
 # What the Run button runs: it passes no arguments, so this selection stands in for
 # --steps (None means every step). Set for the run at hand and recorded in the history
-# with the run; the CLI's --steps overrides it. 2026-11-17: merge plan step 4, the
-# PLN-1008 chain on the rebuilt base tables.
-RUN_BUTTON_STEPS = ["nma"]
+# with the run; the CLI's --steps overrides it. 2026-11-18: execution plan Step 4, every
+# step, so every population is staged on the rules settled on 2026-11-17.
+RUN_BUTTON_STEPS = None
 # CLI spelling for every build of a family.
 ALL_TOKEN = "all"
+# The window builds the Run button makes, standing in for --boxes (None means DEFAULT_BOXES,
+# the primary only; ALL_TOKEN every build). 2026-11-18: every build, since the corrected
+# vintage's reference run carries the two variants' flow tables (execution plan Step 4.1).
+RUN_BUTTON_BOXES = ALL_TOKEN
 
 
 def run(spark, steps=None, boxes=None, coverages=None):
@@ -337,6 +341,6 @@ if __name__ == "__main__":
     run(
         spark,
         steps=RUN_BUTTON_STEPS if _args.steps is None else [s for s in _args.steps.split(",") if s],
-        boxes=_suffixes(_args.boxes),
+        boxes=RUN_BUTTON_BOXES if _args.boxes is None else _suffixes(_args.boxes),
         coverages=_suffixes(_args.coverages),
     )

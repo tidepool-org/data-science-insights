@@ -114,6 +114,36 @@ def test_no_user_variance_gives_ordinary_least_squares():
     assert np.allclose(fit["params"].to_numpy(), beta, atol=1e-9) and np.allclose(fit["bse"].to_numpy(), se, atol=1e-9)
 
 
+def test_nothing_between_users_reads_exactly_zero_whatever_the_rounding():
+    """The outcome and the covariate are both centred within user, so nothing at all is left
+    between users and the variance is on the boundary in every draw. Before the margin rule
+    about four draws in ten read exp(-25) times the residual variance instead of zero, the
+    draw decided by rounding (the Databricks suite failed on one, 2026-11-18)."""
+    for seed in range(100):
+        rng = np.random.default_rng(seed)
+        frame = pd.DataFrame({"_userId": [f"u{i % 30}" for i in range(3000)], "x": rng.normal(size=3000)})
+        frame["y"] = 5.0 + 1.5 * frame["x"] + rng.normal(0, 2, 3000)
+        for column in ("x", "y"):
+            frame[column] = frame[column] - frame.groupby("_userId")[column].transform("mean") + frame[column].mean()
+        fit = fit_random_intercept(frame, "y", covariates=["x"])
+        assert fit["user_variance"] == 0.0, (seed, fit["user_variance"])
+
+
+def test_a_small_real_user_variance_is_kept():
+    """The margin takes only ratios under exp(-24) as zero. Here the user means are spread to
+    three times what the residual alone gives, a between-user variance of about four
+    thousandths of the residual variance, and the fit estimates it."""
+    rng = np.random.default_rng(14)
+    users, days = 200, 1000
+    frame = pd.DataFrame({"_userId": np.repeat([f"u{i}" for i in range(users)], days)})
+    frame["y"] = 5.0 + rng.normal(0, 2, users * days)
+    means = frame.groupby("_userId")["y"].transform("mean")
+    frame["y"] = frame["y"] + 2.0 * (means - means.mean())
+    fit = fit_random_intercept(frame, "y")
+    ratio = fit["user_variance"] / fit["scale"]
+    assert 0.004 < ratio < 0.016, ratio          # 8 / days, give or take the draw
+
+
 def test_missing_rows_are_left_out_and_a_single_day_user_is_kept():
     frame = _days(60, seed=13)
     frame.loc[frame.index[:25], "tir"] = np.nan
@@ -171,6 +201,8 @@ if __name__ == "__main__":
     run_tests([
         test_balanced_design_gives_the_difference_of_arm_means,
         test_no_user_variance_gives_ordinary_least_squares,
+        test_nothing_between_users_reads_exactly_zero_whatever_the_rounding,
+        test_a_small_real_user_variance_is_kept,
         test_missing_rows_are_left_out_and_a_single_day_user_is_kept,
         test_arm_contrast_agrees_with_statsmodels,
         test_interaction_agrees_with_statsmodels_terms_and_cells,

@@ -3,10 +3,10 @@
 The Run-button form of `run_all_tests.py --failed`: the Run button passes no
 arguments, so this file sets the environment variable and runs the runner.
 Set ONLY to a comma-separated substring list to narrow it further, or leave
-it empty; when the record is gone (the driver's temp folder does not survive a
-cluster restart) the runner runs ONLY instead, so ONLY is also the way to name
-the tests by hand. Deliberately not named test_*.py, so the runner does not
-run it.
+it empty; when there is no record (it sits under outputs/run_times/ since
+2026-11-18, so a fresh tab finds it) the runner runs ONLY instead, so ONLY is
+also the way to name the tests by hand. Deliberately not named test_*.py, so
+the runner does not run it.
 
 Run on Databricks.
 """

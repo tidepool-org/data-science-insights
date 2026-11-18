@@ -109,9 +109,13 @@ ALL_TOKEN = "all"
 MANIFEST_PATH = os.path.join("outputs", "run_manifest.json")
 # What the Run button runs: it passes no arguments, so this selection stands in for
 # --analyses (None means every analysis). Set for the run at hand and recorded in the
-# history with the run; the CLI's --analyses overrides it. 2026-11-17: merge plan step 4,
-# the PLN-1008 analyses on the production analysis-ready table.
-RUN_BUTTON_ANALYSES = [name for name, _ in NMA_ANALYSES]
+# history with the run; the CLI's --analyses overrides it. 2026-11-18: execution plan
+# Step 4, every analysis but the PLN-1008 ones, which run locally off the snapshot (the
+# Databricks run of 2026-11-17 took over two hours against minutes on a laptop).
+RUN_BUTTON_ANALYSES = [name for name in ANALYSIS_NAMES if name not in {nma_name for nma_name, _ in NMA_ANALYSES}]
+# The window builds the Run button runs, standing in for --boxes (None means DEFAULT_BOXES,
+# the primary only). 2026-11-18: every build, for the variants' flow tables.
+RUN_BUTTON_BOXES = list(BOX_SUFFIXES)
 
 
 def load_analysis(filename):
@@ -227,7 +231,7 @@ if __name__ == "__main__":
     _args, _ = _parser.parse_known_args()
     run(
         spark,
-        boxes=_suffixes(_args.boxes, BOX_SUFFIXES),
+        boxes=RUN_BUTTON_BOXES if _args.boxes is None else _suffixes(_args.boxes, BOX_SUFFIXES),
         coverages=_suffixes(_args.coverages, COVERAGE_SUFFIXES),
         analyses=RUN_BUTTON_ANALYSES if _args.analyses is None else [a for a in _args.analyses.split(",") if a],
     )

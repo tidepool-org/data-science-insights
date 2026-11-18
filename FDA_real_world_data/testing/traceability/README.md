@@ -42,3 +42,17 @@ are absent.
 python testing/traceability/select_nma_panel_candidates.py   # inspect candidates (de-identified)
 python testing/traceability/build_nma_panel_fixture.py        # re-freeze nma_panel_fixture.csv
 ```
+
+After a regen that changes which days the snapshot holds, the day indexes shift and the test
+fails on every shifted row. Keep the same calendar user-days by re-keying against the snapshot
+the fixture was frozen from; the command prints every value that moved, which is the record of
+what the regen did to the panel:
+
+```
+python testing/traceability/build_nma_panel_fixture.py --rekey-from outputs/nma/<earlier snapshot>.csv
+```
+
+Re-keyed 2026-11-18 from the June snapshot onto the first snapshot of the rebuilt cohort table
+(the same fourteen user-days). The two counts of the retired NMA bolus classifier left the
+fixture with their columns, and the day table's four per-rule counts of automated boluses took
+their place.

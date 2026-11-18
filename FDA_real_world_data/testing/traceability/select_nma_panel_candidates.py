@@ -32,16 +32,29 @@ import pandas as pd
 _DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "analysis")))
 from utils.data_loading import nma_snapshot_csv  # noqa: E402
+from cohort_constants import MIN_DAILY_CBG_COUNT  # noqa: E402  (data_loading puts data_staging on the path)
 
 # The snapshot on disk: the gzipped one since 2026-11-17, or an earlier vintage's plain CSV.
 SNAPSHOT = nma_snapshot_csv()
 
 CGM_FULL_DAY = 288                  # 5-min samples in a day (coverage % denominator, §7.1)
+# How far either side of the day's coverage floor (cohort_constants.MIN_DAILY_CBG_COUNT, one rule
+# for every population since 2026-11-17, D24) the two coverage examples are taken from.
+COVERAGE_EXAMPLE_SPAN = 9
+
+# The day table's count of automated boluses each classifier rule recognised, carried on the
+# cohort table for the rule checks since 2026-11-05 (D23). They replace the retired NMA
+# classifier's two counts (automated boluses by Apple Health's flag and by a Loop decision).
+RULE_COUNT_FIELDS = [
+    "boluses_decision_match", "boluses_plugin_automated_id",
+    "boluses_health_flag_named_loop", "boluses_health_flag_loop_app",
+]
+_COUNT_FIELDS = ["automatic_bolus_count", "carb_entry_count", "bolus_entry_count"] + RULE_COUNT_FIELDS
 
 # Numeric snapshot columns the selection / derivation touch (CSV may load some as object).
 _NUMERIC = [
     "carb_entry_count", "carb_grams_total", "bolus_entry_count", "automatic_bolus_count",
-    "auto_hk_count", "auto_dd_count", "cbg_count", "tdd_units", "tdd_ratio",
+    *RULE_COUNT_FIELDS, "cbg_count", "tdd_units", "tdd_ratio",
     "n_eligible_days_for_tdd", "age_years",
     "tir", "tbr", "tbr_very_low", "tar", "tar_very_high", "mean_glucose", "cv", "hypo_events",
 ]
@@ -49,7 +62,7 @@ _NUMERIC = [
 # Discrete derived fields frozen verbatim (de-identified: flags/counts/categoricals, no raw ids/dates).
 _DISCRETE_FIELDS = [
     "day_eligible", "user_eligible",
-    "carb_entry_count", "bolus_entry_count", "automatic_bolus_count", "auto_hk_count", "auto_dd_count",
+    "carb_entry_count", "bolus_entry_count", "automatic_bolus_count", *RULE_COUNT_FIELDS,
     "delivery_strategy", "basal_source",
     "in_ce0_be0", "in_ce0_be_le1", "in_ce0_be_inf", "in_ce_gt0", "in_ce_ge3_be_ge3",
     "is_pediatric",
@@ -111,8 +124,7 @@ def derived_fields(row):
             out[c] = bool(v)
         elif pd.isna(v):
             out[c] = ""
-        elif c in ("automatic_bolus_count", "auto_hk_count", "auto_dd_count",
-                   "carb_entry_count", "bolus_entry_count"):
+        elif c in _COUNT_FIELDS:
             out[c] = int(v)
         else:
             out[c] = v
@@ -122,6 +134,10 @@ def derived_fields(row):
     out["age_band"] = age_band(row["age_years"])
     out["tdd_bucket"] = tdd_bucket(row["tdd_units"])
     return out
+
+
+TR1_NOTE = ("manual boluses beside automated ones recognised by a Loop decision and by Apple Health's automatic flag; "
+            "raw bolus-by-bolus labels need the in-env audit")
 
 
 def _first(rows, n=1):
@@ -147,9 +163,11 @@ def find_candidates(df):
 
     elig = df[(df["day_eligible"] == True) & (df["user_eligible"] == True)]  # noqa: E712
 
-    # TR-1 (D7, top priority): manual + HK-auto + HK-silent dd-auto boluses on one day.
-    add("TR-1", _first(elig[(elig["bolus_entry_count"] > 0) & (elig["auto_hk_count"] > 0) & (elig["auto_dd_count"] > 0)]),
-        "manual + HK-auto + dd-auto on one day; raw bolus-by-bolus labels need the in-env audit")
+    # TR-1 (D7, top priority): manual boluses beside automated ones on one day, the automated ones
+    # recognised both by a Loop decision and by Apple Health's automatic flag.
+    health_flagged = elig["boluses_health_flag_named_loop"] + elig["boluses_health_flag_loop_app"]
+    add("TR-1", _first(elig[(elig["bolus_entry_count"] > 0) & (elig["boluses_decision_match"] > 0) & (health_flagged > 0)]),
+        TR1_NOTE)
 
     # TR-2 (D10): a food-carb day (CE>0, grams>0); wizard/0-gram exclusion needs the raw audit.
     add("TR-2", _first(elig[(elig["carb_entry_count"] > 0) & (elig["carb_grams_total"] > 0)]),
@@ -172,8 +190,8 @@ def find_candidates(df):
         "Loop-direct delivered-units stream (TDD=delivered, not commanded); nearest-min dedup needs in-env audit")
 
     # TR-5 (§7.1): CGM-coverage threshold — a just-excluded (~69%) and a just-included (~71%) day.
-    lo_cov = df[(df["cbg_count"] >= 195) & (df["cbg_count"] <= 201)]   # < 70% → day_eligible False
-    hi_cov = df[(df["cbg_count"] >= 202) & (df["cbg_count"] <= 210)]   # >= 70% → eligible
+    lo_cov = df[(df["cbg_count"] >= MIN_DAILY_CBG_COUNT - COVERAGE_EXAMPLE_SPAN) & (df["cbg_count"] < MIN_DAILY_CBG_COUNT)]    # under the floor
+    hi_cov = df[(df["cbg_count"] >= MIN_DAILY_CBG_COUNT) & (df["cbg_count"] <= MIN_DAILY_CBG_COUNT + COVERAGE_EXAMPLE_SPAN)]   # at or over it
     add("TR-5", _first(lo_cov), "~69% CGM coverage → day_eligible=False (excluded)")
     add("TR-5", _first(hi_cov), "~71% CGM coverage → day_eligible=True")
 

@@ -16,7 +16,8 @@ from utils.data_loading import nma_snapshot_csv  # noqa: E402
 
 # The snapshot on disk: the gzipped one since 2026-11-17, or an earlier vintage's plain CSV.
 SNAPSHOT = nma_snapshot_csv()
-OUT = os.path.normpath(os.path.join(_DIR, "..", "..", "analysis", "outputs"))
+# The PLN-1008 analyses write under analysis/outputs/nma/ (one root since the 2026-11-06 move).
+OUT = os.path.normpath(os.path.join(_DIR, "..", "..", "analysis", "outputs", "nma"))
 
 
 def _skip_unless_snapshot_has(*cols):
