@@ -8,6 +8,10 @@ bundle, so an analysis runs on a laptop through the entry point it has on Databr
     tables = LocalTables("outputs/analysis_bundle")
     analysis.run_in_databricks(tables, suffix="")
 
+Code that must treat the bundle differently from a session tests the type
+(`isinstance(table, BundleTable)`, `isinstance(spark, LocalTables)`), never an attribute: a
+Spark Connect frame answers any attribute name with a column.
+
 It serves whole tables and column selections. It does not run SQL: an analysis that sends
 a query raises here and names itself, which is how the remaining Spark-side work is found.
 
@@ -25,9 +29,6 @@ MANIFEST_NAME = "bundle_manifest.json"
 
 class BundleTable:
     """One table of the bundle, read when asked."""
-
-    # The loaders use this to skip work the export has already done (the string casts).
-    is_bundle_table = True
 
     def __init__(self, path, selected=None):
         self._path = path
@@ -61,10 +62,6 @@ class _Catalog:
 
 class LocalTables:
     """A folder of bundle files, with the part of a Spark session the loaders use."""
-
-    # An analysis reads this to take a count the bundle carries in place of a query on
-    # tables that never leave Databricks (Table 6.3a's upstream stages).
-    is_analysis_bundle = True
 
     def __init__(self, folder):
         if not os.path.isdir(folder):

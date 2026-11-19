@@ -64,7 +64,7 @@ def main():
         [python, driver, "example_report", "--data-root", vintage_a, "--vintage", "example_vintage_a", "--author", AUTHOR,
          "--publish-to", drafts, "--output-suffix", " (draft 2)", "--scratch", os.path.join(scratch, "render_a")])
 
-    run("2. Render it on vintage B, compared with step 1: every changed number becomes a tracked change, classed and highlighted",
+    run("2. Render it on vintage B, compared with step 1: every changed number is coloured by class, and the ones that need attention are tracked changes",
         [python, driver, "example_report", "--data-root", vintage_b, "--vintage", "example_vintage_b", "--author", AUTHOR,
          "--compare-to", record, "--publish-to", drafts, "--output-suffix", " (draft 2, refreshed)",
          "--scratch", os.path.join(scratch, "render_b")])
@@ -97,7 +97,7 @@ def main():
     print("\n" + "=" * 100 + "\nDone. What to open, all under\n  %s\n" % output)
     print("  drafts/example_report (draft 2).docx                 the draft: every number printed by a cell reference")
     print("  drafts/example_report (draft 2).render/cells.csv     the sidecar: one row per printed value, with its file, row, and column")
-    print("  drafts/example_report (draft 2, refreshed).docx      the refresh: in Word, Review > show markup by reviewer to see one class")
+    print("  drafts/example_report (draft 2, refreshed).docx      the refresh: changed numbers in colour; the ones that need attention as tracked changes")
     print("  drafts/example_report (draft 2, refreshed).render/changes.csv   every reference with its old value, new value, and class")
     print("  review/example_report (draft 2, edited by the reviewer).docx    the reviewer's tracked edits")
     print("  backport/backport_report.csv                         each edit, applied or refused with the reason")

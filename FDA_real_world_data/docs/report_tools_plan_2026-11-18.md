@@ -374,6 +374,8 @@ Statuses outside the six, each reported:
 
 ### 5.3 Thresholds, proposed for MC
 
+Superseded in part (2026-11-19). A large change is now a tracked change (section 5.5's note), and on the first real tables the rule below tracked half the cells. As built, a change is large only when it reaches both ten units of the last printed place and 10% of the old value, and a value printed as text is classed by the numbers it holds (`tools/report/README.md`).
+
 One unit of the last printed place is 0.1 for a value printed to one decimal, 0.01 for two decimals, and 1 for a whole number.
 
 | Constant | Proposed value | Reason |
@@ -392,6 +394,8 @@ These thresholds are my proposal. I have no record or external standard behind t
 A change that fits two classes takes the first in this order: sign flip, p-value crossing, interval crossing the null, large change, count change, small change. In practice the kinds limit what can co-occur: an estimate can be a sign flip and a large change, and is reported as a sign flip; an interval can cross the null and move by a large amount, and is reported as a crossing. A p-value is either a crossing or a small change, because a relative threshold on a p-value carries no meaning.
 
 ### 5.5 In Word, and the change report
+
+Superseded in part (MC, 2026-11-19, on the first real render: "some of the colors in the report are horrific to look at. Just change the text color, but dont track except for things that need attention"). As built, a changed number is printed in the text colour of its class and nothing is highlighted; only a sign flip, a p-value crossing, an interval crossing, a large change, and a removed table row are tracked changes. The table below is the design as first planned; `tools/report/README.md` has the table in use. Guarantee G7 narrows with it: rejecting every revision restores the previous value of the tracked changes only.
 
 | Class | Revision author label | Highlight (`w:highlight`) |
 |---|---|---|

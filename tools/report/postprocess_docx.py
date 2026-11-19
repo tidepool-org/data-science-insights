@@ -18,8 +18,9 @@ What the marks become:
 
     Changed<N> / Deleted<N> runs   tracked insertions and deletions by "<author>, draft <N>"
                                     (--marks tracked), or blue text (--marks blue)
-    Flag... runs (a data refresh)  the previous value a tracked deletion and the new value a
-                                    highlighted tracked insertion by "Data refresh <vintage>: <class>"
+    Flag... runs (a data refresh)  the new value in the text colour of its class; for a class that
+                                    needs attention, also a tracked change by "Data refresh <vintage>:
+                                    <class>", the previous value deleted and the new value inserted
     CellValue runs                 a character style with no formatting; --issue removes it
 
 The input is never rewritten and no .bak file is written. Every step prints how many
@@ -65,7 +66,7 @@ _RUN_STYLE = re.compile(r'<w:rStyle w:val="(\w+)"\s*/>')
 _DRAFT_MARK = re.compile(r"^(%s)?(Changed|Deleted)(\w*)$" % CELL_VALUE_STYLE)
 _FLAG = re.compile(r"^Flag(Old|New)(\w+)$")
 _STYLE_SUFFIX_TO_STATUS = {}
-for _status, _mark in change_classes.REVISION_MARKS.items():
+for _status, _mark in change_classes.CHANGE_MARKS.items():
     _STYLE_SUFFIX_TO_STATUS.setdefault(_mark["style_suffix"], _status)
 
 
@@ -346,14 +347,20 @@ def marks_into_revisions(document_xml, marks, author, revision_date, vintage, co
     """Turn styled runs into Word revisions.
 
     Draft marks (Changed<N>, Deleted<N>, and a generated value inside one) become revisions
-    by "<author>, draft <N>" when `marks` is tracked. Data-refresh flags always become
-    revisions by "Data refresh <vintage>: <class>": the previous value a deletion, the new
-    value an insertion carrying the class highlight and the CellValue style.
+    by "<author>, draft <N>" when `marks` is tracked. A data-refresh flag always takes the
+    text colour of its class and the CellValue style. A class that needs attention
+    (change_classes.STATUSES_THAT_NEED_ATTENTION) is also a revision by "Data refresh
+    <vintage>: <class>": the previous value a deletion, the new value an insertion. A table
+    row the new render no longer has is a tracked row deletion.
     """
     identifiers = itertools.count(FIRST_REVISION_ID)
     counts["draft_mark_revisions"] = 0
     counts["data_refresh_revisions"] = 0
+    counts["data_refresh_colour_marks"] = 0
     counts["table_rows_marked"] = 0
+
+    def colour(status):
+        return '<w:color w:val="%s" />' % change_classes.CHANGE_MARKS[status]["text_colour"]
 
     def need(value, what, style):
         if not value:
@@ -367,9 +374,6 @@ def marks_into_revisions(document_xml, marks, author, revision_date, vintage, co
 
     def mark_rows(row_match):
         row_xml = row_match.group(0)
-        if 'w:val="%s"' % NEW_ROW_STYLE in row_xml:
-            counts["table_rows_marked"] += 1
-            return _mark_row(row_xml, "ins", next(identifiers), refresh_author(change_classes.NEW), revision_date)
         if 'w:val="%s"' % GONE_ROW_STYLE in row_xml:
             counts["table_rows_marked"] += 1
             return _mark_row(row_xml, "del", next(identifiers), refresh_author(change_classes.GONE), revision_date)
@@ -399,21 +403,26 @@ def marks_into_revisions(document_xml, marks, author, revision_date, vintage, co
         flag = _FLAG.match(name)
         if flag is None:
             return run_xml
-        counts["data_refresh_revisions"] += 1
-        if name == NEW_ROW_STYLE:
-            return _revision("ins", next(identifiers), refresh_author(change_classes.NEW), revision_date, before + after)
+        if name == NEW_ROW_STYLE:   # the label of a table row the previous render did not have: coloured, not tracked
+            counts["data_refresh_colour_marks"] += 1
+            return before + colour(change_classes.NEW) + after
         if name == GONE_ROW_STYLE:
+            counts["data_refresh_revisions"] += 1
             return _revision("del", next(identifiers), refresh_author(change_classes.GONE), revision_date, _as_deleted(before + after))
         status = _STYLE_SUFFIX_TO_STATUS.get(flag.group(2))
         if status is None:
             raise PostprocessError("unknown flag style %r" % name)
         if flag.group(1) == "Old":
+            counts["data_refresh_revisions"] += 1
             style_name = GONE_VALUE_STYLE if status == change_classes.GONE else PREVIOUS_VALUE_STYLE
             run_xml = before + '<w:rStyle w:val="%s" />' % style_name + after
             return _revision("del", next(identifiers), refresh_author(status), revision_date, _as_deleted(run_xml))
-        highlight = change_classes.REVISION_MARKS[status]["highlight"]
-        run_xml = before + '<w:rStyle w:val="%s" /><w:highlight w:val="%s" />' % (CELL_VALUE_STYLE, highlight) + after
-        return _revision("ins", next(identifiers), refresh_author(status), revision_date, run_xml)
+        run_xml = before + '<w:rStyle w:val="%s" />' % CELL_VALUE_STYLE + colour(status) + after
+        if change_classes.is_tracked(status):
+            counts["data_refresh_revisions"] += 1
+            return _revision("ins", next(identifiers), refresh_author(status), revision_date, run_xml)
+        counts["data_refresh_colour_marks"] += 1
+        return run_xml
 
     return _RUN.sub(convert, document_xml)
 
@@ -507,12 +516,11 @@ def postprocess(input_path, output_path, profile_name, final_section=None, marks
             styles_xml = remove_character_style(styles_xml, name)
         elif name in styles_in_use or 'w:styleId="%s"' % name in styles_xml:
             styles_xml = define_character_style(styles_xml, name, "")
-    # The legend's swatches are shaded in the highlight colour of their class.
-    for mark in change_classes.REVISION_MARKS.values():
+    # The legend names each class in the text colour of that class.
+    for mark in change_classes.CHANGE_MARKS.values():
         name = LEGEND_STYLE_PREFIX + mark["style_suffix"]
-        if name in styles_in_use and mark["highlight"]:
-            fill = change_classes.HIGHLIGHT_FILL[mark["highlight"]]
-            styles_xml = define_character_style(styles_xml, name, '<w:rPr><w:shd w:val="clear" w:color="auto" w:fill="%s" /></w:rPr>' % fill)
+        if name in styles_in_use and mark["text_colour"]:
+            styles_xml = define_character_style(styles_xml, name, '<w:rPr><w:color w:val="%s" /></w:rPr>' % mark["text_colour"])
     # Styles pandoc defined for names the conversion has consumed are dropped.
     for name in re.findall(r'w:styleId="((?:%s|%s)\w+|%s(?:Changed|Deleted)\w*)"' % (
             FLAG_OLD_STYLE_PREFIX, FLAG_NEW_STYLE_PREFIX, CELL_VALUE_STYLE), styles_xml):

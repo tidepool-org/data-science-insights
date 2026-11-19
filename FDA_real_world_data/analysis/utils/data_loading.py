@@ -69,6 +69,11 @@ ACTIVATION_KEY = ["_userId", "override_time"]
 
 CATALOG = "dev.fda_510k_rwd"
 
+# A table of the analysis bundle is told from a Spark frame by its type, never by probing an
+# attribute: a Spark Connect frame answers any attribute name with a column, and a column
+# refuses to be read as true or false (the Databricks run of 2026-11-19 stopped on exactly that).
+from utils.local_tables import BundleTable, LocalTables  # noqa: E402
+
 # The cohort tables, by population, with the suffix placeholder for the
 # window builds.
 TRANSITION_COHORT_TABLE = "transition_cohort{suffix}"
@@ -707,7 +712,7 @@ def _dose_response_frame(spark, table):
     rows = spark.table(table)
     # The analysis bundle's export has already written these columns through Spark's CAST
     # (production_runs/export_analysis_bundle.py), so a bundle table is read as it is.
-    if not getattr(rows, "is_bundle_table", False):
+    if not isinstance(rows, BundleTable):
         for column in _DOSE_RESPONSE_TIMESTAMP_COLUMNS + ("override_day",):
             if column in rows.columns:
                 rows = rows.withColumn(column, rows[column].cast("string"))
@@ -795,7 +800,7 @@ def load_override_cbg_traces(spark, users, preset, suffix=""):
     the rows that pass the two flags."""
     users = list(users)
     rows = spark.table(f"{CATALOG}.valid_override_cbg{suffix}")
-    if not getattr(rows, "is_bundle_table", False):
+    if not isinstance(rows, BundleTable):
         rows = rows.filter(rows["_userId"].isin(users)).filter(rows["overridePreset"] == preset)
     frame = rows.select(*OVERRIDE_CBG_TRACE_COLUMNS, "overridePreset", "is_valid_name_only_seg2",
                         "is_starting_glucose_in_range").toPandas()

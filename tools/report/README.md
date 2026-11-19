@@ -19,7 +19,7 @@ python3 tools/report/tests/run_all_tests.py
 | Tool | What it does | Where |
 |---|---|---|
 | Cell references | A call in a Quarto source names a CSV file, a row, a column, and a format, and prints that one value. Each printed value is recorded in a sidecar. | `cells.py`, `formats.py`, `sidecar.py`, `derived_values.py` |
-| Change flags | A render compared with a previous sidecar shows each changed number as a tracked change, classed and highlighted, and lists every reference in a change report. | `change_classes.py`, `cells.py`, `postprocess_docx.py` |
+| Change flags | A render compared with a previous sidecar prints each changed number in the text colour of its class, tracks the changes that need attention, and lists every reference in a change report. | `change_classes.py`, `cells.py`, `postprocess_docx.py` |
 | Back-port | Carries the edits a reviewer made in a Word draft into the Quarto source. An edit to a number is always refused. | `backport_edits.py`, `source_map.py` |
 | One toolchain | One render driver, one post-processor with three profiles, one set of issue checks, and the three draft-iteration scripts moved from Drive. | `render_document.py`, `postprocess_docx.py`, `profiles.py`, `verify_docx.py`, `make_next_draft.py`, `carry_comments.py`, `add_root_comment.py` |
 
@@ -43,7 +43,8 @@ Time in range rose by `{python} cell("outcomes", ("time_in_range", "second"), "d
 ```
 
 - **`source(file, keys, alias=None)`:** declares a CSV file under the data root and the columns that label a row. Give an alias: the reference id is built from it, so a value keeps its id when a later vintage stores the file under another folder name.
-- **`cell(source, row, column, format, part=, missing=, null=, alpha=)`:** prints one value. `row` is a label, a tuple of labels, or a dictionary of key column to label, and it must match exactly. `null` and `alpha` are used only to class a change.
+- **`cell(source, row, column, format, part=, missing=, null=, alpha=, kind=)`:** prints one value. `row` is a label, a tuple of labels, or a dictionary of key column to label, and it must match exactly. `null`, `alpha`, and `kind` are used only to class a change.
+- **`kind=` for a value printed as text:** the files of record hold composite strings ("mean ± SD", "[low, high]", "median [IQR]"), which the `verbatim` format prints whole. `kind` says what the string holds, so its change is classed by its numbers: `estimate` or `percent` (the first number), `p_value`, `count`, `interval` (the last two numbers), or `estimate_and_interval` (the first number, then the interval). Give `null=0` with it for a difference. Without `kind`, a string that starts "p=" is read as a p-value, one whole number as a count, and any other string of numbers as numbers of which any may move by a large amount.
 - **`table(label, source, rows, columns, header_groups=, row_header=, missing=, label_column=)`:** prints a table whose every body value is a cell reference. `rows="all"` takes every row in file order. A column is `(header, column, format)` with an optional fourth element, a dictionary of `cell` options for that column.
 - **`require_equal` and `require_true`:** reproduction checks. They print nothing and fail the render when they do not hold.
 - **`change_legend()`:** one paragraph naming each change class, printed only when the render compares against a previous one.
@@ -86,18 +87,21 @@ The render record, `<stem>.render/`, published beside `<stem>.docx`:
 
 ## A data refresh
 
-Render with `--compare-to` naming the previous draft's render record. Each number whose printed text changed is a tracked change: the previous value deleted, the new value inserted and highlighted. Each class is its own revision author, `Data refresh <vintage>: <class>`, so Word can show one class at a time (Review, then show markup for specific people).
+Render with `--compare-to` naming the previous draft's render record. Each number whose printed text changed is printed in the text colour of its class. Nothing is highlighted. Only a change that needs attention is also a tracked change, the previous value deleted and the new value inserted, under the revision author `Data refresh <vintage>: <class>` (MC, 2026-11-19). That holds in a table as in a sentence. For every other change the previous value is in `changes.csv` and not in the Word file.
 
-| Class, in order of precedence | Applies to | Highlight |
-|---|---|---|
-| sign flip | an estimate with a `null`: the values lie on different sides of it | red |
-| p-value crossing | a p-value: exactly one of the two is below `alpha` | magenta |
-| interval crossing the null | an interval with a `null`: exactly one of the two contains it | dark yellow |
-| large change | an estimate, a percent, or an interval bound | yellow |
-| count change | a count | cyan |
-| small change | any other difference in the printed text | light grey |
+| Class, in order of precedence | Applies to | Text colour | Tracked |
+|---|---|---|---|
+| sign flip | an estimate with a `null`: the values lie on different sides of it | dark red | yes |
+| p-value crossing | a p-value: exactly one of the two is below `alpha` | purple | yes |
+| interval crossing the null | an interval with a `null`: exactly one of the two contains it | burnt orange | yes |
+| large change | an estimate, a percent, or an interval bound that moves by at least ten units of its last printed place and at least 10% of its old value | blue | yes |
+| count change | a count | teal | no |
+| small change | any other difference in the printed text | grey | no |
+| text change, missing-state change | a text value; a value withheld before or now | slate | no |
+| new | a reference the previous render did not have | green | no |
+| gone | a table row the new render no longer has | none | yes, as a row deletion |
 
-Also reported: text change, missing-state change, new, gone, raw change with the print unchanged, and unchanged. The thresholds are constants at the top of `change_classes.py`. The copy without flags is a fresh render without `--compare-to`, never the flagged file with its revisions accepted. Render a refresh from a source whose draft marks are already accepted, so one file does not mix the two kinds of revision.
+Also reported and unmarked: raw change with the print unchanged, and unchanged. The colours are `CHANGE_MARKS` and the tracked set is `STATUSES_THAT_NEED_ATTENTION`, both in `change_classes.py`; a test requires each colour to reach a contrast of 4.5 with white. The thresholds are constants at the top of `change_classes.py`. The copy without flags is a fresh render without `--compare-to`, never the flagged file with its revisions accepted. Render a refresh from a source whose draft marks are already accepted, so one file does not mix the two kinds of revision.
 
 ## Carrying a reviewer's edits back
 
@@ -143,7 +147,9 @@ What changed from the Drive scripts, which stay where they are:
 - **Reference ids use the alias:** the plan builds the id from the file path. Folder names differ between vintages, so the id is built from the alias when one is declared.
 - **A value inside a draft mark:** pandoc gives a nested span its own style only, so the value would fall out of the revision (gate 0 confirmed it). The driver's scratch copy tells each such reference its mark, the value prints with the style `CellValueChanged<N>`, and the post-processor makes it a `CellValue` run inside the draft's insertion.
 - **`change_legend()` with no comparison:** Quarto prints an inline call as literal code when its result is empty, so the call returns an HTML comment, which pandoc drops.
-- **Table rows that come and go:** a new row is a tracked row insertion and a removed row is re-emitted from the previous sidecar as a tracked row deletion, under the author labels `new` and `gone`.
+- **A large change needs both thresholds (2026-11-19):** the plan calls a change large at ten units of the last printed place or at 10% of the old value. Once a large change became a tracked change, that rule tracked half the cells of the first real tables: at two decimals ten units is 0.10, and a difference near zero doubles by moving three units. A change is now large only when it reaches both. A shift of several points in a value near 70 is under 10% and is therefore a small change; the constants are at the top of `change_classes.py`.
+- **Colour in place of highlight, and tracking only where attention is needed (MC, 2026-11-19):** the plan highlights every changed number and tracks every one (section 5.5, decision D5). On the first real render the highlights were too harsh, and most changes were routine. Rejecting every revision therefore restores the previous value of the tracked changes only, which narrows guarantee G7.
+- **Table rows that come and go:** a new row is printed in the colour of `new`, and a removed row is re-emitted from the previous sidecar as a tracked row deletion under the author label `gone`.
 - **The back-port's first scope (decision D7):** a split or merged paragraph is refused, as is the deletion of a value on its own.
 - **The back-port's `--tool-author-prefix`:** gone. The render record lists the revision authors the render wrote.
 - **The round trip compares after normalising spaces:** accepting a deletion leaves the spaces from both sides of it.
@@ -154,4 +160,5 @@ What changed from the Drive scripts, which stay where they are:
 - **Word itself:** no test opens a file in Word. What Word does on save (how it splits runs, whether typed text at the edge of a value takes the value's style, whether it keeps a reply the tools wrote) is untested. The plan's gate E asks for one fixture that Word saved, edited in five listed ways.
 - **Exclusive creation on the Drive mount:** the publish step re-reads each file, and no test publishes to Drive.
 - **Real documents:** the tools have rendered the invented example only. The first conversion (Step 6) will show how many paragraphs of a real report the map leaves unmapped.
-- **Highlight legibility:** the blue highlight of a text change is dark behind black text. The colours are the plan's table and one constant each in `change_classes.py`.
+- **An interval is read as it is printed:** a bound that prints as 0.00 counts as containing a null of 0, whatever the unrounded number was.
+- **The colours in Word:** the text colours were checked for contrast by a test and not looked at in Word. Word draws a tracked insertion in its own reviewer colour, so the class colour of a tracked change shows once the change is accepted.

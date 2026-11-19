@@ -59,6 +59,7 @@ from utils.cohort_flow import (
     transition_stages,
     widen_flow,
 )
+from utils.local_tables import LocalTables
 from utils.data_loading import (
     ACTIVATION_COHORT_TABLE,
     CATALOG,
@@ -129,7 +130,7 @@ def upstream_flow(spark):
     """The three upstream stages as a long frame (stage, description, group,
     n_users, n_windows blank), mirroring the sliding-window geometry of
     data_staging/export_valid_transition_segments.py."""
-    if getattr(spark, "is_analysis_bundle", False):
+    if isinstance(spark, LocalTables):
         stages = spark.table(UPSTREAM_STAGES_BUNDLE_TABLE).toPandas()
         stages["n_users"] = stages["n_users"].astype(int)
         stages["n_windows"] = pd.NA

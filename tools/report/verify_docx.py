@@ -29,7 +29,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from report import docx_package, sidecar                                    # noqa: E402
+from report import change_classes, docx_package, sidecar                    # noqa: E402
 from report.cells import CELL_VALUE_STYLE                                   # noqa: E402
 from report.postprocess_docx import PREVIOUS_VALUE_STYLE, leftover_mark_styles  # noqa: E402
 
@@ -195,8 +195,10 @@ def check_generated_values(document_xml, cells_rows, allow_list):
         _, problem = locate_generated_values(document_xml, cells_rows)
         if problem:
             problems.append(problem)
+        # Only a change that needs attention is tracked, so only its previous value is in the file.
         flagged = [row["previous_printed"] for row in cells_rows
-                   if row.get("previous_printed") and row["previous_printed"] != row["printed"]]
+                   if row.get("previous_printed") and row["previous_printed"] != row["printed"]
+                   and change_classes.is_tracked(row.get("change_class", ""))]
         _, problem = match_values(styled_runs(document_xml, PREVIOUS_VALUE_STYLE), flagged)
         if problem:
             problems.append("previous values: " + problem)

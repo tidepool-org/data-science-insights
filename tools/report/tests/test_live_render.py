@@ -123,11 +123,23 @@ def test_the_change_marking_is_only_marking():
         flagged = _document(os.path.join(folder, "publish", "example_report (refreshed).docx"))
         plain_b = _document(os.path.join(scratch_plain, "stages", "postprocessed.docx"))
         render_a = _document(os.path.join(folder, "publish", "example_report (draft 2).docx"))
-        legend = "Numbers that changed since the previous render"
+        legend = "Numbers that changed since the previous render"   # the legend exists only in the flagged render
         accepted = [text for text in _words(flagged, docx_package.VIEW_ACCEPTED) if not text.startswith(legend)]
         assert accepted == _words(plain_b, docx_package.VIEW_ACCEPTED), "accepting every revision gives the plain render on the new data"
-        assert sorted(_values(flagged, docx_package.VIEW_REJECTED)) == sorted(_values(render_a, docx_package.VIEW_ACCEPTED)), \
-            "rejecting every revision gives the numbers of the previous render"
+        # Rejecting every revision gives back the previous value of each change that needs attention
+        # and of the draft's own insertions; a change that is only coloured keeps its new value.
+        refreshed = sidecar.read_csv(os.path.join(folder, "publish", "example_report (refreshed).render", "cells.csv"))
+        reverted = {row["printed"]: row["previous_printed"] for row in refreshed
+                    if change_classes.is_tracked(row["change_class"]) and row["previous_printed"] != row["printed"]}
+        assert reverted, "the example holds tracked changes"
+        rejected_text = " ".join(_words(flagged, docx_package.VIEW_REJECTED))
+        accepted_text = " ".join(_words(flagged, docx_package.VIEW_ACCEPTED))
+        for new_value, previous_value in reverted.items():
+            assert new_value in accepted_text and previous_value in rejected_text, (previous_value, new_value)
+        coloured = [row for row in refreshed if row["change_class"] == change_classes.COUNT_CHANGE]
+        assert coloured and all(row["printed"] in rejected_text and row["printed"] in accepted_text for row in coloured)
+        assert "Meeting the age rule" in rejected_text and "Meeting the age rule" not in accepted_text, "the removed row is a tracked deletion"
+        assert "w:highlight" not in flagged
         changes = sidecar.read_csv(os.path.join(folder, "publish", "example_report (refreshed).render", "changes.csv"))
         found = {row["change_class"] for row in changes}
         expected = set(change_classes.CLASSES_BY_PRECEDENCE) | {change_classes.TEXT_CHANGE, change_classes.NEW, change_classes.GONE,

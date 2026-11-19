@@ -20,9 +20,13 @@ PAIRS = [
     ("interval:2", "1.12|6.22", "1.10|6.20", 0, None, classes.SMALL_CHANGE),
     ("interval:2", "1.12|6.22", "2.50|6.22", 0, None, classes.LARGE_CHANGE),   # one bound moved by a large amount
     ("interval:2", "1.12|6.22", "-0.20|6.44", None, None, classes.LARGE_CHANGE),     # no null: no crossing
-    ("decimal:1", "61.2", "62.2", None, None, classes.LARGE_CHANGE),           # ten units of the last place
-    ("decimal:1", "61.2", "62.1", None, None, classes.SMALL_CHANGE),           # nine units, under 10%
-    ("decimal:1", "1.0", "1.2", None, None, classes.LARGE_CHANGE),             # 20% and two units
+    ("decimal:1", "61.2", "68.0", None, None, classes.LARGE_CHANGE),           # 68 units of the last place and 11%
+    ("decimal:1", "61.2", "62.2", None, None, classes.SMALL_CHANGE),           # ten units but under 2%: visible, not proportionally big
+    ("decimal:2", "71.03", "71.70", None, None, classes.SMALL_CHANGE),         # 67 units of 0.01 but under 1%
+    ("decimal:1", "1.0", "2.2", None, None, classes.LARGE_CHANGE),             # twelve units and 120%
+    ("decimal:1", "1.0", "1.2", None, None, classes.SMALL_CHANGE),             # 20% but two units: proportionally big, barely visible
+    ("decimal:2", "0.04", "0.08", None, None, classes.SMALL_CHANGE),           # doubled, by four units near zero
+    ("decimal:1", "0.0", "1.0", None, None, classes.LARGE_CHANGE),             # from zero: judged on the units alone
     ("decimal:1", "0.2", "0.3", None, None, classes.SMALL_CHANGE),             # 50% but one unit: not large
     ("percent:1", "12.3", "14.0", None, None, classes.LARGE_CHANGE),
     ("count", "40", "43", None, None, classes.COUNT_CHANGE),
@@ -62,12 +66,60 @@ def test_a_withheld_value_that_becomes_printed_is_a_missing_state_change():
     assert classes.classify("missing", "", "", "—", "—", old_value_kind="missing") == classes.UNCHANGED
 
 
-def test_which_statuses_make_a_word_revision():
-    assert classes.makes_revision(classes.NEW, True)
-    assert classes.makes_revision(classes.SIGN_FLIP, True)
-    assert not classes.makes_revision(classes.P_VALUE_CROSSING, False)   # listed in the report, no revision
-    assert not classes.makes_revision(classes.RAW_CHANGE_PRINT_UNCHANGED, False)
-    assert not classes.makes_revision(classes.UNCHANGED, False)
+def test_which_statuses_mark_the_word_file_and_which_are_tracked():
+    assert classes.is_marked(classes.NEW, True) and classes.is_marked(classes.SIGN_FLIP, True) and classes.is_marked(classes.SMALL_CHANGE, True)
+    assert not classes.is_marked(classes.P_VALUE_CROSSING, False)   # listed in the report; the printed text did not move
+    assert not classes.is_marked(classes.RAW_CHANGE_PRINT_UNCHANGED, False) and not classes.is_marked(classes.UNCHANGED, False)
+    # Only what needs attention is a tracked change (MC, 2026-11-19); every other change is coloured text.
+    tracked = [status for status in classes.REPORT_ORDER if classes.is_tracked(status)]
+    assert tracked == [classes.SIGN_FLIP, classes.P_VALUE_CROSSING, classes.INTERVAL_CROSSING, classes.LARGE_CHANGE, classes.GONE], tracked
+
+
+# A value printed as text is classed by the numbers it holds: (kind named by the reference or None,
+# old text, new text, null, expected status). These are the composite strings of the files of record.
+TEXT_PAIRS = [
+    (None, "61.24 \u00b1 10.40", "61.30 \u00b1 10.38", None, classes.SMALL_CHANGE),
+    (None, "61.24 \u00b1 10.40", "68.91 \u00b1 10.38", None, classes.LARGE_CHANGE),            # no kind named: any number may be large
+    (None, "61.24 \u00b1 10.40", "64.91 \u00b1 10.38", None, classes.SMALL_CHANGE),            # 6%: not proportionally big
+    ("estimate", "61.24 \u00b1 10.40", "61.30 \u00b1 14.90", None, classes.SMALL_CHANGE),      # the SD is not the estimate
+    ("estimate", "-0.05 \u00b1 1.20", "0.04 \u00b1 1.20", 0, classes.SIGN_FLIP),
+    ("estimate", "-0.05 \u00b1 1.20", "0.04 \u00b1 1.20", None, classes.SMALL_CHANGE),         # no null named: no sign flip; nine units
+    ("interval", "[1.12, 6.22]", "[-0.20, 6.44]", 0, classes.INTERVAL_CROSSING),
+    ("interval", "[1.12, 6.22]", "[1.10, 6.20]", 0, classes.SMALL_CHANGE),
+    ("interval", "[1.12, 6.22]", "[1.12, 7.90]", 0, classes.LARGE_CHANGE),
+    ("estimate_and_interval", "0.90 [0.10, 1.80]", "0.85 [-0.20, 1.80]", 0, classes.INTERVAL_CROSSING),
+    ("estimate_and_interval", "0.90 [0.10, 1.80]", "-0.10 [-0.90, 0.80]", 0, classes.SIGN_FLIP),
+    ("estimate", "63.10 [55.2, 71.4]", "63.14 [40.0, 80.0]", None, classes.SMALL_CHANGE),       # the IQR is not the estimate
+    ("p_value", "0.308", "0.043", None, classes.P_VALUE_CROSSING),
+    ("p_value", "0.500", "0.700", None, classes.SMALL_CHANGE),                                   # a p-value is a crossing or small
+    (None, "p=0.308", "p=0.043", None, classes.P_VALUE_CROSSING),                                # read as a p-value from its shape
+    (None, "p=0.012", "p<0.001", None, classes.SMALL_CHANGE),
+    ("p_value", "3.10e-04", "2.90e-07", None, classes.SMALL_CHANGE),
+    (None, "40", "43", None, classes.COUNT_CHANGE),                                              # one whole number is a count
+    (None, "1,234 (12.3%)", "1,240 (12.4%)", None, classes.SMALL_CHANGE),
+    (None, "stable", "revised", None, classes.TEXT_CHANGE),
+    (None, "n=40 users", "40 users", None, classes.TEXT_CHANGE),                                 # the shape changed: not paired number for number
+    (None, "p=0.04", "p = 0.04", None, classes.TEXT_CHANGE),                                     # the same number written differently
+]
+
+
+def test_a_value_printed_as_text_is_classed_by_its_numbers():
+    for kind, old_text, new_text, null, expected in TEXT_PAIRS:
+        found = classes.classify(kind or "text", old_text, new_text, old_text, new_text, null_value=null, printed_as_text=True)
+        assert found == expected, "%r -> %r as %s: expected %r, got %r" % (old_text, new_text, kind, expected, found)
+
+
+def test_every_marked_class_has_a_text_colour_that_reads_on_white():
+    def luminance(colour):
+        channels = [int(colour[index:index + 2], 16) / 255.0 for index in (0, 2, 4)]
+        linear = [channel / 12.92 if channel <= 0.03928 else ((channel + 0.055) / 1.055) ** 2.4 for channel in channels]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    for status, mark in classes.CHANGE_MARKS.items():
+        if status == classes.GONE:
+            assert mark["text_colour"] is None
+            continue
+        contrast_with_white = 1.05 / (luminance(mark["text_colour"]) + 0.05)
+        assert contrast_with_white >= 4.5, "%s: %s has contrast %.2f with white" % (status, mark["text_colour"], contrast_with_white)
 
 
 def test_revision_author_and_change_sizes():

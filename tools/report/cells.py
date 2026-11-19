@@ -246,10 +246,17 @@ def _span(text, style):
     return '[%s]{custom-style="%s"}' % (escape_markdown(text), style) if text else ""
 
 
-def _evaluate(file_or_alias, row, column, format_name, part, missing, null, alpha, placement, table_fields, enclosing_mark):
+def _evaluate(file_or_alias, row, column, format_name, part, missing, null, alpha, placement, table_fields, enclosing_mark,
+              named_kind=None):
     """Look one value up, print it, record it, and return the Markdown that marks it."""
     state = _state()
     base, _ = formats.parse_format(format_name)
+    printed_as_text = base in ("text", "verbatim")
+    if named_kind is not None:
+        if named_kind not in change_classes.KINDS_A_REFERENCE_MAY_NAME:
+            raise CellReferenceError("unknown kind %r; the kinds are %s" % (named_kind, ", ".join(change_classes.KINDS_A_REFERENCE_MAY_NAME)))
+        if not printed_as_text:
+            raise CellReferenceError("kind= says what a text or verbatim value holds; the format %r has its own kind" % (format_name,))
     if part is not None and part not in formats.PART_EXTRACTORS:
         formats.extract_part("", part)   # raises UnknownFormat with the list of parts
     if enclosing_mark is not None and not ENCLOSING_MARK_PATTERN.match(enclosing_mark):
@@ -269,7 +276,7 @@ def _evaluate(file_or_alias, row, column, format_name, part, missing, null, alph
                 ", ".join(label), "|".join(columns), declared.file))
         printed, kind, raw_value = missing, "missing", ""
     else:
-        printed, kind, raw_value = formats.print_value(format_name, tuple(raw)), formats.value_kind(format_name), "|".join(raw)
+        printed, kind, raw_value = formats.print_value(format_name, tuple(raw)), named_kind or formats.value_kind(format_name), "|".join(raw)
 
     if null is None and base == "signed":
         null = 0
@@ -286,7 +293,8 @@ def _evaluate(file_or_alias, row, column, format_name, part, missing, null, alph
         else:
             previous_printed = old["printed"]
             status = change_classes.classify(kind, old["raw_value"], raw_value, old["printed"], printed,
-                                             null_value=null, alpha=alpha, old_value_kind=old["value_kind"])
+                                             null_value=null, alpha=alpha, old_value_kind=old["value_kind"],
+                                             printed_as_text=printed_as_text)
 
     record = {
         "record": "value", "reference_id": identifier, "placement": placement, "value_kind": kind,
@@ -299,25 +307,31 @@ def _evaluate(file_or_alias, row, column, format_name, part, missing, null, alph
     record.update(table_fields)
     _append_to_log(record)
 
-    if status and change_classes.makes_revision(status, previous_printed != printed):
-        suffix = change_classes.REVISION_MARKS[status]["style_suffix"]
-        return _span(previous_printed, FLAG_OLD_STYLE_PREFIX + suffix) + _span(printed, FLAG_NEW_STYLE_PREFIX + suffix)
+    if status and change_classes.is_marked(status, previous_printed != printed):
+        # The new value in its class colour; the previous value beside it, to be shown deleted, only
+        # for a class that needs attention.
+        suffix = change_classes.CHANGE_MARKS[status]["style_suffix"]
+        previous_span = _span(previous_printed, FLAG_OLD_STYLE_PREFIX + suffix) if change_classes.is_tracked(status) else ""
+        return previous_span + _span(printed, FLAG_NEW_STYLE_PREFIX + suffix)
     return _span(printed, CELL_VALUE_STYLE + (enclosing_mark or ""))
 
 
-def cell(file_or_alias, row, column, format, *, part=None, missing=None, null=None, alpha=None, _enclosing_mark=None):
+def cell(file_or_alias, row, column, format, *, part=None, missing=None, null=None, alpha=None, kind=None, _enclosing_mark=None):
     """Print one value of one CSV file (section 4.1).
 
     `row` is a label (or a tuple of labels, or a dictionary of key column to label);
     `column` is one column name, or two for an interval format; `format` is one of the
     formats of report/formats.py. `part` reaches one component of a composite string;
     `missing` is the text to print when the value is empty; `null` is the value at which an
-    estimate or an interval changes meaning; `alpha` is the threshold of a p-value. The
-    last two are used only by the change classes. `_enclosing_mark` is set by the render
-    driver for a reference that sits inside a draft change mark.
+    estimate or an interval changes meaning; `alpha` is the threshold of a p-value;
+    `kind` says what a value printed with the text or verbatim format holds (estimate,
+    percent, p_value, interval, count, or estimate_and_interval), so a composite string
+    such as "0.9 [-0.2, 1.8]" is classed by its numbers. The last three are used only by
+    the change classes. `_enclosing_mark` is set by the render driver for a reference that
+    sits inside a draft change mark.
     """
     return MarkdownValue(_evaluate(file_or_alias, row, column, format, part, missing, null, alpha,
-                                   "inline", {}, _enclosing_mark))
+                                   "inline", {}, _enclosing_mark, named_kind=kind))
 
 
 # ---------------------------------------------------------------- tables
@@ -332,8 +346,8 @@ def table(label, file_or_alias, rows, columns, *, header_groups=None, row_header
 
     `rows` is a list of (row label to print, row of the source), or "all" for every row in
     file order. `columns` is a list of (header, column, format), with an optional fourth
-    element, a dictionary of the `cell` options (part, null, alpha, missing) for that
-    column. `header_groups` is a list of (outer label, number of columns) and writes the
+    element, a dictionary of the `cell` options (part, null, alpha, kind, missing) for
+    that column. `header_groups` is a list of (outer label, number of columns) and writes the
     two-level header form of STYLE.md section 3.2.
     """
     state = _state()
@@ -376,7 +390,8 @@ def table(label, file_or_alias, rows, columns, *, header_groups=None, row_header
             options.setdefault("missing", missing)
             fields = {"table_label": label, "table_row_label": row_label, "table_column_header": header}
             cells.append(_evaluate(file_or_alias, row, column_name, format_name, options.get("part"), options.get("missing"),
-                                   options.get("null"), options.get("alpha"), "table", fields, None))
+                                   options.get("null"), options.get("alpha"), "table", fields, None,
+                                   named_kind=options.get("kind")))
         is_new_row = bool(previous_rows) and row_label not in previous_rows
         lines.append(_table_line([_span(row_label, NEW_ROW_STYLE) if is_new_row else escape_markdown(row_label)] + cells))
     for gone_label, old_values in (previous_rows or {}).items():
@@ -425,12 +440,13 @@ def require_true(description, condition):
 
 
 def change_legend():
-    """One paragraph naming each change class and its colour when a comparison is active, else nothing."""
+    """One paragraph naming each change class in its colour when a comparison is active, else nothing."""
     if _state().previous is None:
         return MarkdownValue(NO_COMPARISON_COMMENT)
-    swatches = []
+    tracked, coloured = [], []
     for status in change_classes.CLASSES_BY_PRECEDENCE + (change_classes.TEXT_CHANGE, change_classes.NEW):
-        mark = change_classes.REVISION_MARKS[status]
-        swatches.append(_span(mark["author_label"], LEGEND_STYLE_PREFIX + mark["style_suffix"]))
-    return MarkdownValue("Numbers that changed since the previous render are shown as tracked changes, the previous value "
-                         "deleted and the new value inserted and highlighted by class: " + ", ".join(swatches) + ".")
+        mark = change_classes.CHANGE_MARKS[status]
+        (tracked if change_classes.is_tracked(status) else coloured).append(_span(mark["author_label"], LEGEND_STYLE_PREFIX + mark["style_suffix"]))
+    return MarkdownValue("Numbers that changed since the previous render are printed in the colour of their class: "
+                         + ", ".join(coloured) + ". The changes that need attention are also tracked changes, with the "
+                         "previous value shown deleted: " + ", ".join(tracked) + ".")

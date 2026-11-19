@@ -17,10 +17,11 @@ def _failing_groups(results):
     return [group for group, problems in results if problems]
 
 
-def _record(folder, printed, previous=None, allow_list="", tables=0, authors=()):
+def _record(folder, printed, previous=None, allow_list="", tables=0, authors=(), change_class=""):
     """A minimal render record: the sidecar, the manifest, and the allow-list."""
     record = os.path.join(folder, "draft.render")
-    rows = [{"sequence": index + 1, "printed": text, "previous_printed": (previous or {}).get(index, "")} for index, text in enumerate(printed)]
+    rows = [{"sequence": index + 1, "printed": text, "previous_printed": (previous or {}).get(index, ""),
+             "change_class": change_class if index in (previous or {}) else ""} for index, text in enumerate(printed)]
     os.makedirs(record)
     sidecar.write_csv(os.path.join(record, sidecar.CELLS_FILE), sidecar.CELLS_COLUMNS, rows)
     sidecar.write_manifest(os.path.join(record, sidecar.MANIFEST_FILE),
@@ -80,17 +81,24 @@ def test_a_value_that_differs_from_the_sidecar_fails():
         assert "beyond the 2 values" in dict(verify_docx.verify(extra, render_record=record))["generated values"][0]
 
 
-def test_the_previous_values_of_flagged_numbers_are_checked_too():
+def test_the_previous_values_of_tracked_changes_are_checked_too():
     with temporary_folder() as folder:
-        record = _record(folder, ["43"], previous={0: "40"}, authors=["Data refresh b: count change"])
+        record = _record(folder, ["\u22120.04"], previous={0: "+0.05"}, authors=["Data refresh b: sign flip"], change_class="sign flip")
         good = build_docx(os.path.join(folder, "good.docx"), document_xml(paragraph(
-            removed("Data refresh b: count change", "40", style="CellValuePrevious", identifier=1),
-            inserted("Data refresh b: count change", run("43", "CellValue"), identifier=2))))
+            removed("Data refresh b: sign flip", "+0.05", style="CellValuePrevious", identifier=1),
+            inserted("Data refresh b: sign flip", run("\u22120.04", "CellValue"), identifier=2))))
         assert _failing_groups(verify_docx.verify(good, render_record=record)) == []
         bad = build_docx(os.path.join(folder, "bad.docx"), document_xml(paragraph(
-            removed("Data refresh b: count change", "39", style="CellValuePrevious", identifier=1),
-            inserted("Data refresh b: count change", run("43", "CellValue"), identifier=2))))
+            removed("Data refresh b: sign flip", "+0.50", style="CellValuePrevious", identifier=1),
+            inserted("Data refresh b: sign flip", run("\u22120.04", "CellValue"), identifier=2))))
         assert "previous values" in dict(verify_docx.verify(bad, render_record=record))["generated values"][0]
+
+
+def test_a_change_that_is_only_coloured_leaves_no_previous_value_in_the_file():
+    with temporary_folder() as folder:
+        record = _record(folder, ["43"], previous={0: "40"}, change_class="count change")
+        coloured = build_docx(os.path.join(folder, "coloured.docx"), document_xml(paragraph("There were ", run("43", "CellValue"), " users.")))
+        assert _failing_groups(verify_docx.verify(coloured, render_record=record)) == []
 
 
 def test_revisions_by_an_unexpected_author_or_with_a_repeated_id_fail():
