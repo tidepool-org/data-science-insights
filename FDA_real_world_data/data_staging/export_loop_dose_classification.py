@@ -242,7 +242,9 @@ def run(
            MIN(ts)                                                 AS dose_time,
            array_join(sort_array(collect_set(route)), '+')         AS routes,
            COUNT(*)                                                AS records,
-           MAX_BY(plugin_version, version_int)                     AS loop_version,
+           -- two builds of one release tie on version_int; the highest version string wins (MC, 2026-11-19)
+           MAX_BY(plugin_version, CASE WHEN version_int IS NOT NULL
+                                       THEN STRUCT(version_int, plugin_version) END) AS loop_version,
            MAX(version_int)                                        AS version_int,
            CASE WHEN MAX(CASE WHEN automatic_key = '1'      THEN 1 ELSE 0 END) = 1 THEN '1'
                 WHEN MAX(CASE WHEN automatic_key = '0'      THEN 1 ELSE 0 END) = 1 THEN '0'

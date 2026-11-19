@@ -86,13 +86,14 @@ hk_basal_dedup AS (
     TRY_CAST(LEFT(time_string, 10) AS DATE) AS local_day,
     TRY_CAST(time_string AS TIMESTAMP) AS ts,
     TRY_CAST(rate AS DOUBLE) AS rate,
-    TRY_CAST(duration AS DOUBLE) AS dur_ms
+    TRY_CAST(duration AS DOUBLE) AS dur_ms,
+    created_timestamp
   FROM (
     SELECT
       *,
       ROW_NUMBER() OVER (
         PARTITION BY _userId, CAST(ROUND(unix_timestamp(TRY_CAST(time_string AS TIMESTAMP)) / 60.0) AS BIGINT), rate, duration
-        ORDER BY created_timestamp DESC
+        ORDER BY created_timestamp DESC, time_string ASC, payload ASC
       ) AS rn
     FROM {input_table}
     WHERE type = 'basal'
@@ -108,7 +109,12 @@ hk_basal_clipped AS (
     local_day,
     COALESCE(rate, 0) * LEAST(
       COALESCE(
-        (CAST(LEAD(ts) OVER (PARTITION BY _userId ORDER BY ts) AS DOUBLE) - CAST(ts AS DOUBLE)) * 1000,
+        -- Each record runs until the next one starts. Of records that start at the same second
+        -- the last in this order is the one that runs, and the others get no time: the longest
+        -- duration, then the most recently created, then the higher rate (NMA decision D28).
+        (CAST(LEAD(ts) OVER (PARTITION BY _userId
+                             ORDER BY ts, dur_ms ASC NULLS FIRST, created_timestamp ASC NULLS FIRST, rate ASC NULLS FIRST)
+              AS DOUBLE) - CAST(ts AS DOUBLE)) * 1000,
         dur_ms
       ),
       dur_ms
@@ -133,7 +139,7 @@ loop_basal_dedup AS (
       *,
       ROW_NUMBER() OVER (
         PARTITION BY _userId, CAST(ROUND(unix_timestamp(TRY_CAST(time_string AS TIMESTAMP)) / 60.0) AS BIGINT), rate, duration
-        ORDER BY created_timestamp DESC
+        ORDER BY created_timestamp DESC, time_string ASC, payload ASC
       ) AS rn
     FROM {input_table}
     WHERE type = 'basal'
@@ -175,7 +181,7 @@ hk_bolus_day AS (
         *,
         ROW_NUMBER() OVER (
           PARTITION BY _userId, CAST(ROUND(unix_timestamp(TRY_CAST(time_string AS TIMESTAMP)) / 60.0) AS BIGINT), normal
-          ORDER BY created_timestamp DESC
+          ORDER BY created_timestamp DESC, time_string ASC
         ) AS rn
       FROM {input_table}
       WHERE type = 'bolus'
@@ -199,7 +205,7 @@ loop_bolus_day AS (
         *,
         ROW_NUMBER() OVER (
           PARTITION BY _userId, CAST(ROUND(unix_timestamp(TRY_CAST(time_string AS TIMESTAMP)) / 60.0) AS BIGINT), normal
-          ORDER BY created_timestamp DESC
+          ORDER BY created_timestamp DESC, time_string ASC
         ) AS rn
       FROM {input_table}
       WHERE type = 'bolus'

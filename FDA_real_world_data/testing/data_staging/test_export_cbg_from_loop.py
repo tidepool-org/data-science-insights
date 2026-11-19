@@ -2,7 +2,9 @@
 Unit test for export_cbg_from_loop.py.
 
 Tests: Loop user filtering, cbg type filtering, mmol→mg/dL conversion,
-is_plausible flag (38-500 mg/dL), 5-min bucket dedup, null/bad timestamp exclusion.
+is_plausible flag (38-500 mg/dL), 5-min bucket dedup, null/bad timestamp exclusion, and the
+order that settles readings sharing a timestamp (the most recently created, then the lower
+value; MC, 2026-11-19).
 
 Run on Databricks.
 """
@@ -41,7 +43,7 @@ ALL_TABLES = [INPUT_TABLE, LOOP_RECS_TABLE, OUTPUT_TABLE]
 MMOL_PER_MGDL = 1 / 18.018
 
 # --- Test data ---
-# Input mimics bddp_sample_all_2 schema: _userId, time_string, type, reason, value
+# Input mimics bddp_sample_all_2 schema: _userId, time_string, type, reason, value, created_timestamp
 TEST_ROWS = [
     {  # Row 1: valid CBG for a Loop user — included
         "_userId": "loop_user",
@@ -106,7 +108,18 @@ TEST_ROWS = [
         "reason": None,
         "value": 150.0 * MMOL_PER_MGDL,
     },
+    # Rows 10-12: three readings of one slot with the same timestamp. The one created first
+    # loses to the two created later, and of those two the lower value is kept (139).
+    {"_userId": "loop_user", "time_string": "2025-01-15 12:31:00", "type": "cbg", "reason": None,
+     "value": 140.0 * MMOL_PER_MGDL, "created_timestamp": "2025-01-16 00:00:00"},
+    {"_userId": "loop_user", "time_string": "2025-01-15 12:31:00", "type": "cbg", "reason": None,
+     "value": 141.0 * MMOL_PER_MGDL, "created_timestamp": "2025-01-17 00:00:00"},
+    {"_userId": "loop_user", "time_string": "2025-01-15 12:31:00", "type": "cbg", "reason": None,
+     "value": 139.0 * MMOL_PER_MGDL, "created_timestamp": "2025-01-17 00:00:00"},
 ]
+# Every other row was created at one time, so its slot is settled by the timestamp alone.
+for _row in TEST_ROWS:
+    _row.setdefault("created_timestamp", "2025-01-16 00:00:00")
 
 
 # Cohort source: loop_cbg now derives its Loop-user gate from loop_recommendations.
@@ -126,10 +139,10 @@ try:
     )
     result = read_test_output(spark, OUTPUT_TABLE)
 
-    # 1. 4 rows survive: row 2 wins dedup over row 1 in 12:00 bucket,
-    #    row 5 (< 38), row 6 (> 500), row 9 in different buckets.
+    # 1. 5 rows survive: row 2 wins dedup over row 1 in 12:00 bucket,
+    #    row 5 (< 38), row 6 (> 500), row 9 in different buckets, and one of rows 10-12.
     #    Excluded: row 3 (not cbg), row 4 (non-Loop user), row 7 (null value), row 8 (bad timestamp)
-    assert_row_count(result, 4, "rows after filtering and dedup")
+    assert_row_count(result, 5, "rows after filtering and dedup")
 
     # 2. Only loop_user appears
     users = result["_userId"].unique().tolist()
@@ -138,13 +151,17 @@ try:
 
     # 3. mg/dL conversion correct — dedup kept 130 (row 2, later timestamp) not 120 (row 1)
     mg_values = sorted(result["cbg_mg_dl"].round(0).tolist())
-    assert mg_values == [37.0, 130.0, 150.0, 501.0], f"expected [37, 130, 150, 501], got {mg_values}"
+    assert mg_values == [37.0, 130.0, 139.0, 150.0, 501.0], f"expected [37, 130, 139, 150, 501], got {mg_values}"
     print("PASS: mmol/L → mg/dL conversion correct, out-of-range values retained")
 
     # 4. Dedup kept later timestamp (12:02 not 12:00 in the 12:00 bucket)
     bucket_12_00 = result[result["cbg_mg_dl"].round(0) == 130.0]
     assert len(bucket_12_00) == 1, "expected 1 row in 12:00 bucket (dedup winner)"
     print("PASS: 5-min bucket dedup kept correct row")
+
+    # 4b. Readings sharing a timestamp: the most recently created, then the lower value
+    assert 139.0 in mg_values and 140.0 not in mg_values and 141.0 not in mg_values
+    print("PASS: readings sharing a timestamp settled by creation time, then the lower value")
 
     # 5. is_plausible flag correct
     assert "is_plausible" in result.columns, "missing is_plausible column"

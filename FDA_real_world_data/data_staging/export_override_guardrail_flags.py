@@ -200,7 +200,8 @@ def _resolve_fallback(spark, overrides_table, correction_range_table, bddp_table
         --begin-sql
         SELECT
           _userId,
-          MAX_BY(timezoneOffset, TRY_CAST(time_string AS TIMESTAMP)) AS tz_offset_min
+          -- the latest offset; two records at one time are settled by the larger offset (NMA decision D28)
+          MAX_BY(timezoneOffset, STRUCT(TRY_CAST(time_string AS TIMESTAMP), timezoneOffset)) AS tz_offset_min
         FROM {bddp_table}
         WHERE timezoneOffset IS NOT NULL
           AND TRY_CAST(time_string AS TIMESTAMP) IS NOT NULL

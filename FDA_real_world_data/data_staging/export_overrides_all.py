@@ -70,7 +70,11 @@ def run(
         *,
         ROW_NUMBER() OVER (
           PARTITION BY _userId, override_time
-          ORDER BY created_timestamp DESC
+          -- one record per activation time: the most recently created, then an order on the
+          -- record's own values, so that no tie is left to chance (NMA decision D28)
+          ORDER BY created_timestamp DESC, overridePreset ASC, duration ASC NULLS LAST,
+                   basalRateScaleFactor ASC NULLS LAST, carbRatioScaleFactor ASC NULLS LAST,
+                   insulinSensitivityScaleFactor ASC NULLS LAST, bg_target_low ASC NULLS LAST, bg_target_high ASC NULLS LAST
         ) AS rn
       FROM raw_overrides
     ),

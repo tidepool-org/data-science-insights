@@ -37,7 +37,7 @@ def head_tree_hash(fda_root):
                                  check=True, capture_output=True).stdout
         subprocess.run(["tar", "-x", "-C", scratch], input=archive, check=True)
         manifest = tree_manifest.tree_manifest(os.path.join(scratch, subdirectory))
-    return head, manifest["tree_sha256"]
+    return head, manifest["tree_sha256"], manifest["code_file_hashes"]
 
 
 def verdict(run_tree, working_tree, head_tree):
@@ -53,13 +53,22 @@ def main(manifest_path, fda_root=FDA_ROOT):
         manifest = json.load(handle)
     run_tree = manifest["tree_sha256"]
     working_tree = tree_manifest.tree_manifest(fda_root)["tree_sha256"]
-    head, head_tree = head_tree_hash(fda_root)
+    head, head_tree, head_files = head_tree_hash(fda_root)
     answer = verdict(run_tree, working_tree, head_tree)
     print(f"run started      {manifest.get('run_started_utc')}")
     print(f"run tree         {run_tree}")
     print(f"HEAD {head[:12]}     {head_tree}")
     print(f"working tree     {working_tree}")
     print(f"verdict          the run was made from {answer}")
+    run_files = manifest.get("code_file_hashes")
+    if answer != "HEAD" and run_files is None:
+        print("                 the manifest lists no per-file hashes (a run before 2026-11-19), so the files that differ cannot be named")
+    elif answer != "HEAD":
+        changed, only_in_run, only_at_head = tree_manifest.differing_files(run_files, head_files)
+        print(f"against HEAD     {len(changed)} file(s) differ, {len(only_in_run)} only in the run, {len(only_at_head)} only at HEAD")
+        for label, paths in (("differs", changed), ("only in the run", only_in_run), ("only at HEAD", only_at_head)):
+            for path in paths:
+                print(f"                 {label}: {path}")
     return answer != "neither"
 
 

@@ -120,10 +120,20 @@ GROUP BY COALESCE(d.diagnosis_group, 'unknown')
     return rows
 
 
+# The upstream stages as the analysis bundle carries them: counted on Databricks by this
+# module's own upstream_flow, since the raw extract never leaves it.
+UPSTREAM_STAGES_BUNDLE_TABLE = "cohort_flow_upstream_stages"
+
+
 def upstream_flow(spark):
     """The three upstream stages as a long frame (stage, description, group,
     n_users, n_windows blank), mirroring the sliding-window geometry of
     data_staging/export_valid_transition_segments.py."""
+    if getattr(spark, "is_analysis_bundle", False):
+        stages = spark.table(UPSTREAM_STAGES_BUNDLE_TABLE).toPandas()
+        stages["n_users"] = stages["n_users"].astype(int)
+        stages["n_windows"] = pd.NA
+        return stages[["stage", "description", "group", "n_users", "n_windows"]]
     bddp_users = f"SELECT DISTINCT _userId FROM {BDDP_TABLE}"
     loop_users = f"SELECT DISTINCT _userId FROM {LOOP_RECOMMENDATIONS_TABLE}"
     candidate_users = f"""

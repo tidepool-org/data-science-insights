@@ -93,7 +93,9 @@ def run(
           *,
           ROW_NUMBER() OVER (
             PARTITION BY _userId, settings_time
-            ORDER BY created_timestamp DESC
+            -- one settings record per time: the most recently created, then an order on the
+            -- record's own values, so that no tie is left to chance (NMA decision D28)
+            ORDER BY created_timestamp DESC, activeSchedule ASC NULLS LAST, bgTargets ASC NULLS LAST, bgTarget ASC NULLS LAST
           ) AS rn
         FROM raw_settings
       )

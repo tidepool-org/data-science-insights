@@ -18,7 +18,8 @@ cbg_raw AS (
   SELECT
     s._userId,
     TRY_CAST(s.time_string AS TIMESTAMP) AS cbg_timestamp,
-    (s.value * 18.018) AS cbg_mg_dl
+    (s.value * 18.018) AS cbg_mg_dl,
+    s.created_timestamp
   FROM {input_table} s
   INNER JOIN loop_users u ON s._userId = u._userId
   WHERE s.type = 'cbg'
@@ -41,7 +42,11 @@ cbg_deduped AS (
       *,
       ROW_NUMBER() OVER (
         PARTITION BY _userId, cbg_bucket
-        ORDER BY cbg_timestamp DESC
+        -- One reading per five-minute slot: the latest by timestamp, then the most
+        -- recently created record, then the lower value (MC, 2026-11-19). The last two
+        -- keys settle readings that share a timestamp; ordered by timestamp alone, two
+        -- stagings of the same data kept different readings (2026-11-17 against 11-18).
+        ORDER BY cbg_timestamp DESC, created_timestamp DESC NULLS LAST, cbg_mg_dl ASC
       ) AS rn
     FROM cbg_bucketed
   )

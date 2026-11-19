@@ -249,3 +249,20 @@ def health_source_name_sql(origin):
 def app_identifier_sql(origin):
     """The app identifier of a record, from its origin JSON."""
     return f"get_json_object({origin}, '$.name')"
+
+
+# --- Aliases at an export (NMA decision D16; the analysis bundle, 2026-11-19) ----
+# A raw user id never leaves Databricks. Every export that a laptop reads replaces
+# it with a salted SHA-256, truncated: the same user carries the same alias in every
+# table and every report, so the files still join. The salt lives in source, which
+# removes the identifier but is not secret against someone holding the raw ids; it
+# moves to a Databricks secret scope before anything is shared outside (D16).
+USERID_SALT = "pln1008-nma-v1"
+ALIAS_HEX_LENGTH = 16
+
+
+def alias_sql(column, prefix="u"):
+    """A SQL expression for the alias of `column`: the prefix and the first hex characters
+    of the salted hash, NULL for a NULL. 'u' marks a user, 'p' a partner's participant id."""
+    return (f"CASE WHEN {column} IS NULL THEN NULL ELSE concat('{prefix}', substr(sha2(concat(CAST({column} AS STRING), "
+            f"'{USERID_SALT}'), 256), 1, {ALIAS_HEX_LENGTH})) END")

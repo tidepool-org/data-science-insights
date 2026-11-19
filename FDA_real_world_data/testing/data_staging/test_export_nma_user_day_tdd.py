@@ -84,6 +84,26 @@ ROWS.append(_at(_b, "2025-02-05T06:00:00Z"))   # original
 ROWS.append(_at(_b, "2025-02-05T06:00:00Z"))   # exact re-ingest
 ROWS.append(_at(_b, "2025-02-05T06:00:15Z"))   # dual-sync ~15s offset
 
+# Day 6 (user_tie): basal records that start at the same second (NMA decision D28). Of such
+# records the longest duration runs, then the most recently created, then the higher rate.
+#   00:00  1.0 U/hr for 30 min AND 1.0 U/hr for 20 s, created together: the 30-minute record runs
+#   00:10  0 U/hr: ends it after 10 minutes                                   -> 1.0 x 10/60 U
+#   12:00  2.0 U/hr and 4.0 U/hr, both 30 min, the 4.0 created a day later: the later-created runs
+#   12:30  0 U/hr: ends it after 30 minutes                                   -> 4.0 x 30/60 U
+_tie = make_basal_row("user_tie", date(2025, 2, 6), rate_u_per_hr=1.0)
+
+
+def _basal_at(iso, rate, minutes, created):
+    return {**_tie, "time_string": iso, "rate": rate, "duration": str(int(minutes * 60 * 1000)), "created_timestamp": created}
+
+
+ROWS.append(_basal_at("2025-02-06T00:00:00Z", 1.0, 30, "2025-02-07T00:00:00Z"))
+ROWS.append(_basal_at("2025-02-06T00:00:00Z", 1.0, 20 / 60, "2025-02-07T00:00:00Z"))
+ROWS.append(_basal_at("2025-02-06T00:10:00Z", 0.0, 710, "2025-02-07T00:00:00Z"))
+ROWS.append(_basal_at("2025-02-06T12:00:00Z", 2.0, 30, "2025-02-07T00:00:00Z"))
+ROWS.append(_basal_at("2025-02-06T12:00:00Z", 4.0, 30, "2025-02-08T00:00:00Z"))
+ROWS.append(_basal_at("2025-02-06T12:30:00Z", 0.0, 690, "2025-02-07T00:00:00Z"))
+
 # The row builders emit BDDP fields this fixture never uses (e.g. nutrition/reason are all-None here).
 # setup_test_table infers the Spark schema, and an all-null column has no inferable type — so drop any
 # column that is None in every row before writing. (The TDD SQL reads type/origin/payload/rate/
@@ -127,6 +147,11 @@ try:
     # Nearest-minute dedup: 3 copies of one 3.0 bolus → counted once.
     basal, bolus, tdd, src = by_day[("user_dedup", date(2025, 2, 5))]
     assert abs(bolus - 3.0) < 0.01, f"deduped bolus should be 3.0 (not 9.0), got {bolus}"
+
+    # Basal records starting at the same second: the longest runs, then the most recently created.
+    basal, bolus, tdd, src = by_day[("user_tie", date(2025, 2, 6))]
+    expected = 1.0 * 10 / 60 + 4.0 * 30 / 60
+    assert abs(basal - expected) < 0.001, f"tied basal starts: expected {expected:.4f} U, got {basal}"
 
 finally:
     teardown_test_tables(spark, *ALL_TABLES)

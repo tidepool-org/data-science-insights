@@ -42,7 +42,13 @@ def statements():
 
 
 def test_registered_and_labelled():
-    assert ("day_rule_cross_check.sql", "none") in DEFAULT_JOBS, "registered with the exporter, nothing skipped"
+    # Named in the exporter's DEFAULT_JOBS block, as the other query tests check: entries are
+    # toggled in and out by comment once a run is filed, and an active one skips nothing.
+    exporter_source = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "analysis",
+                                        "export_sql_results_to_csv.py"), encoding="utf-8").read()
+    block = exporter_source[exporter_source.index("DEFAULT_JOBS = ["):]
+    assert "day_rule_cross_check.sql" in block, "named in the exporter's DEFAULT_JOBS block"
+    assert dict(DEFAULT_JOBS).get("day_rule_cross_check.sql", "none") == "none", "when active, nothing is skipped"
     labels = [label for label in result_labels(TEXT) if label is not None]
     assert labels == [str(i) for i in range(13)], labels
     # the pattern class reads counts and sizes only, at the valley of result 1

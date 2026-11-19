@@ -92,6 +92,10 @@ decisions = [
     ("u1", "2025-03-01T10:00:00Z", "dosingDecision", "loop", json.dumps({"version": "3.4.0"})),
     # a user-bolus decision on D3: not a Loop decision, no version taken from it
     ("u1", "2025-03-03T10:00:00Z", "dosingDecision", "normalBolus", json.dumps({"version": "3.9.0"})),
+    # two builds of one release on D6: they tie on major, minor, and patch, and the highest
+    # version string is the day's label (MC, 2026-11-19)
+    ("u1", "2025-03-06T09:00:00Z", "dosingDecision", "loop", json.dumps({"version": "3.2.1+3"})),
+    ("u1", "2025-03-06T10:00:00Z", "dosingDecision", "loop", json.dumps({"version": "3.2.1+2"})),
 ]
 
 
@@ -150,6 +154,9 @@ try:
     assert int(d1["version_int"]) == 3004000 and d1["loop_version"] == "3.4.0", d1.to_dict()
     assert _isnull(d2["version_int"]) and _isnull(d3["version_int"]), (d2["version_int"], d3["version_int"])
     print("PASS: the day's version is the highest of the doses and the Loop decisions; NULL when none (a user-bolus decision gives none)")
+
+    assert int(d6["version_int"]) == 3002001 and d6["loop_version"] == "3.2.1+3", d6.to_dict()
+    print("PASS: two builds of one release on a day: the highest version string is the label")
 
     print("\nAll tests passed.")
 

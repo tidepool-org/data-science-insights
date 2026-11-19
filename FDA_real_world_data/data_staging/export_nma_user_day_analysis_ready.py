@@ -88,6 +88,7 @@ if _HERE not in sys.path:
 
 from cohort_constants import (  # noqa: E402
     PRIMARY_DIAGNOSIS_GROUPS,
+    USERID_SALT,
     age_gate_sql,
     diagnosis_group_sql,
     is_lada_sql,
@@ -104,10 +105,8 @@ STRATEGY_TEMP_BASAL = "temp_basal_only"
 # machine. `_userId` is replaced by a deterministic salted SHA-256 (truncated) — stable across
 # runs and tables, so analyses keep a usable per-user key and traceback is possible by recomputing
 # the same hash on the upstream staging tables (which retain the raw id). The column NAME stays
-# `_userId` so no downstream analysis code changes. NOTE: USERID_SALT lives in source (not a
-# secret) — it removes the raw identifier but is not cryptographically secret; move it to a
-# Databricks secret scope if irreversibility against a known-id dictionary is required.
-USERID_SALT = "pln1008-nma-v1"
+# `_userId` so no downstream analysis code changes. The salt is cohort_constants.USERID_SALT,
+# shared with the analysis bundle (2026-11-19) so a user carries one alias in every export.
 
 # The snapshot the local analyses read is a gzipped CSV (2026-11-17): pandas reads it as it
 # reads a plain one, and it is several times smaller, which the Workspace's transfer limit needs.

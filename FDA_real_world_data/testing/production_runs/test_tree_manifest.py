@@ -45,6 +45,14 @@ def test_tree_hash_properties():
         hashes_a, hashes_b = tree_manifest.file_hashes(a), tree_manifest.file_hashes(b)
         assert hashes_a == hashes_b and set(hashes_a) == {"data_staging/x.py", "exploratory/q.sql", "pipeline.yml"}
         assert tree_manifest.tree_manifest(a) == tree_manifest.tree_manifest(b)
+        assert tree_manifest.tree_manifest(a)["code_file_hashes"] == tree_manifest.file_hashes(a)
+        same = tree_manifest.file_hashes(a)
+        other = dict(same)
+        first = sorted(other)[0]
+        other[first] = "0" * 64
+        other["added.py"] = "1" * 64
+        assert tree_manifest.differing_files(other, same) == ([first], ["added.py"], [])
+        assert tree_manifest.differing_files(same, other) == ([first], [], ["added.py"])
         _write(b, "data_staging/x.py", "print(2)\n")
         assert tree_manifest.tree_hash(hashes_a) != tree_manifest.tree_manifest(b)["tree_sha256"]
     print("PASS: tree hash")

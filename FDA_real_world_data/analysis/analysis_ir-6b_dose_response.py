@@ -114,10 +114,20 @@ from utils.cohort_flow import (  # noqa: E402
 from utils.data_loading import (  # noqa: E402
     load_dose_response_candidates,
     load_dose_response_episodes,
+    load_dose_response_staged_checks,
+    load_staged_starting_glucose,
 )
 
 OUTPUT_DIR = "outputs/analysis_ir_6b"
 CATALOG = "dev.fda_510k_rwd"
+
+
+def hours_of_readings(readings):
+    """The hours a count of five-minute readings covers, to one decimal, rounded once from
+    the count. Summing each user's hours first and rounding the total made the result depend
+    on the order of the users whenever the total fell exactly on a half (a Databricks run and
+    a local run of the same tables differed by 0.1 in a few dozen places, 2026-11-19)."""
+    return round(float(readings) * READING_MINUTES / 60.0, 1)
 
 # --- Guardrail bounds (marketed envelope; drawn as vertical references) -----
 NEEDS_GUARDRAIL_LOW_PCT = 15
@@ -454,29 +464,12 @@ def run_hard_invariants(spark, episodes, candidates, parity, funnel):
     # and every C2 member's own day must be an eligible AB day (implied by
     # is_all_days_ab; a violation means the staged tables are from different
     # vintages).
-    staged_base = spark.sql(f"""
-        SELECT COUNT(*) AS n FROM {CATALOG}.override_guardrail_flags
-        WHERE is_qualifying AND is_all_days_ab
-    """).collect()[0]["n"]
-    activation_base = spark.sql(
-        f"SELECT COUNT(*) AS n FROM {CATALOG}.dose_response_candidates WHERE in_c2_base"
-    ).collect()[0]["n"]
+    staged_checks = load_dose_response_staged_checks(spark)
+    staged_base, activation_base = staged_checks["staged_base"], staged_checks["activation_base"]
     if staged_base != activation_base:
         failures.append(f"C2 base tie-out: staged flags say {staged_base}, "
                         f"activation frame says {activation_base}")
-    c2_day_violations = spark.sql(f"""
-        WITH eligible_days AS (
-          -- MAX/GROUP BY makes the lookup one row per (user, day) so a
-          -- duplicated cohort row cannot fan the violation count out
-          SELECT _userId, day, MAX(is_eligible_ab_day) AS is_eligible_ab_day
-          FROM {CATALOG}.ab_day_cohort GROUP BY _userId, day
-        )
-        SELECT COUNT(*) AS n
-        FROM {CATALOG}.dose_response_candidates c
-        LEFT JOIN eligible_days d
-          ON d._userId = c._userId AND d.day = c.override_day
-        WHERE c.in_candidate_pool AND c.in_c2 AND NOT COALESCE(d.is_eligible_ab_day, FALSE)
-    """).collect()[0]["n"]
+    c2_day_violations = staged_checks["c2_day_violations"]
     if c2_day_violations:
         failures.append(f"C2 day tie-out: {c2_day_violations} C2 activations "
                         "on a day that is not an eligible AB day")
@@ -622,7 +615,7 @@ def build_level_summary(cells, episodes, axis):
             "starting_bin": bin_value,
             "n_users": group["_userId"].nunique(),
             "n_episodes": int(group["n_episodes"].sum()),
-            "valid_hours": round(float(group["valid_hours"].sum()), 1),
+            "valid_hours": hours_of_readings(group["n_valid"].sum()),
             "line_eligible": group["_userId"].nunique() >= MIN_USERS_FOR_LINE,
             # during medians can rest on fewer users (a cell with zero
             # during readings contributes NaN), so the during figures gate on
@@ -805,17 +798,7 @@ def create_data_checks(spark, episodes, parity, summary):
     # exactly AT t0 (ours is strictly before), and the staged CTE does not
     # filter is_plausible (ours does) — so disagreement on real data is not
     # by itself an implementation bug
-    anchor_comparison = spark.sql(f"""
-        WITH staged AS (
-          SELECT _userId, CAST(override_time AS STRING) AS t0,
-                 TRY_CAST(starting_glucose AS DOUBLE) AS staged_anchor
-          FROM {CATALOG}.overrides_by_segment
-        )
-        SELECT s._userId, s.t0, s.staged_anchor
-        FROM staged s JOIN {CATALOG}.dose_response_episodes c
-          ON c._userId = s._userId AND CAST(c.t0 AS STRING) = s.t0
-        WHERE c.in_c1
-    """).toPandas()
+    anchor_comparison = load_staged_starting_glucose(spark)
     if len(anchor_comparison):
         joined = retained[retained["in_c1"]].merge(
             anchor_comparison, on=["_userId", "t0"], how="inner")
@@ -832,17 +815,7 @@ def create_data_checks(spark, episodes, parity, summary):
     # qualifying activations, UNROUNDED needs fraction, the +/-0.5 mg/dL band
     # tolerance — compare against the ir-6_extreme_preset_summary.sql run of
     # record (a mismatch means the staged tables changed vintage).
-    qualifying_marginals = spark.sql(f"""
-        SELECT
-          SUM(CASE WHEN a.needs_fraction <= 0.15 THEN 1 ELSE 0 END) AS needs_low,
-          SUM(CASE WHEN a.needs_fraction >= 2.00 THEN 1 ELSE 0 END) AS needs_high,
-          SUM(CASE WHEN a.target_high <= 100.5   THEN 1 ELSE 0 END) AS target_low_band,
-          SUM(CASE WHEN a.target_low  >= 179.5   THEN 1 ELSE 0 END) AS target_high_band
-        FROM {CATALOG}.dose_response_candidates a
-        JOIN {CATALOG}.override_guardrail_flags f
-          ON f._userId = a._userId AND f.override_time = a.t0
-        WHERE f.is_qualifying
-    """).collect()[0]
+    qualifying_marginals = load_dose_response_staged_checks(spark)["qualifying_marginals"]
     add("IR-6 grain-C reconciliation (needs<=15% / needs>=200% / target 67-100 / "
         "target 180-250) — compare to ir-6_extreme_preset_summary.sql",
         f"{qualifying_marginals['needs_low']} / {qualifying_marginals['needs_high']}"
@@ -963,7 +936,7 @@ def build_line_buckets(cells, axis, metric_key, during=False):
             "x_position": group["hours_level"].sum() / group["valid_hours"].sum(),
             "n_users": len(user_values),
             "n_episodes": int(group["n_episodes"].sum()),
-            "valid_hours": round(float(group["valid_hours"].sum()), 1),
+            "valid_hours": hours_of_readings(group["n_valid"].sum()),
             "median": round(float(user_values.median()), 2),
             "q1": round(float(user_values.quantile(0.25)), 2),
             "q3": round(float(user_values.quantile(0.75)), 2),

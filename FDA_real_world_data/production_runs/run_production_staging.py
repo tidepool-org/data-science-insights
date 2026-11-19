@@ -302,6 +302,7 @@ def run(spark, steps=None, boxes=None, coverages=None):
     global _PROGRESS
     _PROGRESS = run_progress.RunProgress("production_staging:" + ",".join(name for name, _ in selected))
     for i, (name, build) in enumerate(selected, 1):
+        _PROGRESS.end_step()      # the last step of the group before prints its time under its own heading
         print("=" * 72)
         print(f"[production staging {i}/{len(selected)}] {name}")
         print("=" * 72)
@@ -311,6 +312,7 @@ def run(spark, steps=None, boxes=None, coverages=None):
             build(spark, coverages=coverages)
         else:
             build(spark)
+    _PROGRESS.end_step()
     print("=" * 72)
     print(f"[production staging] complete: {', '.join(name for name, _ in selected)}")
     print("=" * 72)

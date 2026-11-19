@@ -18,9 +18,10 @@ import pandas as pd
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..", "..", "analysis")))
 sys.path.insert(0, os.path.normpath(os.path.join(_here, "..")))
-from offline_test_helpers import require_statsmodels, run_tests  # noqa: E402
+from offline_test_helpers import require_statsmodels, run_tests, skip  # noqa: E402
 
 from utils.statistics import (  # type: ignore # noqa: E402
+    _design,
     fit_random_intercept,
     lmm_arm_contrast,
     lmm_day_strategy_interaction,
@@ -52,11 +53,25 @@ def _days(users, seed, sd_user=6.0, low=5, high=120):
                          "tdd_stratum": np.where(rng.random(len(uid)) < 0.5, "Low", "High")})
 
 
+# statsmodels' optimisers, tried in turn until one reaches a usable fit. On the Databricks
+# cluster of 2026-11-19 its default ended one design with a covariance it could not take the
+# square root of, and the comparison then measured statsmodels' failure, not the fit under test.
+STATSMODELS_METHODS = ("lbfgs", "bfgs", "powell")
+
+
 def _statsmodels(formula, frame):
+    import statsmodels
     from statsmodels.regression.mixed_linear_model import MixedLM
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        result = MixedLM.from_formula(formula, groups=frame["_userId"], data=frame).fit(reml=True, method="lbfgs")
+    model = MixedLM.from_formula(formula, groups=frame["_userId"], data=frame)
+    for method in STATSMODELS_METHODS:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = model.fit(reml=True, method=method)
+        if getattr(result, "converged", True) and np.isfinite(np.asarray(result.bse_fe, dtype=float)).all():
+            break
+    else:
+        skip(f"statsmodels {statsmodels.__version__} reached no usable fit of '{formula}' with {STATSMODELS_METHODS}; "
+             "the fit under test is checked without it by test_fit_matches_the_criterion_computed_with_dense_matrices")
     interval = result.conf_int()
     names = list(result.fe_params.index)
     return {"params": result.fe_params, "bse": result.bse_fe, "ci_lo": interval.loc[names, 0],
@@ -152,6 +167,48 @@ def test_missing_rows_are_left_out_and_a_single_day_user_is_kept():
     assert fit["n_days"] == len(frame) - 25 + 1 and fit["n_users"] == frame.loc[frame["tir"].notna(), "_userId"].nunique() + 1
 
 
+def _dense_reml(frame, outcome, design, ratio):
+    """The fixed effects, the residual variance, and the REML criterion at one ratio of the
+    between-user to the residual variance, by plain matrix algebra on the full covariance
+    of the days: the definition, with none of the per-user sums the fit under test uses."""
+    X, y = design.to_numpy(float), frame[outcome].to_numpy(float)
+    codes, _ = pd.factorize(frame["_userId"].to_numpy())
+    membership = np.zeros((len(y), int(codes.max()) + 1))
+    membership[np.arange(len(y)), codes] = 1.0
+    covariance = np.eye(len(y)) + ratio * (membership @ membership.T)
+    inverse = np.linalg.inv(covariance)
+    information = X.T @ inverse @ X
+    beta = np.linalg.solve(information, X.T @ inverse @ y)
+    residual = y - X @ beta
+    rows, terms = X.shape
+    scale = float(residual @ inverse @ residual) / (rows - terms)
+    criterion = (rows - terms) * np.log(scale) + np.linalg.slogdet(covariance)[1] + np.linalg.slogdet(information)[1]
+    return beta, scale, criterion
+
+
+def test_fit_matches_the_criterion_computed_with_dense_matrices():
+    """On four designs small enough to hold the days' full covariance, the fit's coefficients
+    and residual variance are the generalised least squares ones at its variance ratio, and
+    that ratio is where the REML criterion computed from the definition is lowest. No other
+    package is involved, so this holds the fit to first principles on any machine."""
+    frame = _days(45, seed=21, low=3, high=16)
+    coded = frame.assign(tdd_stratum=pd.Categorical(frame["tdd_stratum"], categories=["High", "Low"]))
+    designs = [("arm", frame, dict(factors=["arm"])),
+               ("stratum", coded, dict(factors=["tdd_stratum"])),
+               ("interaction", frame, dict(factors=["day_type", "delivery_strategy"], interaction=True)),
+               ("slope", frame, dict(covariates=["carb10"]))]
+    for label, data, arguments in designs:
+        fit = fit_random_intercept(data, "tir", **arguments)
+        design, _ = _design(data, arguments.get("factors", []), arguments.get("covariates", []), arguments.get("interaction", False))
+        ratio = fit["user_variance"] / fit["scale"]
+        assert ratio > 0, (label, "the design has a between-user variance to find")
+        beta, scale, at_fit = _dense_reml(data, "tir", design, ratio)
+        assert np.allclose(fit["params"].to_numpy(), beta, atol=1e-7), (label, fit["params"].to_numpy(), beta)
+        assert abs(fit["scale"] / scale - 1.0) < 1e-9, (label, fit["scale"], scale)
+        for nearby in (ratio * 0.98, ratio * 1.02):
+            assert at_fit <= _dense_reml(data, "tir", design, nearby)[2] + 1e-9, (label, "the criterion is lower beside the fit")
+
+
 # ---------------------------------------------------------------------------
 # agreement with statsmodels, the implementation until 2026-11-17
 # ---------------------------------------------------------------------------
@@ -184,7 +241,9 @@ def test_stratum_reference_and_slope_agree_with_statsmodels():
     coded = frame.assign(tdd_stratum=pd.Categorical(frame["tdd_stratum"], categories=["High", "Low"]))
     reference = _statsmodels("tir ~ tdd_stratum", coded)
     ours = lmm_tdd_stratum(frame, outcome="tir")
-    assert ours["term"] == "tdd_stratum[T.Low]" and abs(ours["coef"] - reference["params"]["tdd_stratum[T.Low]"]) < TOLERANCE
+    assert ours["term"] == "tdd_stratum[T.Low]", ours["term"]
+    assert abs(ours["coef"] - reference["params"]["tdd_stratum[T.Low]"]) < TOLERANCE, (
+        f"stratum coefficient: ours {ours['coef']:.6f}, statsmodels {reference['params']['tdd_stratum[T.Low]']:.6f}")
     _assert_agrees(fit_random_intercept(frame, "tir", covariates=["carb10"]), _statsmodels("tir ~ carb10", frame), "slope")
 
 
@@ -204,6 +263,7 @@ if __name__ == "__main__":
         test_nothing_between_users_reads_exactly_zero_whatever_the_rounding,
         test_a_small_real_user_variance_is_kept,
         test_missing_rows_are_left_out_and_a_single_day_user_is_kept,
+        test_fit_matches_the_criterion_computed_with_dense_matrices,
         test_arm_contrast_agrees_with_statsmodels,
         test_interaction_agrees_with_statsmodels_terms_and_cells,
         test_stratum_reference_and_slope_agree_with_statsmodels,

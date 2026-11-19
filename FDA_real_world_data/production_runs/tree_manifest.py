@@ -49,6 +49,17 @@ def tree_hash(hashes):
 
 
 def tree_manifest(root):
-    """The tree hash and the file count of a code tree."""
+    """The tree hash, the file count, and every file's own hash of a code tree. The per-file
+    hashes let a manifest that matches no commit name the files that differ (a tree hash alone
+    cannot; the run of 2026-11-18 matched its commit in file count and in nothing else)."""
     hashes = file_hashes(root)
-    return {"tree_sha256": tree_hash(hashes), "code_files": len(hashes)}
+    return {"tree_sha256": tree_hash(hashes), "code_files": len(hashes), "code_file_hashes": hashes}
+
+
+def differing_files(run_hashes, reference_hashes):
+    """The paths whose content differs between two {path: hash} listings, and the paths
+    only one of them holds: (changed, only_in_run, only_in_reference), each sorted."""
+    changed = sorted(path for path in run_hashes if path in reference_hashes and run_hashes[path] != reference_hashes[path])
+    only_in_run = sorted(set(run_hashes) - set(reference_hashes))
+    only_in_reference = sorted(set(reference_hashes) - set(run_hashes))
+    return changed, only_in_run, only_in_reference

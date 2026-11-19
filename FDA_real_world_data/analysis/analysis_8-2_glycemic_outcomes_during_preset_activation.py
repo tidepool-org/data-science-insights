@@ -48,14 +48,13 @@ from typing import Dict, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from pyspark.sql import functions as F
 
 from utils.constants import (
     FONT, COLORS_PRIMARY, COLORS_SECONDARY, COLORS_ACCENT,
     STARTING_GLUCOSE_LOW, STARTING_GLUCOSE_HIGH,
 )
 from utils.data_loading import (
-    load_activation_cohort, load_override_endpoints, aggregate_override_endpoints,
+    load_activation_cohort, load_override_cbg_traces, load_override_endpoints, aggregate_override_endpoints,
 )
 from utils.statistics import compute_paired_statistics, format_p
 
@@ -350,16 +349,7 @@ def create_figure_8_2b(spark, activations: pd.DataFrame, output_dir: str, suffix
         print("  Figure 8.2b: no users with paired activations of any preset; skipping.")
         return
 
-    cbg = (
-        spark.table(f"dev.fda_510k_rwd.valid_override_cbg{suffix}")
-        .filter(F.col("_userId").isin(demo_users))
-        .filter(F.col("overridePreset") == demo_preset)
-        .filter(F.col("is_valid_name_only_seg2") == True)  # noqa: E712
-        .filter(F.col("is_starting_glucose_in_range") == True)  # noqa: E712
-        .select("_userId", "segment", "override_time", "duration",
-                "cbg_timestamp", "cbg_mg_dl")
-        .toPandas()
-    )
+    cbg = load_override_cbg_traces(spark, demo_users, demo_preset, suffix)
     cbg["override_time"] = pd.to_datetime(cbg["override_time"])
     cbg["cbg_timestamp"] = pd.to_datetime(cbg["cbg_timestamp"])
     cbg["cbg_mg_dl"] = pd.to_numeric(cbg["cbg_mg_dl"], errors="coerce")

@@ -705,9 +705,12 @@ _DOSE_RESPONSE_TIMESTAMP_COLUMNS = ("t0", "window_start", "window_end")
 
 def _dose_response_frame(spark, table):
     rows = spark.table(table)
-    for column in _DOSE_RESPONSE_TIMESTAMP_COLUMNS + ("override_day",):
-        if column in rows.columns:
-            rows = rows.withColumn(column, rows[column].cast("string"))
+    # The analysis bundle's export has already written these columns through Spark's CAST
+    # (production_runs/export_analysis_bundle.py), so a bundle table is read as it is.
+    if not getattr(rows, "is_bundle_table", False):
+        for column in _DOSE_RESPONSE_TIMESTAMP_COLUMNS + ("override_day",):
+            if column in rows.columns:
+                rows = rows.withColumn(column, rows[column].cast("string"))
     return _coerce_numeric(rows.toPandas())
 
 
@@ -722,6 +725,83 @@ def prepare_dose_response_candidates(frame, predicate="in_candidate_pool", diagn
                                      label="dose-response candidates"):
     """The pure half of load_dose_response_candidates."""
     return _admit(frame, assert_dose_response_candidate_predicates, predicate, diagnosis_groups, label, "activation(s)")
+
+
+def _as_time(column):
+    """A time column as comparable timestamps, whether it arrived as timestamps or as the
+    strings Spark's CAST writes (fractional seconds only when present)."""
+    return pd.to_datetime(column, format="mixed", utc=True).dt.tz_localize(None)
+
+
+def load_dose_response_staged_checks(spark):
+    """The counts the dose-response analysis ties its own frames to, each from the staged
+    tables as they stand, every diagnosis group:
+
+      staged_base            activations the guardrail flags call qualifying on a user whose days are all autobolus days
+      activation_base        candidates the candidate table places in the C2 base
+      c2_day_violations      pool candidates of C2 whose own day is not an eligible autobolus day
+      qualifying_marginals   qualifying candidates at or beyond each IR-6 extreme (four counts)
+
+    Computed in pandas from whole tables, so the same code runs on a Spark session and on
+    the analysis bundle (they were four SQL statements until 2026-11-19)."""
+    flags = _coerce_numeric(spark.table(f"{CATALOG}.{GUARDRAIL_FLAGS_TABLE}").toPandas())
+    candidates = _dose_response_frame(spark, f"{CATALOG}.{DOSE_RESPONSE_CANDIDATES_TABLE}")
+    days = spark.table(f"{CATALOG}.{AB_DAY_COHORT_TABLE}").select("_userId", "day", "is_eligible_ab_day").toPandas()
+
+    # one row per user and day, so a duplicated cohort row cannot fan the violation count out
+    days = days.assign(day=days["day"].astype(str), eligible=as_bool(days["is_eligible_ab_day"]))
+    eligible_days = days.groupby(["_userId", "day"], as_index=False)["eligible"].max()
+    in_c2_pool = candidates[as_bool(candidates["in_candidate_pool"]) & as_bool(candidates["in_c2"])]
+    with_day = in_c2_pool.assign(day=in_c2_pool["override_day"].astype(str)).merge(eligible_days, on=["_userId", "day"], how="left")
+
+    qualifying = flags.loc[as_bool(flags["is_qualifying"]), ["_userId", "override_time"]]
+    qualifying = qualifying.assign(_time=_as_time(qualifying["override_time"]))
+    matched = candidates.assign(_time=_as_time(candidates["t0"])).merge(qualifying, on=["_userId", "_time"], how="inner")
+    return {
+        "staged_base": int((as_bool(flags["is_qualifying"]) & as_bool(flags["is_all_days_ab"])).sum()),
+        "activation_base": int(as_bool(candidates["in_c2_base"]).sum()),
+        "c2_day_violations": int((~with_day["eligible"].fillna(False).astype(bool)).sum()),
+        "qualifying_marginals": {
+            "needs_low": int((matched["needs_fraction"] <= 0.15).sum()),
+            "needs_high": int((matched["needs_fraction"] >= 2.00).sum()),
+            "target_low_band": int((matched["target_high"] <= 100.5).sum()),
+            "target_high_band": int((matched["target_low"] >= 179.5).sum()),
+        },
+    }
+
+
+def load_staged_starting_glucose(spark):
+    """The starting glucose the preset staging recorded for each C1 episode: one row per
+    episode of dose_response_episodes in C1 that the primary build's overrides_by_segment also
+    holds, with the episode's own `t0` string and the staged value as `staged_anchor`."""
+    episodes = _dose_response_frame(spark, f"{CATALOG}.{DOSE_RESPONSE_EPISODES_TABLE}")
+    in_c1 = episodes.loc[as_bool(episodes["in_c1"]), ["_userId", "t0"]]
+    in_c1 = in_c1.assign(_time=_as_time(in_c1["t0"]))
+    staged = spark.table(f"{CATALOG}.overrides_by_segment").select("_userId", "override_time", "starting_glucose").toPandas()
+    staged = staged.assign(_time=_as_time(staged["override_time"]),
+                           staged_anchor=pd.to_numeric(staged["starting_glucose"], errors="coerce"))
+    return staged.merge(in_c1, on=["_userId", "_time"], how="inner")[["_userId", "t0", "staged_anchor"]]
+
+
+# The columns Figure 8.2b reads of the CGM readings inside preset activations.
+OVERRIDE_CBG_TRACE_COLUMNS = ["_userId", "segment", "override_time", "duration", "cbg_timestamp", "cbg_mg_dl"]
+
+
+def load_override_cbg_traces(spark, users, preset, suffix=""):
+    """The CGM readings inside the activations of one preset for a few users (Figure 8.2b):
+    rows of valid_override_cbg{suffix} with a valid name-only second-period activation and a
+    starting glucose in range. On a Spark session the table is cut to those users and that
+    preset on the cluster before it reaches pandas; the analysis bundle already holds only
+    the rows that pass the two flags."""
+    users = list(users)
+    rows = spark.table(f"{CATALOG}.valid_override_cbg{suffix}")
+    if not getattr(rows, "is_bundle_table", False):
+        rows = rows.filter(rows["_userId"].isin(users)).filter(rows["overridePreset"] == preset)
+    frame = rows.select(*OVERRIDE_CBG_TRACE_COLUMNS, "overridePreset", "is_valid_name_only_seg2",
+                        "is_starting_glucose_in_range").toPandas()
+    keep = (frame["_userId"].isin(users) & (frame["overridePreset"] == preset)
+            & as_bool(frame["is_valid_name_only_seg2"]) & as_bool(frame["is_starting_glucose_in_range"]))
+    return frame.loc[keep, OVERRIDE_CBG_TRACE_COLUMNS].reset_index(drop=True)
 
 
 def load_dose_response_episodes(spark, diagnosis_groups=PRIMARY_DIAGNOSIS_GROUPS, predicate="is_survivor"):

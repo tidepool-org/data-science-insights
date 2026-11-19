@@ -157,7 +157,8 @@ def run(
 
     day_versions AS (
       SELECT _userId, day,
-             MAX_BY(loop_version, version_int) AS loop_version,
+             -- two builds of one release tie on version_int; the highest version string wins (MC, 2026-11-19)
+             MAX_BY(loop_version, STRUCT(version_int, loop_version)) AS loop_version,
              MAX(version_int)                  AS version_int
       FROM versions
       WHERE version_int IS NOT NULL AND day IS NOT NULL
