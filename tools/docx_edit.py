@@ -13,7 +13,11 @@ result back.
 Usage:
   python3 tools/docx_edit.py <in.docx> <out.docx> \\
       [--edits edits.json] [--replies replies.json] \\
-      [--author "Claude (Tidepool Data Science), draft 2"] [--date 2026-10-12T00:00:00Z]
+      --author "<name>, draft 2" [--initials <initials>] [--date 2026-10-12T00:00:00Z]
+
+--author is required whenever the run writes a revision, a reply, or a comment, and
+--initials whenever it writes a reply or a comment. Neither has a default: the label names
+whoever made the edit (report tools plan, decision D15, MC 2026-11-18).
 
 edits.json is a list of objects:
   {"find": "<exact text in one paragraph>", "replace": "<new text>",
@@ -601,12 +605,16 @@ def main():
     parser.add_argument("--comments", help="JSON list of {anchor, text}: new root comments on whole paragraphs")
     parser.add_argument("--accept-all", action="store_true", help="accept every existing tracked change before editing")
     parser.add_argument("--remove-comments", help="comma-separated root comment ids and/or 'resolved' to remove with their replies")
-    parser.add_argument("--author", default="Claude (Tidepool Data Science)")
-    parser.add_argument("--initials", default="C")
+    parser.add_argument("--author", help="the author of the revisions, replies, and comments this run writes; no default")
+    parser.add_argument("--initials", help="the initials on the replies and comments this run writes; no default")
     parser.add_argument("--date", default="2026-01-01T00:00:00Z", help="ISO 8601 UTC timestamp for revisions and replies")
     arguments = parser.parse_args()
     if arguments.source == arguments.output:
         sys.exit("output must differ from source; the source is never modified")
+    if (arguments.edits or arguments.replies or arguments.comments) and not arguments.author:
+        sys.exit("--author is required to write revisions, replies, or comments; it has no default")
+    if (arguments.replies or arguments.comments) and not arguments.initials:
+        sys.exit("--initials is required to write replies or comments; it has no default")
 
     with zipfile.ZipFile(arguments.source) as archive:
         names = archive.namelist()

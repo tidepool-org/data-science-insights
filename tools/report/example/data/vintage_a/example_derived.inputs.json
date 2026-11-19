@@ -1,0 +1,8 @@
+{
+  "inputs": [
+    {
+      "file": "example_flow.csv",
+      "sha256": "f5931e2333fe1ce24d5eb3cd24e95630d049620dfd9df41cf2d0b0c24d3a79fb"
+    }
+  ]
+}

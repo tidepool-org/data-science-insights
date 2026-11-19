@@ -1,0 +1,74 @@
+---
+title: "Example report for the report tools (invented data)"
+format: docx
+execute:
+  echo: false
+  warning: false
+---
+
+```{python}
+#| label: setup
+#| include: false
+# Every number in this document is read at render time through a cell reference. Nothing
+# is typed. The files under data/ are invented for the example.
+from report import start_report, source, cell, table, require_equal, require_true, change_legend
+
+start_report()
+source("example_outcomes.csv", keys=["outcome", "period"], alias="outcomes")
+source("example_flow.csv", keys="stage", alias="flow")
+source("example_composite.csv", keys="endpoint", alias="composite")
+source("example_derived.csv", keys="label", alias="derived")
+
+require_equal(("flow", "Final cohort", "n_users"), ("outcomes", ("time_in_range", "second"), "n_users"),
+              "the flow's final stage equals the number of users analysed")
+```
+
+`{python} change_legend()`
+
+# Purpose
+
+This document is an example for the report tools. Every value in it is invented, and "the cohort" is not a real one.
+
+# Cohort
+
+The cohort flow ended with `{python} cell("flow", "Final cohort", "n_users", "count")` users, which is `{python} cell("derived", "share_retained", "value", "share")` of the `{python} cell("flow", "All users", "n_users", "count")` users who started.
+
+```{python}
+table(
+    label="Table A",
+    file_or_alias="flow",
+    rows="all",
+    columns=[("Users", "n_users", "count")],
+    row_header="Stage",
+)
+```
+
+# Results
+
+Time in range rose by `{python} cell("outcomes", ("time_in_range", "second"), "difference", "signed:1")` percentage points (95% CI `{python} cell("outcomes", ("time_in_range", "second"), ("ci_low", "ci_high"), "interval_to:1", null=0)`; p = `{python} cell("outcomes", ("time_in_range", "second"), "p_value", "p")`) across `{python} cell("outcomes", ("time_in_range", "second"), "n_users", "count")` users.
+
+The median time in range was `{python} cell("composite", "Time in range (%)", "Median [IQR]", "decimal:1", part="median_iqr.median")`%, and the analysis recorded the estimate as `{python} cell("composite", "Time in range (%)", "note", "text")`. [The mean in the second period was `{python} cell("outcomes", ("time_in_range", "second"), "mean", "decimal:1")`%.]{custom-style="Changed2"} [This sentence was removed in the second draft.]{custom-style="Deleted2"}
+
+```{python}
+table(
+    label="Table B",
+    file_or_alias="outcomes",
+    rows=[
+        ("Time in range (%)", ("time_in_range", "second")),
+        ("Time below 70 mg/dL (%)", ("time_below_70", "second")),
+        ("Mean glucose (mg/dL)", ("mean_glucose", "second")),
+    ],
+    columns=[
+        ("Mean", "mean", "decimal:1"),
+        ("Paired difference", "difference", "signed:2", {"null": 0}),
+        ("95% CI", ("ci_low", "ci_high"), "interval:2", {"null": 0}),
+        ("p", "p_value", "p"),
+    ],
+    row_header="Outcome",
+)
+```
+
+# Notes
+
+- **Reading the tables:** each value in a table is a cell reference, as each value in a sentence is.
+- **What a reviewer may edit:** the words. A number is changed in the analysis, not in the document.

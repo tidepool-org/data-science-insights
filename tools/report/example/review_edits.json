@@ -1,0 +1,9 @@
+[
+ {"find": "rose by", "replace": "increased by"},
+ {"find": "+3.7 percentage", "replace": "+3.5 percentage"},
+ {"find": "across", "replace": "across all 12 sites and"},
+ {"find": "With enough data", "replace": "With sufficient data"},
+ {"find": "is not a real one", "replace": "is not a real cohort"},
+ {"insert_after": "This document is an example", "label": "", "lead": "", "text": "A sentence the reviewer added."},
+ {"delete_paragraph": "What a reviewer may edit"}
+]

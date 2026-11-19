@@ -1,6 +1,8 @@
-# Plan: the report tools — cell references, change flags, back-port, and one toolchain (2026-11-18, draft for MC)
+# Plan: the report tools — cell references, change flags, back-port, and one toolchain (2026-11-18)
 
-Status: plan only. Nothing is built, nothing was rendered, and no existing file was changed. This file elaborates Step 5 of [execution_plan_2026-10-27.md](execution_plan_2026-10-27.md) to the level where each tool can be built without further design questions. The sibling plan for Step 6, `quarto_conversion_plan_2026-11-18.md`, consumes the interfaces defined here. MC decides; every choice below that is not already settled in MC's records is listed in section 10 with a recommendation.
+Status (2026-11-18, evening): built. MC accepted the recommendations of section 10 (D1 to D15) and the tools are in `tools/report/`, with their tests and an invented example. `tools/report/README.md` says how each tool is used, lists where the build differs from this plan, and lists what was not verified. The text below is the plan as it stood when the build started; where it says "nothing is built" or "not verified", read it with that README.
+
+Status when written: plan only. Nothing is built, nothing was rendered, and no existing file was changed. This file elaborates Step 5 of [execution_plan_2026-10-27.md](execution_plan_2026-10-27.md) to the level where each tool can be built without further design questions. The sibling plan for Step 6, `quarto_conversion_plan_2026-11-18.md`, consumes the interfaces defined here. MC decides; every choice below that is not already settled in MC's records is listed in section 10 with a recommendation.
 
 Scope (MC, 2026-11-18): the `interactive-edit` skill and any AI are not part of this tooling. Every tool is a program a person runs from the command line. No tool calls an AI model, depends on a skill, or needs an AI to supply an input or read an output. Who writes the text a tool is given (an edits file, a reply to a comment) is outside the tools.
 

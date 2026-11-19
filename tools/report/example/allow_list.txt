@@ -1,0 +1,4 @@
+# The numbers a person may type in example_report.qmd, one pattern per line with its reason.
+# Format: <regular expression> ## <reason>
+95% CI ## the confidence level the example plan states
+70 mg/dL ## the glucose threshold in an endpoint's name

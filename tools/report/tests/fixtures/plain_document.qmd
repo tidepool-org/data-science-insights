@@ -1,0 +1,34 @@
+---
+title: "Plain fixture for the post-processor parity test"
+format: docx
+---
+
+# A heading
+
+A paragraph with [inserted words]{custom-style="Changed3"} and [removed words]{custom-style="Deleted3"}, and `inline code`.
+
+| Outcome | First | Second |
+|---|---|---|
+| Alpha | one | two |
+| Beta | three | four |
+
+|  | Temporary basal | Temporary basal | Automated bolus | Automated bolus |
+|---|---|---|---|---|
+| Outcome | RAI | URAI | RAI | URAI |
+| Alpha | a | b | c | d |
+
+| Filter | Users | Days |
+|---|---|---|
+| All | x | y |
+
+| Start BG | b | c | d | e | f | g | h | i | j |
+|---|---|---|---|---|---|---|---|---|---|
+| low | k | l | m | n | o | p | q | r | s |
+
+| Check | Result |
+|---|---|
+| The counts agree | yes |
+
+## A second heading
+
+Closing text.

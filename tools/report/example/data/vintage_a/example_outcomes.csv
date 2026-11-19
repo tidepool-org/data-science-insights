@@ -1,0 +1,5 @@
+outcome,period,mean,difference,ci_low,ci_high,p_value,n_users
+time_in_range,first,61.24,,,,,40
+time_in_range,second,64.91,3.67,1.12,6.22,0.0061,40
+time_below_70,second,2.26,-0.05,-0.41,0.31,0.7812,40
+mean_glucose,second,151.30,-4.20,-7.90,-0.50,0.0270,40
