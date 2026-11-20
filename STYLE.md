@@ -65,6 +65,8 @@ Contents: 1 Language · 2 Numbers and evidence · 3 Documents · 4 Figures · 5 
 - **No repeated numbers across tables.** A differences table (e.g. URAI − RAI with its interval and effect size) carries the differences only; the group means and intervals live in the summary table it refers to. Each number appears once, in the table whose purpose it serves.
 - Every outcome table of a per-user pooled analysis is issued in two parts, **parametric** (mean ± SD with the 95% CI of the mean) and **nonparametric** (median [IQR]), with the RPT-1001 file naming `table_<n>_parametric.csv` / `table_<n>_nonparametric.csv`.
 
+- **Headings of an Agency-facing document are the template's plain nouns** (Purpose, Test Methods, Results, Interpretation, Limitations, Conclusions) and descriptive titles under them. No rhetorical or narrative heading ("What it means", "The evidence base", "Results, by question"), and no heading or note that says which earlier document a passage came from: a compiled document reads as one document under its own numbers (MC, 2026-11-20).
+
 ### 3.2 Formatting (Quarto → docx)
 - Render: a document that uses the report tools renders through `python3 tools/report/render_document.py <document> --data-root <folder> --vintage <label>`, which runs Quarto on a scratch copy and publishes under a new name. An older source renders with `QUARTO_PYTHON=<conda env python> quarto render <file>.qmd` from a scratch copy, its chunks reading `data/…` relative to the document's folder. Quarto never runs on a Drive file.
 - Post-process every docx: Arial throughout, black headings (replace the whole colour element — Word writes a themeColor attribute), 10 pt body, tables autofit at 100% of the section width with small cell margins, explicit page size on the final section. Tool: `python3 tools/report/postprocess_docx.py <in.docx> <out.docx> --profile plan|tables_landscape|report` (the three Drive post-processors as profiles of one program, 2026-11-18; it writes a new file and never rewrites its input). The Drive copies, `postprocess_pln_docx.py`, `postprocess_rfai_docx.py`, and `postprocess_ir6b_docx.py`, stay for the drafts already in progress there.
@@ -157,6 +159,8 @@ Font sizes (`FONT`): suptitle 18, title 15, axis_label 14, tick 12, legend 11, a
 ---
 
 ## 8. Repository records
+
+- **The text of a report lives on Drive, not in this repository** (MC, 2026-11-20). The repository holds the tools that build a document and the analyses that feed it; a document's source (its prose, its section folders, its list of sections) is kept with the submission's other documents on Drive, as its renders, data, and review copies already are. A build tool finds the sources through the Drive mount.
 
 - `architecture.md`: **Current state** block at the top (dated), then the directory map, one line per file saying what it is and when it changed. `project_history.md`: dated entries, newest at the bottom above **Pending / In Progress**; a **next** bullet kept current with what MC runs, what is blocked, and what was resolved. Update both in the same pass as the work; convert relative dates to absolute.
 - Drive working plans record the *why* and the numbers; the repository records the *what* and *where*, never the numbers.

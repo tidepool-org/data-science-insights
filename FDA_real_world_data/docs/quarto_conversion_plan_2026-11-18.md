@@ -177,7 +177,7 @@ Proposed tree on Drive (new folders only; nothing existing moves):
 
 Two files have to be filed before any render because no Drive copy exists: the RPT-1008 June output files (from the repository's working tree) and the record chosen for IR-6 (decision 6). A manifest lists aggregate tables and figures only. The output folders also hold per-user partner hand-off files (`*_by_jaeb_id*.csv`), which no chapter reads and no manifest lists.
 
-`FDA_real_world_data/reports/` holds one tracked file today, `RPT-1001_IR1_response_draft_2026-07-30_Markdown.md`, a draft with typed result tables. It conflicts with STYLE.md §2 and with the layout above (decision 2).
+`FDA_real_world_data/reports/` holds one tracked file today, `RPT-1001_IR1_response_draft_2026-07-30_Markdown.md`, a draft with typed result tables. It conflicts with STYLE.md §2 and with the layout above (decision 2). *Removed from the repository on 2026-11-20; the identical file is on Drive in `PLN RPT-1001/`, and the converted sources this plan places under `reports/` are on Drive too (`rebuild/reports/sources/`).*
 
 ### 3.2 How one chapter serves two wrappers
 
