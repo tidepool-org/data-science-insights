@@ -23,7 +23,7 @@ Contents: 1 Language · 2 Numbers and evidence · 3 Documents · 4 Figures · 5 
 | **value** | cell (table sense) | an entry in a rendered table; "value for value" for a table comparison |
 | *is included in a subgroup … and contributes one observation to it* | "contributes a cell" | the inclusion sentence |
 | **small-subgroup rule** | small-cell rule | withhold distributional statistics below 5 users; keep the counts |
-| dosing strategy; temporary-basal / automated-bolus (first use), temp-basal / autobolus after | mode | the two algorithms |
+| dosing strategy; temporary-basal / automated-bolus (first use), temp-basal / autobolus after | mode; delivery strategy | the two algorithms. "Dosing strategy" is the term of the Instructions for Use (MC, 2026-11-20); the issued reports used both for the same thing. The analysis tables and code still name the column `delivery_strategy` |
 | insulin group (a class or a brand); insulin type | class, when a brand row is meant | |
 | population, analysis population | universe | |
 | period; the temporary-basal / automated-bolus period | half | the two 14-day parts of a transition window |

@@ -472,6 +472,11 @@ def lay_out(document, layout, bodies):
     identifier) is left as written. `code_rules` reword what a chunk prints where a table's
     own heading names the old numbering.
 
+    `terms` (optional, at the top of the layout) are words this document uses where the taken
+    prose used others: each is `{"from": <pattern>, "to": <replacement>, "why": ...}`, applied
+    to the taken headings and prose outside code, with the number of replacements each made
+    written to the layout report. The sources keep the issued wording.
+
     Returns (the chapters as [(name, markdown)], allow-list lines, a report dict)."""
     sources = {name: SourceSection(name, body) for name, body in bodies.items()}
     records = []            # ("heading", depth, number, title, owner, identifier) or ("line", text, owner, in_fence)
@@ -596,19 +601,27 @@ def lay_out(document, layout, bodies):
             text = re.sub(r"(\\?\[)([0-9]{1,2})(\\?\])", lambda match: f"{match.group(1)}{int(match.group(2)) + offset}{match.group(3)}", text)
         return text.replace(PROTECTED_MARK, "§")
 
+    terms = [dict(term, replacements=0) for term in layout.get("terms", [])]
+
+    def reword_terms(text):
+        for term in terms:
+            text, made = re.subn(term["from"], term["to"], text)
+            term["replacements"] += made
+        return text
+
     owners = sorted({owner for owner, _ in (key.split("/") for key in sources)})
     rewritten = []
     for record in records:
         if record[0] == "heading":
             kind, depth, number, title, owner, identifier = record
-            rewritten.append((kind, depth, number, rewrite_sections(owner, title) if owner in owners else title, owner, identifier))
+            rewritten.append((kind, depth, number, reword_terms(rewrite_sections(owner, title)) if owner in owners else title, owner, identifier))
         else:
             kind, text, owner, in_fence = record
             if owner in owners and in_fence:        # a chunk is left alone but for the phrases the layout names
                 for pattern, replacement in layout["references"][owner].get("code_rules", []):
                     text = re.sub(pattern, replacement, text)
             elif owner in owners:
-                text = outside_code(text, lambda part: rewrite_sections(owner, part))
+                text = outside_code(text, lambda part: reword_terms(rewrite_sections(owner, part)))
             rewritten.append((kind, text, owner, in_fence))
 
     # ---- tables and figures, numbered in the order of their captions
@@ -666,6 +679,7 @@ def lay_out(document, layout, bodies):
             kind, text, owner, in_fence = record
             current.append(text if in_fence or owner not in owners else outside_code(text, lambda part: rewrite_labels(owner, part)))
     report["tables"], report["figures"], report["headings"] = next_number["Table"], next_number["Figure"], state["identifiers"]
+    report["terms"] = terms
     report["labels"] = {f"{owner} {kind} {old}": f"{kind} {new}" for (owner, kind, old), new in new_label.items()}
     report["sections"] = {f"{name} | {text}": ("Appendix " if in_appendix else "Section ") + number for (name, text), (number, in_appendix) in placed_headings.items()}
     return ([(CONTENTS_CHAPTER, "\n".join(contents) + "\n")] + [(name, "\n".join(lines) + "\n") for name, lines in chapters], sorted(set(allowed)), report)
